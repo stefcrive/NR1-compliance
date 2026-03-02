@@ -1,65 +1,66 @@
-import Image from "next/image";
+import Link from "next/link";
+
+const FLOW = [
+  "Manager portal: govern clients, DRPS diagnostics calendar, and programs database.",
+  "Client portal: monitor company metrics, DRPS diagnostics, and continuous programs.",
+  "Employee portal: answer active questionnaires with zero-distraction flow.",
+];
 
 export default function Home() {
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+    <div className="mx-auto w-full max-w-7xl px-4 py-8 md:py-12">
+      <header className="rounded-[28px] border border-[#d5e2ea] bg-[linear-gradient(115deg,#ffffff_0%,#edf7fb_48%,#fff4e2_100%)] p-8 shadow-sm md:p-12">
+        <p className="text-xs uppercase tracking-[0.22em] text-[#0f6077]">NR1 Compliance Platform</p>
+        <h1 className="mt-3 max-w-4xl text-4xl font-semibold leading-tight text-[#112a38] md:text-5xl">
+          Full workflow for psychossocial compliance: diagnostics, interventions, and continuous evidence
+        </h1>
+        <p className="mt-4 max-w-3xl text-base text-[#385464]">
+          Start in one gateway and route each profile to the correct experience: Manager,
+          Client, or Employee.
+        </p>
+
+        <div className="mt-6 flex flex-wrap gap-3">
+          <Link
+            href="/access"
+            className="rounded-full bg-[#0f6077] px-6 py-3 text-sm font-semibold text-white hover:bg-[#0c4f61]"
           >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+            Access to platform
+          </Link>
         </div>
-      </main>
+      </header>
+
+      <section className="mt-8 grid gap-4 md:grid-cols-3">
+        {FLOW.map((item) => (
+          <article key={item} className="rounded-2xl border border-[#d5e2ea] bg-white p-5 text-sm text-[#3a5868] shadow-sm">
+            {item}
+          </article>
+        ))}
+      </section>
+
+      <section className="mt-8 grid gap-4 lg:grid-cols-[1.1fr_1fr]">
+        <article className="rounded-2xl border border-[#d5e2ea] bg-white p-6 shadow-sm">
+          <p className="text-xs uppercase tracking-[0.2em] text-[#0f6077]">Access architecture</p>
+          <h3 className="mt-2 text-2xl font-semibold text-[#112a38]">Role-based access control gateway</h3>
+          <ul className="mt-4 list-disc space-y-2 pl-5 text-sm text-[#3a5868]">
+            <li>Public landing page focused on conversion with one CTA.</li>
+            <li>Role selection asks: Manager, Client, or Employee.</li>
+            <li>Manager/Client use email+password flow.</li>
+            <li>Employee enters by tokenized link or diagnostic slug + token.</li>
+          </ul>
+        </article>
+
+        <article className="rounded-2xl border border-[#d5e2ea] bg-white p-6 shadow-sm">
+          <p className="text-xs uppercase tracking-[0.2em] text-[#0f6077]">Platform model</p>
+          <h3 className="mt-2 text-2xl font-semibold text-[#112a38]">
+            Dashboard consistency across portals
+          </h3>
+          <ul className="mt-4 list-disc space-y-2 pl-5 text-sm text-[#3a5868]">
+            <li>Manager and Client use fixed left sidebars + dynamic right content area.</li>
+            <li>Diagnostic and program detail pages include breadcrumb navigation.</li>
+            <li>Program pages support chronogram, materials, and evaluation metrics.</li>
+          </ul>
+        </article>
+      </section>
     </div>
   );
 }
