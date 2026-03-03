@@ -8,6 +8,7 @@ import {
   buildAccessLink,
   ensureSectorGroupOption,
   generateAccessToken,
+  syncClientSectorTemplatesToSurvey,
   toRiskParameter,
 } from "@/lib/survey-sectors";
 
@@ -15,6 +16,7 @@ type CampaignRow = {
   id: string;
   name: string;
   public_slug: string;
+  client_id?: string | null;
 };
 
 type SectorRow = {
@@ -38,16 +40,31 @@ const upsertSectorSchema = z.object({
 
 async function resolveCampaignOrNull(campaignId: string): Promise<CampaignRow | null> {
   const supabase = getSupabaseAdminClient();
-  const { data, error } = await supabase
+  const modernResult = await supabase
     .from("surveys")
-    .select("id,name,public_slug")
+    .select("id,name,public_slug,client_id")
     .eq("id", campaignId)
     .maybeSingle<CampaignRow>();
 
-  if (error) {
-    throw new Error(error.message);
+  if (!modernResult.error) {
+    return modernResult.data ?? null;
   }
-  return data ?? null;
+
+  if (modernResult.error.code === "42703") {
+    const legacyResult = await supabase
+      .from("surveys")
+      .select("id,name,public_slug")
+      .eq("id", campaignId)
+      .maybeSingle<CampaignRow>();
+
+    if (legacyResult.error) {
+      throw new Error(legacyResult.error.message);
+    }
+
+    return legacyResult.data ?? null;
+  }
+
+  throw new Error(modernResult.error.message);
 }
 
 export async function GET(
@@ -76,7 +93,31 @@ export async function GET(
     return NextResponse.json({ error: "Could not load sectors." }, { status: 500 });
   }
 
-  const sectors = (data ?? []).map((item) => ({
+  let sectorRows = data ?? [];
+
+  if (sectorRows.length === 0 && campaign.client_id) {
+    try {
+      await syncClientSectorTemplatesToSurvey({
+        clientId: campaign.client_id,
+        surveyId: campaign.id,
+      });
+      const refreshed = await supabase
+        .from("survey_sectors")
+        .select(
+          "id,survey_id,key,name,risk_parameter,access_token,is_active,submission_count,last_submitted_at,created_at",
+        )
+        .eq("survey_id", campaign.id)
+        .order("created_at", { ascending: true })
+        .returns<SectorRow[]>();
+      if (!refreshed.error) {
+        sectorRows = refreshed.data ?? [];
+      }
+    } catch {
+      // Keep the endpoint non-fatal if auto-sync fails.
+    }
+  }
+
+  const sectors = sectorRows.map((item) => ({
     id: item.id,
     key: item.key,
     name: item.name,

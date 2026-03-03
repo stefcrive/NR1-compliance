@@ -7,6 +7,7 @@ import {
   buildSuggestedAvailabilitySlots,
   slotOverlapsMasterCalendar,
 } from "@/lib/availability-scheduler";
+import { createManagerNotification } from "@/lib/manager-notifications";
 import {
   buildDrpsCalendarEvents,
   loadStoredCalendarEvents,
@@ -17,6 +18,7 @@ import { getSupabaseAdminClient } from "@/lib/supabase-admin";
 
 type ClientRow = {
   client_id: string;
+  company_name: string;
 };
 
 type AvailabilityRequestRow = {
@@ -52,7 +54,7 @@ type AvailabilitySlot = {
 };
 
 const submitAvailabilitySchema = z.object({
-  selectedSlots: z.array(z.string().datetime()).min(1).max(6),
+  selectedSlots: z.array(z.string().datetime()).min(1),
 });
 
 function parseSlots(value: unknown): AvailabilitySlot[] {
@@ -93,7 +95,7 @@ export async function POST(
 
   const clientResult = await supabase
     .from("clients")
-    .select("client_id")
+    .select("client_id,company_name")
     .eq("portal_slug", clientSlug)
     .maybeSingle<ClientRow>();
   if (clientResult.error) {
@@ -103,6 +105,7 @@ export async function POST(
     return NextResponse.json({ error: "Client not found." }, { status: 404 });
   }
   const clientId = clientResult.data.client_id;
+  const clientCompanyName = clientResult.data.company_name;
 
   const requestResult = await supabase
     .from("client_program_availability_requests")
@@ -277,6 +280,25 @@ export async function POST(
   }
   if (!updateRequest.data) {
     return NextResponse.json({ error: "Could not update availability request." }, { status: 500 });
+  }
+
+  try {
+    await createManagerNotification(supabase, {
+      clientId,
+      notificationType: "client_reschedule_submitted",
+      title: `Cliente reagendou processo continuo (${programResult.data?.title ?? assignmentResult.data.program_id})`,
+      message: `${clientCompanyName} enviou ${safeSelected.length} horario(s) para reagendamento.`,
+      metadata: {
+        clientSlug,
+        clientCompanyName,
+        availabilityRequestId: availabilityRequest.request_id,
+        clientProgramId: availabilityRequest.client_program_id,
+        programId: assignmentResult.data.program_id,
+        selectedSlots: safeSelected,
+      },
+    });
+  } catch {
+    // Do not block scheduling when notification persistence fails.
   }
 
   return NextResponse.json({

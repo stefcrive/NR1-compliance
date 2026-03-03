@@ -26,6 +26,19 @@ type ClientRow = {
   company_name: string;
 };
 
+type ActiveClientProgramRow = {
+  client_program_id: string;
+  client_id: string;
+  program_id: string;
+  status: "Recommended" | "Active" | "Completed";
+  deployed_at?: string | null;
+};
+
+type ProgramTitleRow = {
+  program_id: string;
+  title: string;
+};
+
 const createBlockedEventSchema = z
   .object({
     eventType: z.literal("blocked").optional(),
@@ -86,6 +99,57 @@ async function loadClientNames(clientIds: string[]) {
   return new Map((clientsResult.data ?? []).map((row) => [row.client_id, row.company_name]));
 }
 
+async function loadActiveContinuousPrograms() {
+  const supabase = getSupabaseAdminClient();
+  const withDeployedAt = await supabase
+    .from("client_programs")
+    .select("client_program_id,client_id,program_id,status,deployed_at")
+    .eq("status", "Active")
+    .returns<ActiveClientProgramRow[]>();
+
+  const assignmentsResult =
+    withDeployedAt.error && isMissingColumnError(withDeployedAt.error, "deployed_at")
+      ? await supabase
+          .from("client_programs")
+          .select("client_program_id,client_id,program_id,status")
+          .eq("status", "Active")
+          .returns<ActiveClientProgramRow[]>()
+      : withDeployedAt;
+
+  if (
+    assignmentsResult.error &&
+    !isMissingTableError(assignmentsResult.error, "client_programs")
+  ) {
+    throw assignmentsResult.error;
+  }
+
+  const assignments = assignmentsResult.data ?? [];
+  const programIds = Array.from(new Set(assignments.map((item) => item.program_id)));
+  if (programIds.length === 0) {
+    return { assignments, programTitleById: new Map<string, string>() };
+  }
+
+  const programsResult = await supabase
+    .from("periodic_programs")
+    .select("program_id,title")
+    .in("program_id", programIds)
+    .returns<ProgramTitleRow[]>();
+
+  if (
+    programsResult.error &&
+    !isMissingTableError(programsResult.error, "periodic_programs")
+  ) {
+    throw programsResult.error;
+  }
+
+  return {
+    assignments,
+    programTitleById: new Map(
+      (programsResult.data ?? []).map((program) => [program.program_id, program.title]),
+    ),
+  };
+}
+
 export async function GET(request: NextRequest) {
   if (!isAdminApiAuthorized(request)) {
     return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
@@ -93,8 +157,14 @@ export async function GET(request: NextRequest) {
 
   try {
     const surveyRows = await loadSurveyRows();
+    const activePrograms = await loadActiveContinuousPrograms();
     const clientIds = Array.from(
-      new Set(surveyRows.map((row) => row.client_id).filter((value): value is string => Boolean(value))),
+      new Set(
+        [
+          ...surveyRows.map((row) => row.client_id),
+          ...activePrograms.assignments.map((assignment) => assignment.client_id),
+        ].filter((value): value is string => Boolean(value)),
+      ),
     );
     const clientNameById = await loadClientNames(clientIds);
     const drpsEvents = withClientNames(buildDrpsCalendarEvents(surveyRows), clientNameById);
@@ -106,6 +176,16 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({
       events: merged,
+      activeContinuousPrograms: activePrograms.assignments.map((assignment) => ({
+        id: assignment.client_program_id,
+        clientId: assignment.client_id,
+        clientName: clientNameById.get(assignment.client_id) ?? null,
+        programId: assignment.program_id,
+        programTitle:
+          activePrograms.programTitleById.get(assignment.program_id) ?? assignment.program_id,
+        deployedAt: assignment.deployed_at ?? null,
+        status: assignment.status,
+      })),
       calendarEventsUnavailable: stored.unavailable,
     });
   } catch {

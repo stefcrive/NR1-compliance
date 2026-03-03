@@ -9,7 +9,7 @@ type SurveyDiagnosticRow = {
   name: string;
   public_slug: string;
   status: "draft" | "live" | "closed" | "archived";
-  client_id: string | null;
+  client_id?: string | null;
   starts_at: string | null;
   closes_at: string | null;
   created_at: string;
@@ -69,20 +69,54 @@ export async function GET(request: NextRequest) {
   const surveysResult = await supabase
     .from("surveys")
     .select("id,name,public_slug,status,client_id,starts_at,closes_at,created_at")
+    .is("client_id", null)
     .order("created_at", { ascending: false })
     .limit(300)
     .returns<SurveyDiagnosticRow[]>();
 
-  const surveysMissing =
-    isMissingTableError(surveysResult.error, "surveys") ||
-    isMissingColumnError(surveysResult.error, "client_id");
+  const surveysMissingTable = isMissingTableError(surveysResult.error, "surveys");
+  const surveysMissingClientColumn = isMissingColumnError(surveysResult.error, "client_id");
 
-  if (surveysResult.error && !surveysMissing) {
+  if (surveysResult.error && !surveysMissingTable && !surveysMissingClientColumn) {
     return NextResponse.json({ error: "Could not load DRPS diagnostics." }, { status: 500 });
   }
 
+  let surveyTemplates: SurveyDiagnosticRow[] = [];
+  let surveysUnavailable = surveysMissingTable;
+
   if (!surveysResult.error) {
-    const surveyIds = (surveysResult.data ?? []).map((item) => item.id);
+    surveyTemplates = surveysResult.data ?? [];
+  } else if (surveysMissingClientColumn) {
+    const fallbackSurveysResult = await supabase
+      .from("surveys")
+      .select("id,name,public_slug,status,starts_at,closes_at,created_at")
+      .order("created_at", { ascending: false })
+      .limit(300)
+      .returns<
+        Array<{
+          id: string;
+          name: string;
+          public_slug: string;
+          status: "draft" | "live" | "closed" | "archived";
+          starts_at: string | null;
+          closes_at: string | null;
+          created_at: string;
+        }>
+      >();
+
+    if (
+      fallbackSurveysResult.error &&
+      !isMissingTableError(fallbackSurveysResult.error, "surveys")
+    ) {
+      return NextResponse.json({ error: "Could not load DRPS diagnostics." }, { status: 500 });
+    }
+
+    surveysUnavailable = isMissingTableError(fallbackSurveysResult.error, "surveys");
+    surveyTemplates = (fallbackSurveysResult.data ?? []).map((item) => ({ ...item, client_id: null }));
+  }
+
+  if (!surveysUnavailable) {
+    const surveyIds = surveyTemplates.map((item) => item.id);
     const questionCountBySurveyId = new Map<string, number>();
 
     if (surveyIds.length > 0) {
@@ -105,12 +139,12 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    drpsDiagnostics = (surveysResult.data ?? []).map((item) => ({
+    drpsDiagnostics = surveyTemplates.map((item) => ({
       id: item.id,
       name: item.name,
       slug: item.public_slug,
       status: item.status,
-      linkedClientId: item.client_id,
+      linkedClientId: item.client_id ?? null,
       startsAt: item.starts_at,
       closesAt: item.closes_at,
       createdAt: item.created_at,

@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 
 type Diagnostic = {
@@ -70,6 +71,11 @@ type ContinuousProgramOption = {
   triggerThreshold: number;
 };
 
+type AvailabilitySlot = {
+  startsAt: string;
+  endsAt: string;
+};
+
 type AssignedContinuousProgram = {
   id: string;
   programId: string;
@@ -77,6 +83,10 @@ type AssignedContinuousProgram = {
   programDescription: string | null;
   targetRiskTopic: number | null;
   triggerThreshold: number | null;
+  scheduleFrequency?: string;
+  scheduleAnchorDate?: string | null;
+  cadenceSuggestedSlots?: AvailabilitySlot[];
+  calendarCommittedSlots?: AvailabilitySlot[];
   status: ContinuousProgramStatus;
   deployedAt: string | null;
 };
@@ -266,6 +276,7 @@ function EditIcon() {
 }
 
 export function ManagerClientFicha({ clientId }: { clientId: string }) {
+  const router = useRouter();
   const [client, setClient] = useState<ClientDetail | null>(null);
   const [reports, setReports] = useState<Report[]>([]);
   const [selectedCampaignId, setSelectedCampaignId] = useState("");
@@ -275,8 +286,10 @@ export function ManagerClientFicha({ clientId }: { clientId: string }) {
   const [isBusy, setIsBusy] = useState(false);
   const [isSavingDiagnostic, setIsSavingDiagnostic] = useState(false);
   const [linksPayload, setLinksPayload] = useState<SectorPayload | null>(null);
+  const [isLinksModalOpen, setIsLinksModalOpen] = useState(false);
   const [copiedSectorId, setCopiedSectorId] = useState<string | null>(null);
   const [isLoadingLinksFor, setIsLoadingLinksFor] = useState<string | null>(null);
+  const [openCampaignActionsFor, setOpenCampaignActionsFor] = useState<string | null>(null);
   const [editingCampaignId, setEditingCampaignId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<ClientTab>("overview");
   const [isEditingCompanyProfile, setIsEditingCompanyProfile] = useState(false);
@@ -321,9 +334,13 @@ export function ManagerClientFicha({ clientId }: { clientId: string }) {
   const [editAssignedProgramForm, setEditAssignedProgramForm] = useState<{
     status: ContinuousProgramStatus;
     deployedAt: string;
+    commitCalendarEvents: boolean;
+    calendarSlotStartsAt: string[];
   }>({
     status: "Active",
     deployedAt: "",
+    commitCalendarEvents: true,
+    calendarSlotStartsAt: [],
   });
 
   const selectedCampaign = useMemo(
@@ -345,6 +362,19 @@ export function ManagerClientFicha({ clientId }: { clientId: string }) {
     [unassignedProgramOptions, assignProgramForm.programId],
   );
   const primaryContinuousProgram = assignedPrograms[0] ?? null;
+  const editingAssignedProgram = useMemo(
+    () =>
+      editingAssignedProgramId
+        ? assignedPrograms.find((assignment) => assignment.id === editingAssignedProgramId) ?? null
+        : null,
+    [assignedPrograms, editingAssignedProgramId],
+  );
+  const editingCadenceSlots = editingAssignedProgram?.cadenceSuggestedSlots ?? [];
+  const editingCommittedSlots = editingAssignedProgram?.calendarCommittedSlots ?? [];
+  const selectedEditCalendarSlotSet = useMemo(
+    () => new Set(editAssignedProgramForm.calendarSlotStartsAt),
+    [editAssignedProgramForm.calendarSlotStartsAt],
+  );
 
   const loadContinuousPrograms = useCallback(async (targetClientId: string) => {
     const response = await fetch(`/api/admin/clients/${targetClientId}/programs`, { cache: "no-store" });
@@ -442,6 +472,12 @@ export function ManagerClientFicha({ clientId }: { clientId: string }) {
     setSectorForms(client.sectors.map(buildSectorProfileForm));
   }, [client, isEditingCompanyProfile]);
 
+  useEffect(() => {
+    if (activeTab === "assigned-drps") return;
+    setOpenCampaignActionsFor(null);
+    setIsLinksModalOpen(false);
+  }, [activeTab]);
+
   async function updateDiagnostic(campaignId: string, payload: Record<string, unknown>) {
     setIsSavingDiagnostic(true);
     const response = await fetch(`/api/admin/campaigns/${campaignId}`, {
@@ -488,14 +524,22 @@ export function ManagerClientFicha({ clientId }: { clientId: string }) {
 
   async function loadQuestionnaireLinks(campaign: Diagnostic) {
     setIsLoadingLinksFor(campaign.id);
-    const response = await fetch(`/api/admin/campaigns/${campaign.id}/sectors`, { cache: "no-store" });
-    if (!response.ok) {
+    setLinksPayload(null);
+    setIsLinksModalOpen(false);
+    try {
+      const response = await fetch(`/api/admin/campaigns/${campaign.id}/sectors`, { cache: "no-store" });
+      if (!response.ok) {
+        setError("Falha ao carregar links.");
+        return;
+      }
+      setLinksPayload((await response.json()) as SectorPayload);
+      setCopiedSectorId(null);
+      setIsLinksModalOpen(true);
+    } catch {
       setError("Falha ao carregar links.");
+    } finally {
       setIsLoadingLinksFor(null);
-      return;
     }
-    setLinksPayload((await response.json()) as SectorPayload);
-    setIsLoadingLinksFor(null);
   }
 
   async function copySectorLink(sector: SectorLink) {
@@ -629,11 +673,16 @@ export function ManagerClientFicha({ clientId }: { clientId: string }) {
   }
 
   function focusResults(campaign: Diagnostic) {
-    setActiveTab("assigned-drps");
-    setSelectedCampaignId(campaign.id);
-    setTimeout(() => {
-      document.getElementById("drps-dashboard")?.scrollIntoView({ behavior: "smooth", block: "start" });
-    }, 80);
+    if (!client?.portalSlug) {
+      setError("Cliente sem slug de portal para abrir resultados.");
+      return;
+    }
+    router.push(`/client/${client.portalSlug}/diagnostic/${campaign.id}`);
+  }
+
+  function closeLinksModal() {
+    setIsLinksModalOpen(false);
+    setCopiedSectorId(null);
   }
 
   function openAssignProgramModal() {
@@ -648,12 +697,31 @@ export function ManagerClientFicha({ clientId }: { clientId: string }) {
   }
 
   function startEditingAssignedProgram(assignment: AssignedContinuousProgram) {
+    const suggested = assignment.cadenceSuggestedSlots ?? [];
+    const committed = assignment.calendarCommittedSlots ?? [];
     setEditingAssignedProgramId(assignment.id);
     setEditAssignedProgramForm({
       status: assignment.status,
       deployedAt: toDatetimeLocal(assignment.deployedAt),
+      commitCalendarEvents: true,
+      calendarSlotStartsAt:
+        committed.length > 0
+          ? committed.map((slot) => slot.startsAt)
+          : suggested.slice(0, 4).map((slot) => slot.startsAt),
     });
     setContinuousError("");
+  }
+
+  function toggleEditCalendarSlot(startsAt: string) {
+    setEditAssignedProgramForm((previous) => {
+      const exists = previous.calendarSlotStartsAt.includes(startsAt);
+      return {
+        ...previous,
+        calendarSlotStartsAt: exists
+          ? previous.calendarSlotStartsAt.filter((value) => value !== startsAt)
+          : [...previous.calendarSlotStartsAt, startsAt],
+      };
+    });
   }
 
   async function assignContinuousProgram() {
@@ -705,11 +773,23 @@ export function ManagerClientFicha({ clientId }: { clientId: string }) {
         body: JSON.stringify({
           status: editAssignedProgramForm.status,
           ...(deployedAtIso ? { deployedAt: deployedAtIso } : {}),
+          commitCalendarEvents: editAssignedProgramForm.commitCalendarEvents,
+          calendarSlotStartsAt: editAssignedProgramForm.calendarSlotStartsAt,
         }),
       },
     );
-    const data = (await response.json().catch(() => ({}))) as { error?: string };
+    const data = (await response.json().catch(() => ({}))) as {
+      error?: string;
+      suggestedSlots?: AvailabilitySlot[];
+    };
     if (!response.ok) {
+      const suggestedSlots = Array.isArray(data.suggestedSlots) ? data.suggestedSlots : [];
+      if (response.status === 409 && suggestedSlots.length > 0) {
+        setEditAssignedProgramForm((previous) => ({
+          ...previous,
+          calendarSlotStartsAt: suggestedSlots.slice(0, 4).map((slot) => slot.startsAt),
+        }));
+      }
       setContinuousError(data.error ?? "Falha ao atualizar programa atribuido.");
       setIsSavingProgram(false);
       return;
@@ -1046,7 +1126,7 @@ export function ManagerClientFicha({ clientId }: { clientId: string }) {
               </div>
               <div className="mt-5 rounded-2xl border border-[#d8e4ee] bg-[#f8fbfd] p-4">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <p className="text-sm font-semibold text-[#123447]">Setores e contato principal</p>
+                  <p className="text-sm font-semibold text-[#123447]">Setores e detalhes do levantamento</p>
                   <button
                     type="button"
                     onClick={addSectorForm}
@@ -1061,7 +1141,7 @@ export function ManagerClientFicha({ clientId }: { clientId: string }) {
                   ) : (
                     sectorForms.map((sector) => (
                       <article key={sector.id} className="rounded-xl border border-[#d8e4ee] bg-white p-3">
-                        <div className="grid gap-3 md:grid-cols-4">
+                        <div className="grid gap-3 md:grid-cols-3">
                           <label className="text-xs text-[#4f6977] md:col-span-2">
                             Setor
                             <input
@@ -1094,6 +1174,84 @@ export function ManagerClientFicha({ clientId }: { clientId: string }) {
                               }
                             />
                           </label>
+                          <label className="text-xs text-[#4f6977]">
+                            Shifts
+                            <input
+                              className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
+                              value={sector.shifts}
+                              onChange={(event) => updateSectorForm(sector.id, { shifts: event.target.value })}
+                            />
+                          </label>
+                          <label className="text-xs text-[#4f6977]">
+                            Remote workers in this sector
+                            <input
+                              type="number"
+                              min={0}
+                              className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
+                              value={sector.remoteWorkers}
+                              onChange={(event) =>
+                                updateSectorForm(sector.id, {
+                                  remoteWorkers: toNonNegativeInt(event.target.value, sector.remoteWorkers),
+                                })
+                              }
+                            />
+                          </label>
+                          <label className="text-xs text-[#4f6977]">
+                            On-site workers in this sector
+                            <input
+                              type="number"
+                              min={0}
+                              className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
+                              value={sector.onsiteWorkers}
+                              onChange={(event) =>
+                                updateSectorForm(sector.id, {
+                                  onsiteWorkers: toNonNegativeInt(event.target.value, sector.onsiteWorkers),
+                                })
+                              }
+                            />
+                          </label>
+                          <label className="text-xs text-[#4f6977]">
+                            Hybrid workers in this sector
+                            <input
+                              type="number"
+                              min={0}
+                              className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
+                              value={sector.hybridWorkers}
+                              onChange={(event) =>
+                                updateSectorForm(sector.id, {
+                                  hybridWorkers: toNonNegativeInt(event.target.value, sector.hybridWorkers),
+                                })
+                              }
+                            />
+                          </label>
+                          <label className="text-xs text-[#4f6977]">
+                            Workers in role
+                            <input
+                              type="number"
+                              min={0}
+                              className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
+                              value={sector.workersInRole}
+                              onChange={(event) =>
+                                updateSectorForm(sector.id, {
+                                  workersInRole: toNonNegativeInt(event.target.value, sector.workersInRole),
+                                })
+                              }
+                            />
+                          </label>
+                          <label className="text-xs text-[#4f6977]">
+                            Assessment date
+                            <input
+                              type="date"
+                              className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
+                              value={sector.elaborationDate}
+                              onChange={(event) =>
+                                updateSectorForm(sector.id, { elaborationDate: event.target.value })
+                              }
+                            />
+                            <span className="mt-1 block text-[11px] leading-4 text-[#5a7383]">
+                              Date this sector assessment was prepared.
+                            </span>
+                          </label>
                           <label className="text-xs text-[#4f6977] md:col-span-2">
                             Contact email
                             <input
@@ -1124,6 +1282,48 @@ export function ManagerClientFicha({ clientId }: { clientId: string }) {
                               Delete
                             </button>
                           </div>
+                          <label className="text-xs text-[#4f6977] md:col-span-3">
+                            Roles / functions
+                            <input
+                              className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
+                              value={sector.functions}
+                              onChange={(event) => updateSectorForm(sector.id, { functions: event.target.value })}
+                            />
+                          </label>
+                          <label className="text-xs text-[#4f6977] md:col-span-3">
+                            Vulnerable groups
+                            <textarea
+                              className="mt-1 min-h-20 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
+                              value={sector.vulnerableGroups}
+                              onChange={(event) =>
+                                updateSectorForm(sector.id, { vulnerableGroups: event.target.value })
+                              }
+                            />
+                          </label>
+                          <label className="text-xs text-[#4f6977] md:col-span-3">
+                            Stress, harassment, overload and other harms
+                            <textarea
+                              className="mt-1 min-h-20 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
+                              value={sector.possibleMentalHealthHarms}
+                              onChange={(event) =>
+                                updateSectorForm(sector.id, {
+                                  possibleMentalHealthHarms: event.target.value,
+                                })
+                              }
+                            />
+                          </label>
+                          <label className="text-xs text-[#4f6977] md:col-span-3">
+                            Existing control measures
+                            <textarea
+                              className="mt-1 min-h-20 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
+                              value={sector.existingControlMeasures}
+                              onChange={(event) =>
+                                updateSectorForm(sector.id, {
+                                  existingControlMeasures: event.target.value,
+                                })
+                              }
+                            />
+                          </label>
                         </div>
                       </article>
                     ))
@@ -1220,48 +1420,284 @@ export function ManagerClientFicha({ clientId }: { clientId: string }) {
             <h3 className="text-lg font-semibold text-[#123447]">Diagnosticos DRPS atribuidos</h3>
             <div className="mt-3 overflow-x-auto">
               <table className="min-w-full text-sm">
-                <thead><tr className="border-b"><th className="px-2 py-2 text-left">Diagnostico</th><th className="px-2 py-2 text-left">Status</th><th className="px-2 py-2 text-left">Inicio</th><th className="px-2 py-2 text-left">Fechamento</th><th className="px-2 py-2 text-left">Acoes</th></tr></thead>
+                <thead>
+                  <tr className="border-b">
+                    <th className="px-2 py-2 text-left">Diagnostico</th>
+                    <th className="px-2 py-2 text-left">Status</th>
+                    <th className="px-2 py-2 text-left">Inicio</th>
+                    <th className="px-2 py-2 text-left">Fechamento</th>
+                    <th className="px-2 py-2 text-left">Acoes</th>
+                  </tr>
+                </thead>
                 <tbody>
-                  {client.campaigns.length === 0 ? <tr><td colSpan={5} className="px-2 py-3 text-xs text-[#5a7383]">Nenhum diagnostico atribuido.</td></tr> : client.campaigns.map((campaign) => (
-                    <Fragment key={campaign.id}>
-                      <tr className="border-b">
-                        <td className="px-2 py-2">{campaign.name}</td><td className="px-2 py-2">{campaign.status}</td><td className="px-2 py-2">{fmt(campaign.starts_at)}</td><td className="px-2 py-2">{fmt(campaign.closes_at)}</td>
-                        <td className="px-2 py-2"><div className="flex flex-wrap gap-2">
-                          <button type="button" onClick={() => focusResults(campaign)} className="rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73]">Ver resultados</button>
-                          <button type="button" onClick={() => { setEditingCampaignId(campaign.id); setEditForm({ name: campaign.name, status: campaign.status, startsAt: toDatetimeLocal(campaign.starts_at), closesAt: toDatetimeLocal(campaign.closes_at) }); }} className="rounded-full border border-[#b9d8a5] px-3 py-1 text-xs font-semibold text-[#2d5f23]">Editar</button>
-                          <button type="button" disabled={isSavingDiagnostic || campaign.status === "closed"} onClick={() => void updateDiagnostic(campaign.id, { status: "closed", closesAt: new Date().toISOString() })} className="rounded-full border border-[#e4c898] px-3 py-1 text-xs font-semibold text-[#7a4b00] disabled:opacity-50">Fechar</button>
-                          <button type="button" disabled={isLoadingLinksFor === campaign.id} onClick={() => void loadQuestionnaireLinks(campaign)} className="rounded-full border border-[#d5c2f0] px-3 py-1 text-xs font-semibold text-[#5a2b8a] disabled:opacity-50">{isLoadingLinksFor === campaign.id ? "Carregando..." : "Gerar links questionario"}</button>
-                          <button type="button" disabled={isBusy} onClick={() => void generateReportForCampaign(campaign.id)} className="rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73] disabled:opacity-50">Gerar relatorio</button>
-                        </div></td>
-                      </tr>
-                      {editingCampaignId === campaign.id ? (
-                        <tr className="border-b bg-[#f8fbfd]"><td colSpan={5} className="px-2 py-3">
-                          <div className="grid gap-2 md:grid-cols-4">
-                            <input className="rounded border border-[#c9dce8] px-3 py-2 text-sm md:col-span-2" value={editForm.name} onChange={(event) => setEditForm((p) => ({ ...p, name: event.target.value }))} />
-                            <select className="rounded border border-[#c9dce8] px-3 py-2 text-sm" value={editForm.status} onChange={(event) => setEditForm((p) => ({ ...p, status: event.target.value as "draft" | "live" | "closed" | "archived" }))}><option value="draft">Rascunho</option><option value="live">Ativo</option><option value="closed">Concluido</option><option value="archived">Arquivado</option></select>
-                            <input type="datetime-local" className="rounded border border-[#c9dce8] px-3 py-2 text-sm" value={editForm.startsAt} onChange={(event) => setEditForm((p) => ({ ...p, startsAt: event.target.value }))} />
-                            <input type="datetime-local" className="rounded border border-[#c9dce8] px-3 py-2 text-sm" value={editForm.closesAt} onChange={(event) => setEditForm((p) => ({ ...p, closesAt: event.target.value }))} />
-                          </div>
-                          <div className="mt-3 flex gap-2"><button type="button" disabled={isSavingDiagnostic} onClick={() => void updateDiagnostic(campaign.id, { name: editForm.name.trim(), status: editForm.status, startsAt: fromDatetimeLocal(editForm.startsAt), closesAt: fromDatetimeLocal(editForm.closesAt) })} className="rounded-full bg-[#0f5b73] px-4 py-2 text-xs font-semibold text-white disabled:opacity-50">Salvar</button><button type="button" onClick={() => setEditingCampaignId(null)} className="rounded-full border border-[#9ec8db] px-4 py-2 text-xs font-semibold text-[#0f5b73]">Cancelar</button></div>
-                        </td></tr>
-                      ) : null}
-                    </Fragment>
-                  ))}
+                  {client.campaigns.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} className="px-2 py-3 text-xs text-[#5a7383]">
+                        Nenhum diagnostico atribuido.
+                      </td>
+                    </tr>
+                  ) : (
+                    client.campaigns.map((campaign) => (
+                      <Fragment key={campaign.id}>
+                        <tr className="border-b">
+                          <td className="px-2 py-2">{campaign.name}</td>
+                          <td className="px-2 py-2">{campaign.status}</td>
+                          <td className="px-2 py-2">{fmt(campaign.starts_at)}</td>
+                          <td className="px-2 py-2">{fmt(campaign.closes_at)}</td>
+                          <td className="px-2 py-2">
+                            <div className="relative inline-flex">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setOpenCampaignActionsFor((previous) =>
+                                    previous === campaign.id ? null : campaign.id,
+                                  )
+                                }
+                                className="rounded-full border border-[#c9dce8] px-3 py-1 text-xs font-semibold text-[#123447]"
+                              >
+                                Acoes
+                              </button>
+                              {openCampaignActionsFor === campaign.id ? (
+                                <div className="absolute right-0 top-full z-20 mt-2 w-56 overflow-hidden rounded-xl border border-[#d8e4ee] bg-white shadow-lg">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setOpenCampaignActionsFor(null);
+                                      focusResults(campaign);
+                                    }}
+                                    className="block w-full px-3 py-2 text-left text-xs font-semibold text-[#123447] hover:bg-[#f4f9fc]"
+                                  >
+                                    Ver resultados
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setOpenCampaignActionsFor(null);
+                                      setEditingCampaignId(campaign.id);
+                                      setEditForm({
+                                        name: campaign.name,
+                                        status: campaign.status,
+                                        startsAt: toDatetimeLocal(campaign.starts_at),
+                                        closesAt: toDatetimeLocal(campaign.closes_at),
+                                      });
+                                    }}
+                                    className="block w-full px-3 py-2 text-left text-xs font-semibold text-[#123447] hover:bg-[#f4f9fc]"
+                                  >
+                                    Editar
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={isSavingDiagnostic || campaign.status === "closed"}
+                                    onClick={() => {
+                                      setOpenCampaignActionsFor(null);
+                                      void updateDiagnostic(campaign.id, {
+                                        status: "closed",
+                                        closesAt: new Date().toISOString(),
+                                      });
+                                    }}
+                                    className="block w-full px-3 py-2 text-left text-xs font-semibold text-[#7a4b00] hover:bg-[#fff8ef] disabled:cursor-not-allowed disabled:text-[#a8b7c0]"
+                                  >
+                                    Fechar
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={isLoadingLinksFor === campaign.id}
+                                    onClick={() => {
+                                      setOpenCampaignActionsFor(null);
+                                      void loadQuestionnaireLinks(campaign);
+                                    }}
+                                    className="block w-full px-3 py-2 text-left text-xs font-semibold text-[#5a2b8a] hover:bg-[#f8f2ff] disabled:cursor-not-allowed disabled:text-[#a8b7c0]"
+                                  >
+                                    {isLoadingLinksFor === campaign.id
+                                      ? "Carregando..."
+                                      : "Gerar links questionario"}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={isBusy}
+                                    onClick={() => {
+                                      setOpenCampaignActionsFor(null);
+                                      void generateReportForCampaign(campaign.id);
+                                    }}
+                                    className="block w-full px-3 py-2 text-left text-xs font-semibold text-[#0f5b73] hover:bg-[#f4f9fc] disabled:cursor-not-allowed disabled:text-[#a8b7c0]"
+                                  >
+                                    Gerar relatorio
+                                  </button>
+                                </div>
+                              ) : null}
+                            </div>
+                          </td>
+                        </tr>
+                        {editingCampaignId === campaign.id ? (
+                          <tr className="border-b bg-[#f8fbfd]">
+                            <td colSpan={5} className="px-2 py-3">
+                              <div className="grid gap-2 md:grid-cols-4">
+                                <input
+                                  className="rounded border border-[#c9dce8] px-3 py-2 text-sm md:col-span-2"
+                                  value={editForm.name}
+                                  onChange={(event) =>
+                                    setEditForm((previous) => ({ ...previous, name: event.target.value }))
+                                  }
+                                />
+                                <select
+                                  className="rounded border border-[#c9dce8] px-3 py-2 text-sm"
+                                  value={editForm.status}
+                                  onChange={(event) =>
+                                    setEditForm((previous) => ({
+                                      ...previous,
+                                      status: event.target.value as "draft" | "live" | "closed" | "archived",
+                                    }))
+                                  }
+                                >
+                                  <option value="draft">Rascunho</option>
+                                  <option value="live">Ativo</option>
+                                  <option value="closed">Concluido</option>
+                                  <option value="archived">Arquivado</option>
+                                </select>
+                                <input
+                                  type="datetime-local"
+                                  className="rounded border border-[#c9dce8] px-3 py-2 text-sm"
+                                  value={editForm.startsAt}
+                                  onChange={(event) =>
+                                    setEditForm((previous) => ({ ...previous, startsAt: event.target.value }))
+                                  }
+                                />
+                                <input
+                                  type="datetime-local"
+                                  className="rounded border border-[#c9dce8] px-3 py-2 text-sm"
+                                  value={editForm.closesAt}
+                                  onChange={(event) =>
+                                    setEditForm((previous) => ({ ...previous, closesAt: event.target.value }))
+                                  }
+                                />
+                              </div>
+                              <div className="mt-3 flex gap-2">
+                                <button
+                                  type="button"
+                                  disabled={isSavingDiagnostic}
+                                  onClick={() =>
+                                    void updateDiagnostic(campaign.id, {
+                                      name: editForm.name.trim(),
+                                      status: editForm.status,
+                                      startsAt: fromDatetimeLocal(editForm.startsAt),
+                                      closesAt: fromDatetimeLocal(editForm.closesAt),
+                                    })
+                                  }
+                                  className="rounded-full bg-[#0f5b73] px-4 py-2 text-xs font-semibold text-white disabled:opacity-50"
+                                >
+                                  Salvar
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setEditingCampaignId(null)}
+                                  className="rounded-full border border-[#9ec8db] px-4 py-2 text-xs font-semibold text-[#0f5b73]"
+                                >
+                                  Cancelar
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        ) : null}
+                      </Fragment>
+                    ))
+                  )}
                 </tbody>
               </table>
             </div>
           </section>
-          {linksPayload ? (
-            <section className="rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
-              <div className="flex flex-wrap items-center justify-between gap-3"><h3 className="text-lg font-semibold text-[#123447]">Links do questionario: {linksPayload.campaign.name}</h3><div className="flex gap-2"><button type="button" onClick={() => void copyAllLinks()} className="rounded-full border border-[#b9d8a5] px-3 py-1 text-xs font-semibold text-[#2d5f23]">Copiar todos</button><button type="button" onClick={exportLinksCsv} className="rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73]">Exportar CSV</button></div></div>
-              <div className="mt-3 overflow-x-auto"><table className="min-w-full text-sm"><thead><tr className="border-b"><th className="px-2 py-2 text-left">Setor</th><th className="px-2 py-2 text-left">Status</th><th className="px-2 py-2 text-left">Respostas</th><th className="px-2 py-2 text-left">Ultimo envio</th><th className="px-2 py-2 text-left">Link</th></tr></thead><tbody>{linksPayload.sectors.length === 0 ? <tr><td colSpan={5} className="px-2 py-3 text-xs text-[#5a7383]">Nenhum setor configurado para este diagnostico.</td></tr> : linksPayload.sectors.map((sector) => <tr key={sector.id} className="border-b"><td className="px-2 py-2">{sector.name}</td><td className="px-2 py-2">{sector.isActive ? "Ativo" : "Inativo"}</td><td className="px-2 py-2">{sector.submissionCount}</td><td className="px-2 py-2">{fmt(sector.lastSubmittedAt)}</td><td className="px-2 py-2"><div className="flex items-center gap-2"><input readOnly value={sector.accessLink} className="min-w-[320px] rounded border border-[#d5e2ea] bg-[#f7fbfe] px-2 py-1 text-xs" /><button type="button" onClick={() => void copySectorLink(sector)} className="rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73]">{copiedSectorId === sector.id ? "Copiado" : "Copiar"}</button></div></td></tr>)}</tbody></table></div>
-            </section>
-          ) : null}
           <section className="rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
             <h3 className="text-lg font-semibold text-[#123447]">Relatorios gerados</h3>
             <div className="mt-3 overflow-x-auto"><table className="min-w-full text-sm"><thead><tr className="border-b"><th className="px-2 py-2 text-left">Titulo</th><th className="px-2 py-2 text-left">Status</th><th className="px-2 py-2 text-left">Criado</th></tr></thead><tbody>{reports.length === 0 ? <tr><td className="px-2 py-3 text-xs text-[#5a7383]" colSpan={3}>Sem relatorios.</td></tr> : reports.map((report) => <tr key={report.id} className="border-b"><td className="px-2 py-2">{report.report_title}</td><td className="px-2 py-2">{report.status}</td><td className="px-2 py-2">{fmt(report.created_at)}</td></tr>)}</tbody></table></div>
           </section>
         </>
+      ) : null}
+
+      {isLinksModalOpen && linksPayload ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4"
+          onClick={closeLinksModal}
+        >
+          <div
+            className="w-full max-w-5xl rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <h4 className="text-lg font-semibold text-[#123447]">
+                Links do questionario: {linksPayload.campaign.name}
+              </h4>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => void copyAllLinks()}
+                  className="rounded-full border border-[#b9d8a5] px-3 py-1 text-xs font-semibold text-[#2d5f23]"
+                >
+                  Copiar todos
+                </button>
+                <button
+                  type="button"
+                  onClick={exportLinksCsv}
+                  className="rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
+                >
+                  Exportar CSV
+                </button>
+                <button
+                  type="button"
+                  onClick={closeLinksModal}
+                  className="rounded-full border border-[#c9dce8] px-3 py-1 text-xs font-semibold text-[#123447]"
+                >
+                  Fechar
+                </button>
+              </div>
+            </div>
+            <div className="mt-4 max-h-[65vh] overflow-auto">
+              <table className="min-w-full text-sm">
+                <thead>
+                  <tr className="border-b">
+                    <th className="px-2 py-2 text-left">Setor</th>
+                    <th className="px-2 py-2 text-left">Status</th>
+                    <th className="px-2 py-2 text-left">Respostas</th>
+                    <th className="px-2 py-2 text-left">Ultimo envio</th>
+                    <th className="px-2 py-2 text-left">Link</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {linksPayload.sectors.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} className="px-2 py-3 text-xs text-[#5a7383]">
+                        Nenhum setor configurado para este diagnostico.
+                      </td>
+                    </tr>
+                  ) : (
+                    linksPayload.sectors.map((sector) => (
+                      <tr key={sector.id} className="border-b">
+                        <td className="px-2 py-2">{sector.name}</td>
+                        <td className="px-2 py-2">{sector.isActive ? "Ativo" : "Inativo"}</td>
+                        <td className="px-2 py-2">{sector.submissionCount}</td>
+                        <td className="px-2 py-2">{fmt(sector.lastSubmittedAt)}</td>
+                        <td className="px-2 py-2">
+                          <div className="flex items-center gap-2">
+                            <input
+                              readOnly
+                              value={sector.accessLink}
+                              className="w-full min-w-[280px] rounded border border-[#d5e2ea] bg-[#f7fbfe] px-2 py-1 text-xs"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => void copySectorLink(sector)}
+                              className="rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
+                            >
+                              {copiedSectorId === sector.id ? "Copiado" : "Copiar"}
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
       ) : null}
 
       {activeTab === "assigned-continuous" ? (
@@ -1286,13 +1722,14 @@ export function ManagerClientFicha({ clientId }: { clientId: string }) {
                   <th className="px-2 py-2 text-left">Topico alvo</th>
                   <th className="px-2 py-2 text-left">Status</th>
                   <th className="px-2 py-2 text-left">Aplicado em</th>
+                  <th className="px-2 py-2 text-left">Cadencia</th>
                   <th className="px-2 py-2 text-left">Acoes</th>
                 </tr>
               </thead>
               <tbody>
                 {assignedPrograms.length === 0 ? (
                   <tr>
-                    <td colSpan={5} className="px-2 py-3 text-xs text-[#5a7383]">
+                    <td colSpan={6} className="px-2 py-3 text-xs text-[#5a7383]">
                       Nenhum processo continuo atribuido.
                     </td>
                   </tr>
@@ -1307,6 +1744,7 @@ export function ManagerClientFicha({ clientId }: { clientId: string }) {
                         <td className="px-2 py-2">{assignment.targetRiskTopic ?? "-"}</td>
                         <td className="px-2 py-2">{assignment.status}</td>
                         <td className="px-2 py-2">{fmt(assignment.deployedAt)}</td>
+                        <td className="px-2 py-2">{assignment.scheduleFrequency ?? "-"}</td>
                         <td className="px-2 py-2">
                           <div className="flex flex-wrap gap-2">
                             <button
@@ -1330,7 +1768,7 @@ export function ManagerClientFicha({ clientId }: { clientId: string }) {
                       </tr>
                       {editingAssignedProgramId === assignment.id ? (
                         <tr className="border-b bg-[#f8fbfd]">
-                          <td colSpan={5} className="px-2 py-3">
+                          <td colSpan={6} className="px-2 py-3">
                             <div className="grid gap-2 md:grid-cols-3">
                               <select
                                 className="rounded border border-[#c9dce8] px-3 py-2 text-sm"
@@ -1357,7 +1795,70 @@ export function ManagerClientFicha({ clientId }: { clientId: string }) {
                                   }))
                                 }
                               />
+                              <label className="flex items-center gap-2 rounded border border-[#c9dce8] bg-white px-3 py-2 text-xs text-[#456576]">
+                                <input
+                                  type="checkbox"
+                                  checked={editAssignedProgramForm.commitCalendarEvents}
+                                  onChange={(event) =>
+                                    setEditAssignedProgramForm((previous) => ({
+                                      ...previous,
+                                      commitCalendarEvents: event.target.checked,
+                                    }))
+                                  }
+                                />
+                                Commitar eventos no calendario do cliente
+                              </label>
                             </div>
+                            {editingCommittedSlots.length > 0 ? (
+                              <div className="mt-3 rounded-xl border border-[#d8e4ee] bg-white p-3">
+                                <p className="text-xs font-semibold uppercase tracking-[0.08em] text-[#365668]">
+                                  Eventos atualmente no calendario
+                                </p>
+                                <div className="mt-2 flex flex-wrap gap-2">
+                                  {editingCommittedSlots.map((slot) => (
+                                    <span
+                                      key={`committed-${assignment.id}-${slot.startsAt}`}
+                                      className="rounded-full border border-[#c6dbe8] bg-[#eef7fb] px-2 py-1 text-[11px] text-[#244f63]"
+                                    >
+                                      {fmt(slot.startsAt)}
+                                    </span>
+                                  ))}
+                                </div>
+                              </div>
+                            ) : null}
+                            {editAssignedProgramForm.commitCalendarEvents ? (
+                              <div className="mt-3 rounded-xl border border-[#d8e4ee] bg-white p-3">
+                                <p className="text-xs font-semibold uppercase tracking-[0.08em] text-[#365668]">
+                                  Calendario sugerido pela cadencia ({editingCadenceSlots.length})
+                                </p>
+                                {editingCadenceSlots.length === 0 ? (
+                                  <p className="mt-2 text-xs text-[#5a7383]">
+                                    Sem sugestoes de datas no momento. Salve para recalcular.
+                                  </p>
+                                ) : (
+                                  <div className="mt-2 grid gap-2 md:grid-cols-2">
+                                    {editingCadenceSlots.map((slot) => {
+                                      const selected = selectedEditCalendarSlotSet.has(slot.startsAt);
+                                      return (
+                                        <button
+                                          key={`cadence-${assignment.id}-${slot.startsAt}`}
+                                          type="button"
+                                          onClick={() => toggleEditCalendarSlot(slot.startsAt)}
+                                          className={`rounded-lg border px-3 py-2 text-left text-xs ${
+                                            selected
+                                              ? "border-[#0f5b73] bg-[#dceef6] text-[#0f5b73]"
+                                              : "border-[#c9dce8] bg-[#f7fbfe] text-[#35515f]"
+                                          }`}
+                                        >
+                                          <p className="font-semibold">{fmt(slot.startsAt)}</p>
+                                          <p className="mt-0.5 text-[11px]">Fim {fmt(slot.endsAt)}</p>
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+                                )}
+                              </div>
+                            ) : null}
                             <div className="mt-3 flex gap-2">
                               <button
                                 type="button"

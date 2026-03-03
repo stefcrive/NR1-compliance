@@ -83,6 +83,7 @@ export function ManagerClientAssignDrps({ clientId }: { clientId: string }) {
   const [templates, setTemplates] = useState<DiagnosticTemplateOption[]>([]);
   const [assignments, setAssignments] = useState<SectorAssignment[]>([]);
   const [questionsByTemplate, setQuestionsByTemplate] = useState<Record<string, string[]>>({});
+  const [questionnaireSectorId, setQuestionnaireSectorId] = useState<string | null>(null);
   const [campaignStatus, setCampaignStatus] = useState<"draft" | "live">("live");
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -263,6 +264,22 @@ export function ManagerClientAssignDrps({ clientId }: { clientId: string }) {
     return assignments.every((item) => item.templateId);
   }, [assignments, client, templates.length]);
 
+  const questionnaireAssignment = useMemo(() => {
+    if (!questionnaireSectorId) return null;
+    return assignments.find((item) => item.sectorId === questionnaireSectorId) ?? null;
+  }, [assignments, questionnaireSectorId]);
+
+  const questionnaireTemplate = useMemo(() => {
+    if (!questionnaireAssignment) return null;
+    return templateById.get(questionnaireAssignment.templateId) ?? null;
+  }, [questionnaireAssignment, templateById]);
+
+  useEffect(() => {
+    if (!questionnaireSectorId) return;
+    const stillExists = assignments.some((item) => item.sectorId === questionnaireSectorId);
+    if (!stillExists) setQuestionnaireSectorId(null);
+  }, [assignments, questionnaireSectorId]);
+
   async function syncCampaignSectors(
     campaignId: string,
     selectedSectorName: string,
@@ -336,13 +353,14 @@ export function ManagerClientAssignDrps({ clientId }: { clientId: string }) {
         }
 
         const publicSlugSeed = `${client.portalSlug || client.companyName}-${template.slug || template.name}-${assignment.sectorKey || assignment.sectorName}`;
+        const publicSlug = slugify(publicSlugSeed).slice(0, 120);
 
         const assignRes = await fetch(`/api/admin/clients/${client.id}/assign-drps`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             campaignName,
-            publicSlug: publicSlugSeed,
+            publicSlug: publicSlug || undefined,
             status: campaignStatus,
             sourceSurveyId: template.id,
           }),
@@ -499,37 +517,20 @@ export function ManagerClientAssignDrps({ clientId }: { clientId: string }) {
                 </label>
 
                 {supportsQuestionEditing ? (
-                  <label className="space-y-1">
+                  <div className="space-y-1">
                     <div className="flex flex-wrap items-center justify-between gap-2">
-                      <span className="text-xs text-[#4f6977]">Lista de perguntas (uma por linha)</span>
+                      <span className="text-xs text-[#4f6977]">
+                        Perguntas customizadas: {normalizePrompts(assignment.promptsText).length}
+                      </span>
                       <button
                         type="button"
-                        onClick={() => void applyTemplateToSector(assignment.sectorId, assignment.templateId)}
+                        onClick={() => setQuestionnaireSectorId(assignment.sectorId)}
                         className="rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
                       >
-                        Recarregar do template
+                        mostra questionario
                       </button>
                     </div>
-                    <textarea
-                      value={assignment.promptsText}
-                      onChange={(event) =>
-                        setAssignments((prev) =>
-                          prev.map((item) =>
-                            item.sectorId === assignment.sectorId
-                              ? { ...item, promptsText: event.target.value }
-                              : item,
-                          ),
-                        )
-                      }
-                      rows={8}
-                      className="w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
-                      placeholder={
-                        assignment.loadingQuestions
-                          ? "Carregando perguntas do template..."
-                          : "Digite uma pergunta por linha."
-                      }
-                    />
-                  </label>
+                  </div>
                 ) : null}
               </div>
             </article>
@@ -556,6 +557,65 @@ export function ManagerClientAssignDrps({ clientId }: { clientId: string }) {
 
       {success ? <p className="text-sm text-[#1f6b2f]">{success}</p> : null}
       {error ? <p className="text-sm text-red-600">{error}</p> : null}
+
+      {questionnaireAssignment && questionnaireTemplate?.source === "surveys" ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#0f2532]/45 p-4">
+          <div className="max-h-[90vh] w-full max-w-3xl overflow-auto rounded-2xl border border-[#c9dce8] bg-white p-5 shadow-xl">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="text-xs uppercase tracking-[0.12em] text-[#4f6977]">
+                  {questionnaireAssignment.sectorName}
+                </p>
+                <h4 className="text-lg font-semibold text-[#123447]">
+                  Lista de perguntas (uma por linha)
+                </h4>
+              </div>
+              <button
+                type="button"
+                onClick={() => setQuestionnaireSectorId(null)}
+                className="rounded-full border border-[#c9dce8] px-3 py-1 text-xs font-semibold text-[#123447]"
+              >
+                Fechar
+              </button>
+            </div>
+
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
+              <p className="text-xs text-[#4f6977]">
+                Template atual: {questionnaireTemplate.name} ({mapStatus(questionnaireTemplate.status)})
+              </p>
+              <button
+                type="button"
+                onClick={() =>
+                  void applyTemplateToSector(questionnaireAssignment.sectorId, questionnaireAssignment.templateId)
+                }
+                className="rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
+              >
+                Recarregar do template
+              </button>
+            </div>
+
+            <textarea
+              value={questionnaireAssignment.promptsText}
+              onChange={(event) =>
+                setAssignments((prev) =>
+                  prev.map((item) =>
+                    item.sectorId === questionnaireAssignment.sectorId
+                      ? { ...item, promptsText: event.target.value }
+                      : item,
+                  ),
+                )
+              }
+              rows={12}
+              className="mt-3 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
+              placeholder={
+                questionnaireAssignment.loadingQuestions
+                  ? "Carregando perguntas do template..."
+                  : "Digite uma pergunta por linha."
+              }
+            />
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

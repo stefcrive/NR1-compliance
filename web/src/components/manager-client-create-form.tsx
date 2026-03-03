@@ -63,12 +63,16 @@ const COPY = {
     removeSector: "Remove",
     sectorName: "Sector name",
     shifts: "Shifts",
+    remoteWorkersInSector: "Remote workers in this sector",
+    onsiteWorkersInSector: "On-site workers in this sector",
+    hybridWorkersInSector: "Hybrid workers in this sector",
     vulnerableGroups: "Vulnerable groups",
     functions: "Roles / functions",
     workersInRole: "Workers in role",
     harms: "Stress, harassment, overload and other harms",
     controls: "Existing control measures",
     elaborationDate: "Assessment date",
+    elaborationDateHelp: "Date this sector assessment was prepared.",
     riskParameter: "Risk parameter (0.5 to 2)",
     submit: "Create account",
     submitting: "Creating...",
@@ -109,12 +113,16 @@ const COPY = {
     removeSector: "Remover",
     sectorName: "Nome do setor",
     shifts: "Turnos",
+    remoteWorkersInSector: "Funcionarios remotos no setor",
+    onsiteWorkersInSector: "Funcionarios presenciais no setor",
+    hybridWorkersInSector: "Funcionarios hibridos no setor",
     vulnerableGroups: "Grupos vulneraveis",
     functions: "Funcoes / cargos",
     workersInRole: "N. funcionarios no setor",
     harms: "Estresse, assedio, sobrecarga e outros agravos",
     controls: "Medidas de controle existentes",
     elaborationDate: "Data de levantamento",
+    elaborationDateHelp: "Data em que este levantamento do setor foi feito.",
     riskParameter: "Parametro de risco (0.5 a 2)",
     submit: "Criar conta",
     submitting: "Criando...",
@@ -129,9 +137,9 @@ function createSectorDraft(): SectorDraft {
   return {
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
     name: "",
-    remoteWorkers: "0",
-    onsiteWorkers: "0",
-    hybridWorkers: "0",
+    remoteWorkers: "",
+    onsiteWorkers: "",
+    hybridWorkers: "",
     workersInRole: "",
     shifts: "",
     vulnerableGroups: "",
@@ -422,54 +430,73 @@ export function ManagerClientCreateForm() {
                   value={sector.shifts}
                   onChange={(event) => updateSector(sector.id, { shifts: event.target.value })}
                 />
-                <input
-                  type="number"
-                  min={0}
-                  className="rounded border border-[#c9dce8] px-3 py-2 text-sm"
-                  placeholder={t.remoteEmployees}
-                  value={sector.remoteWorkers}
-                  onChange={(event) => updateSector(sector.id, { remoteWorkers: event.target.value })}
-                />
-                <input
-                  type="number"
-                  min={0}
-                  className="rounded border border-[#c9dce8] px-3 py-2 text-sm"
-                  placeholder={t.onsiteEmployees}
-                  value={sector.onsiteWorkers}
-                  onChange={(event) => updateSector(sector.id, { onsiteWorkers: event.target.value })}
-                />
-                <input
-                  type="number"
-                  min={0}
-                  className="rounded border border-[#c9dce8] px-3 py-2 text-sm"
-                  placeholder={t.hybridEmployees}
-                  value={sector.hybridWorkers}
-                  onChange={(event) => updateSector(sector.id, { hybridWorkers: event.target.value })}
-                />
-                <input
-                  type="number"
-                  min={0}
-                  className="rounded border border-[#c9dce8] px-3 py-2 text-sm"
-                  placeholder={t.workersInRole}
-                  value={sector.workersInRole}
-                  onChange={(event) => updateSector(sector.id, { workersInRole: event.target.value })}
-                />
-                <input
-                  type="number"
-                  min={0.5}
-                  max={2}
-                  step="0.01"
-                  className="rounded border border-[#c9dce8] px-3 py-2 text-sm"
-                  placeholder={t.riskParameter}
-                  value={sector.riskParameter}
-                  onChange={(event) => updateSector(sector.id, { riskParameter: event.target.value })}
-                />
-                <input
-                  type="date"
-                  className="rounded border border-[#c9dce8] px-3 py-2 text-sm"
-                  value={sector.elaborationDate}
-                  onChange={(event) => updateSector(sector.id, { elaborationDate: event.target.value })}
-                />
+                <label className="space-y-1">
+                  <span className="text-xs font-medium text-[#214759]">{t.remoteWorkersInSector}</span>
+                  <input
+                    type="number"
+                    min={0}
+                    className="w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
+                    placeholder="0"
+                    value={sector.remoteWorkers}
+                    onChange={(event) => updateSector(sector.id, { remoteWorkers: event.target.value })}
+                  />
+                </label>
+                <label className="space-y-1">
+                  <span className="text-xs font-medium text-[#214759]">{t.onsiteWorkersInSector}</span>
+                  <input
+                    type="number"
+                    min={0}
+                    className="w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
+                    placeholder="0"
+                    value={sector.onsiteWorkers}
+                    onChange={(event) => updateSector(sector.id, { onsiteWorkers: event.target.value })}
+                  />
+                </label>
+                <label className="space-y-1">
+                  <span className="text-xs font-medium text-[#214759]">{t.hybridWorkersInSector}</span>
+                  <input
+                    type="number"
+                    min={0}
+                    className="w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
+                    placeholder="0"
+                    value={sector.hybridWorkers}
+                    onChange={(event) => updateSector(sector.id, { hybridWorkers: event.target.value })}
+                  />
+                </label>
+                <label className="space-y-1">
+                  <span className="text-xs font-medium text-[#214759]">{t.workersInRole}</span>
+                  <input
+                    type="number"
+                    min={0}
+                    className="w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
+                    placeholder="0"
+                    value={sector.workersInRole}
+                    onChange={(event) => updateSector(sector.id, { workersInRole: event.target.value })}
+                  />
+                </label>
+                <label className="space-y-1">
+                  <span className="text-xs font-medium text-[#214759]">{t.riskParameter}</span>
+                  <input
+                    type="number"
+                    min={0.5}
+                    max={2}
+                    step="0.01"
+                    className="w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
+                    placeholder="1.0"
+                    value={sector.riskParameter}
+                    onChange={(event) => updateSector(sector.id, { riskParameter: event.target.value })}
+                  />
+                </label>
+                <label className="space-y-1">
+                  <span className="text-xs font-medium text-[#214759]">{t.elaborationDate}</span>
+                  <input
+                    type="date"
+                    className="w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
+                    value={sector.elaborationDate}
+                    onChange={(event) => updateSector(sector.id, { elaborationDate: event.target.value })}
+                  />
+                  <span className="block text-[11px] leading-4 text-[#57717e]">{t.elaborationDateHelp}</span>
+                </label>
                 <input
                   className="rounded border border-[#c9dce8] px-3 py-2 text-sm md:col-span-3"
                   placeholder={t.functions}

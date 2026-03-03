@@ -42,7 +42,23 @@ type MasterCalendarEvent = {
   startsAt: string;
   endsAt: string;
   status: "scheduled" | "completed" | "cancelled";
+  sourceClientProgramId: string | null;
 };
+
+type ActiveContinuousProgram = {
+  id: string;
+  clientId: string;
+  clientName: string | null;
+  programId: string;
+  programTitle: string;
+  deployedAt: string | null;
+  status: "Recommended" | "Active" | "Completed";
+};
+
+type CalendarIsolationFilter =
+  | { kind: "none" }
+  | { kind: "drps"; campaignId: string; label: string }
+  | { kind: "continuous"; assignmentId: string; label: string };
 
 const WEEK_LABELS = {
   en: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
@@ -84,7 +100,18 @@ const COPY = {
     prevMonth: "Previous month",
     nextMonth: "Next month",
     liveDrps: "Active DRPS diagnostics",
+    liveContinuous: "Active continuous programs",
     noActiveCampaigns: "No active DRPS diagnostics.",
+    noActiveContinuous: "No active continuous programs.",
+    drpsTableDiagnostic: "Diagnostic",
+    drpsTableCompany: "Company",
+    drpsTableStart: "Start",
+    drpsTableClose: "Close",
+    continuousTableProgram: "Program",
+    continuousTableCompany: "Company",
+    continuousTableSince: "Since",
+    clearIsolation: "Clear filter",
+    isolatedBy: "Calendar isolated by",
     calendarDownError: "Master calendar is unavailable now. Clients area is still operational.",
     blockWindowTitle: "Block time window",
     blockWindowClient: "Company",
@@ -144,7 +171,18 @@ const COPY = {
     prevMonth: "Mes anterior",
     nextMonth: "Proximo",
     liveDrps: "Diagnosticos DRPS ativos",
+    liveContinuous: "Programas continuos ativos",
     noActiveCampaigns: "Nenhum diagnostico DRPS ativo.",
+    noActiveContinuous: "Nenhum programa continuo ativo.",
+    drpsTableDiagnostic: "Diagnostico",
+    drpsTableCompany: "Empresa",
+    drpsTableStart: "Inicio",
+    drpsTableClose: "Fechamento",
+    continuousTableProgram: "Programa",
+    continuousTableCompany: "Empresa",
+    continuousTableSince: "Ativo desde",
+    clearIsolation: "Limpar filtro",
+    isolatedBy: "Calendario isolado por",
     calendarDownError: "Calendario mestre indisponivel no momento. A area de clientes segue operacional.",
     blockWindowTitle: "Bloquear horario",
     blockWindowClient: "Empresa",
@@ -195,6 +233,13 @@ function dayKey(date: Date) {
 
 function monthLabel(date: Date, locale: ManagerLocale) {
   return new Intl.DateTimeFormat(uiLocale(locale), { month: "long", year: "numeric" }).format(date);
+}
+
+function extractCampaignIdFromCalendarEvent(event: MasterCalendarEvent) {
+  if (event.eventType !== "drps_start" && event.eventType !== "drps_close") return null;
+  if (event.id.startsWith("drps-start-")) return event.id.slice("drps-start-".length);
+  if (event.id.startsWith("drps-close-")) return event.id.slice("drps-close-".length);
+  return null;
 }
 
 function localizeStatus(status: ClientStatus, locale: ManagerLocale) {
@@ -260,6 +305,8 @@ export function ManagerWorkspace({
   const [clients, setClients] = useState<Client[]>([]);
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [calendarEvents, setCalendarEvents] = useState<MasterCalendarEvent[]>([]);
+  const [activeContinuousPrograms, setActiveContinuousPrograms] = useState<ActiveContinuousProgram[]>([]);
+  const [calendarIsolation, setCalendarIsolation] = useState<CalendarIsolationFilter>({ kind: "none" });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
@@ -288,11 +335,15 @@ export function ManagerWorkspace({
         ? ((await campaignsRes.json()) as { campaigns: Campaign[] })
         : { campaigns: [] as Campaign[] };
       const calendarPayload = calendarRes.ok
-        ? ((await calendarRes.json()) as { events: MasterCalendarEvent[] })
-        : { events: [] as MasterCalendarEvent[] };
+        ? ((await calendarRes.json()) as {
+            events: MasterCalendarEvent[];
+            activeContinuousPrograms?: ActiveContinuousProgram[];
+          })
+        : { events: [] as MasterCalendarEvent[], activeContinuousPrograms: [] as ActiveContinuousProgram[] };
       setClients(clientsPayload.clients ?? []);
       setCampaigns(campaignsPayload.campaigns ?? []);
       setCalendarEvents(calendarPayload.events ?? []);
+      setActiveContinuousPrograms(calendarPayload.activeContinuousPrograms ?? []);
       if (!campaignsRes.ok) {
         setError(t.campaignsDownError);
       } else if (!calendarRes.ok) {
@@ -303,7 +354,12 @@ export function ManagerWorkspace({
     } finally {
       setLoading(false);
     }
-  }, [t.calendarDownError, t.campaignsDownError, t.loadClientsError, t.workspaceLoadError]);
+  }, [
+    t.calendarDownError,
+    t.campaignsDownError,
+    t.loadClientsError,
+    t.workspaceLoadError,
+  ]);
 
   useEffect(() => {
     void loadAll();
@@ -349,6 +405,51 @@ export function ManagerWorkspace({
     }
   }, [blockClientId, blockEndsAt, blockStartsAt, blockTitle, loadAll, t.blockWindowError, t.blockWindowSaved]);
 
+  const liveCampaigns = useMemo(() => campaigns.filter((campaign) => campaign.status === "live"), [campaigns]);
+  const liveContinuousPrograms = useMemo(
+    () =>
+      activeContinuousPrograms
+        .filter((assignment) => assignment.status === "Active")
+        .slice()
+        .sort((a, b) => {
+          const left = a.deployedAt ? new Date(a.deployedAt).getTime() : 0;
+          const right = b.deployedAt ? new Date(b.deployedAt).getTime() : 0;
+          return right - left;
+        }),
+    [activeContinuousPrograms],
+  );
+
+  useEffect(() => {
+    if (calendarIsolation.kind === "none") return;
+    if (
+      calendarIsolation.kind === "drps" &&
+      !liveCampaigns.some((campaign) => campaign.id === calendarIsolation.campaignId)
+    ) {
+      setCalendarIsolation({ kind: "none" });
+      return;
+    }
+    if (
+      calendarIsolation.kind === "continuous" &&
+      !liveContinuousPrograms.some((assignment) => assignment.id === calendarIsolation.assignmentId)
+    ) {
+      setCalendarIsolation({ kind: "none" });
+    }
+  }, [calendarIsolation, liveCampaigns, liveContinuousPrograms]);
+
+  const isolatedCalendarEvents = useMemo(() => {
+    if (calendarIsolation.kind === "none") return calendarEvents;
+    if (calendarIsolation.kind === "drps") {
+      return calendarEvents.filter(
+        (event) => extractCampaignIdFromCalendarEvent(event) === calendarIsolation.campaignId,
+      );
+    }
+    return calendarEvents.filter(
+      (event) =>
+        event.eventType === "continuous_meeting" &&
+        event.sourceClientProgramId === calendarIsolation.assignmentId,
+    );
+  }, [calendarEvents, calendarIsolation]);
+
   const events = useMemo(() => {
     const list: Array<{
       key: string;
@@ -356,7 +457,7 @@ export function ManagerWorkspace({
       type: "start" | "close" | "meeting" | "blocked";
       label: string;
     }> = [];
-    for (const event of calendarEvents) {
+    for (const event of isolatedCalendarEvents) {
       const value = new Date(event.startsAt);
       if (Number.isNaN(value.getTime())) continue;
       const client = event.clientName ?? t.noCompany;
@@ -377,7 +478,7 @@ export function ManagerWorkspace({
       list.push({ key: dayKey(value), title: event.title, type, label });
     }
     return list;
-  }, [calendarEvents, t.noCompany]);
+  }, [isolatedCalendarEvents, t.noCompany]);
 
   const byDay = useMemo(() => {
     const map = new Map<string, typeof events>();
@@ -396,8 +497,6 @@ export function ManagerWorkspace({
       return { value, key, inMonth: value.getMonth() === month.getMonth(), events: byDay.get(key) ?? [] };
     });
   }, [month, byDay]);
-
-  const liveCampaigns = useMemo(() => campaigns.filter((c) => c.status === "live"), [campaigns]);
 
   const filteredClients = useMemo(
     () =>
@@ -431,6 +530,22 @@ export function ManagerWorkspace({
     { id: "overdue", label: t.billingOverdue },
     { id: "blocked", label: t.billingBlocked },
   ];
+
+  function toggleDrpsIsolation(campaign: Campaign) {
+    setCalendarIsolation((previous) =>
+      previous.kind === "drps" && previous.campaignId === campaign.id
+        ? { kind: "none" }
+        : { kind: "drps", campaignId: campaign.id, label: campaign.name },
+    );
+  }
+
+  function toggleContinuousIsolation(program: ActiveContinuousProgram) {
+    setCalendarIsolation((previous) =>
+      previous.kind === "continuous" && previous.assignmentId === program.id
+        ? { kind: "none" }
+        : { kind: "continuous", assignmentId: program.id, label: `${program.programTitle} (${program.clientName ?? t.noLink})` },
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -644,7 +759,7 @@ export function ManagerWorkspace({
           )}
         </section>
       ) : (
-        <section className="grid gap-5 xl:grid-cols-[1.15fr_1fr]">
+        <section className="space-y-5">
           <article className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <h3 className="text-lg font-semibold text-[#123447]">{t.calendarTitle}</h3>
@@ -666,6 +781,20 @@ export function ManagerWorkspace({
               </div>
             </div>
             <p className="mt-2 text-sm text-[#465864]">{monthLabel(month, locale)}</p>
+            {calendarIsolation.kind !== "none" ? (
+              <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-[#3e5a68]">
+                <span>
+                  {t.isolatedBy}: <strong>{calendarIsolation.label}</strong>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setCalendarIsolation({ kind: "none" })}
+                  className="rounded-full border border-[#c8c8c8] bg-white px-3 py-1 font-semibold text-[#123447]"
+                >
+                  {t.clearIsolation}
+                </button>
+              </div>
+            ) : null}
             <div className="mt-4 grid grid-cols-7 gap-2">
               {WEEK_LABELS[locale].map((w) => (
                 <p key={w} className="text-center text-xs font-semibold text-[#5e7d8d]">
@@ -704,6 +833,108 @@ export function ManagerWorkspace({
                   </div>
                 </div>
               ))}
+            </div>
+          </article>
+
+          <article className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+            <div className="grid gap-4 xl:grid-cols-2">
+              <section>
+                <h4 className="text-base font-semibold text-[#123447]">{t.liveDrps}</h4>
+                <div className="mt-3 overflow-x-auto rounded-lg border border-[#d8e4ee] bg-white">
+                  <table className="min-w-full text-sm">
+                    <thead>
+                      <tr className="border-b">
+                        <th className="px-2 py-2 text-left">{t.drpsTableDiagnostic}</th>
+                        <th className="px-2 py-2 text-left">{t.drpsTableCompany}</th>
+                        <th className="px-2 py-2 text-left">{t.drpsTableStart}</th>
+                        <th className="px-2 py-2 text-left">{t.drpsTableClose}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {liveCampaigns.length === 0 ? (
+                        <tr>
+                          <td colSpan={4} className="px-2 py-3 text-xs text-[#5a7383]">
+                            {t.noActiveCampaigns}
+                          </td>
+                        </tr>
+                      ) : (
+                        liveCampaigns.map((campaign) => {
+                          const selected =
+                            calendarIsolation.kind === "drps" &&
+                            calendarIsolation.campaignId === campaign.id;
+                          return (
+                            <tr key={campaign.id} className={`border-b ${selected ? "bg-[#e8f3f8]" : ""}`}>
+                              <td className="px-2 py-2">
+                                <button
+                                  type="button"
+                                  onClick={() => toggleDrpsIsolation(campaign)}
+                                  className="text-left font-semibold text-[#123447] hover:text-[#0f5b73] hover:underline"
+                                >
+                                  {campaign.name}
+                                </button>
+                              </td>
+                              <td className="px-2 py-2 text-[#3e5a68]">{campaign.client_name ?? t.noLink}</td>
+                              <td className="px-2 py-2 text-[#3e5a68]">
+                                {campaign.starts_at ? toDate(campaign.starts_at, locale) : t.notPlanned}
+                              </td>
+                              <td className="px-2 py-2 text-[#3e5a68]">
+                                {campaign.closes_at ? toDate(campaign.closes_at, locale) : t.notPlanned}
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+
+              <section>
+                <h4 className="text-base font-semibold text-[#123447]">{t.liveContinuous}</h4>
+                <div className="mt-3 overflow-x-auto rounded-lg border border-[#d8e4ee] bg-white">
+                  <table className="min-w-full text-sm">
+                    <thead>
+                      <tr className="border-b">
+                        <th className="px-2 py-2 text-left">{t.continuousTableProgram}</th>
+                        <th className="px-2 py-2 text-left">{t.continuousTableCompany}</th>
+                        <th className="px-2 py-2 text-left">{t.continuousTableSince}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {liveContinuousPrograms.length === 0 ? (
+                        <tr>
+                          <td colSpan={3} className="px-2 py-3 text-xs text-[#5a7383]">
+                            {t.noActiveContinuous}
+                          </td>
+                        </tr>
+                      ) : (
+                        liveContinuousPrograms.map((program) => {
+                          const selected =
+                            calendarIsolation.kind === "continuous" &&
+                            calendarIsolation.assignmentId === program.id;
+                          return (
+                            <tr key={program.id} className={`border-b ${selected ? "bg-[#e8f3f8]" : ""}`}>
+                              <td className="px-2 py-2">
+                                <button
+                                  type="button"
+                                  onClick={() => toggleContinuousIsolation(program)}
+                                  className="text-left font-semibold text-[#123447] hover:text-[#0f5b73] hover:underline"
+                                >
+                                  {program.programTitle}
+                                </button>
+                              </td>
+                              <td className="px-2 py-2 text-[#3e5a68]">{program.clientName ?? t.noLink}</td>
+                              <td className="px-2 py-2 text-[#3e5a68]">
+                                {program.deployedAt ? toDate(program.deployedAt, locale) : t.notPlanned}
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
             </div>
           </article>
 
@@ -765,23 +996,6 @@ export function ManagerWorkspace({
                 {blockFeedback ? <p className="text-xs text-[#4d6a79]">{blockFeedback}</p> : null}
               </div>
             </section>
-
-            <h4 className="mt-4 text-base font-semibold text-[#123447]">{t.liveDrps}</h4>
-            <div className="mt-3 space-y-2">
-              {liveCampaigns.length === 0 ? (
-                <p className="text-sm text-[#5a7383]">{t.noActiveCampaigns}</p>
-              ) : (
-                liveCampaigns.map((campaign) => (
-                  <article key={campaign.id} className="rounded-lg border border-[#e2edf3] bg-white p-3">
-                    <p className="text-sm font-semibold text-[#163748]">{campaign.name}</p>
-                    <p className="text-xs text-[#4d6a79]">{campaign.client_name ?? t.noLink}</p>
-                    <p className="text-xs text-[#4d6a79]">
-                      {t.startLabel}: {campaign.starts_at ? toDate(campaign.starts_at, locale) : t.notPlanned}
-                    </p>
-                  </article>
-                ))
-              )}
-            </div>
           </article>
         </section>
       )}

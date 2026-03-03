@@ -39,18 +39,15 @@ const COPY = {
     reload: "Reload",
     diagnosticsTitle: "DRPS Diagnostics",
     diagnosticsSubtitle:
-      "These diagnostics can be selected by manager during assignment to a company.",
+      "Template diagnostics available to assign to companies.",
     diagName: "Diagnostic",
     diagStatus: "Status",
     diagWindow: "Window",
     diagSource: "Source",
-    diagUsage: "Usage",
     openDetails: "Open details",
-    diagNone: "No DRPS diagnostics available.",
+    diagNone: "No DRPS templates available.",
     sourceSurvey: "Survey base",
     sourceLegacy: "Legacy DRPS",
-    usageTemplate: "Template",
-    usageAssigned: "Assigned",
     continuousTitle: "Continuous Programs (Campaigns)",
     continuousSubtitle:
       "Preventive and interventive programs activated according to DRPS risk thresholds.",
@@ -73,18 +70,15 @@ const COPY = {
     reload: "Recarregar",
     diagnosticsTitle: "Diagnosticos DRPS",
     diagnosticsSubtitle:
-      "Estes diagnosticos podem ser selecionados pelo gestor ao atribuir para uma empresa.",
+      "Templates de diagnostico disponiveis para atribuicao as empresas.",
     diagName: "Diagnostico",
     diagStatus: "Status",
     diagWindow: "Janela",
     diagSource: "Origem",
-    diagUsage: "Uso",
     openDetails: "Abrir detalhes",
-    diagNone: "Nenhum diagnostico DRPS disponivel.",
+    diagNone: "Nenhum template DRPS disponivel.",
     sourceSurvey: "Base surveys",
     sourceLegacy: "DRPS legado",
-    usageTemplate: "Template",
-    usageAssigned: "Atribuido",
     continuousTitle: "Programas Continuos (Campanhas)",
     continuousSubtitle:
       "Programas preventivos e interventivos ativados por gatilhos de risco DRPS.",
@@ -182,14 +176,13 @@ export function ManagerProgramsDatabase() {
                   <th className="px-2 py-2 text-left">{t.diagStatus}</th>
                   <th className="px-2 py-2 text-left">{t.diagWindow}</th>
                   <th className="px-2 py-2 text-left">{t.diagSource}</th>
-                  <th className="px-2 py-2 text-left">{t.diagUsage}</th>
                   <th className="px-2 py-2 text-left">{t.openDetails}</th>
                 </tr>
               </thead>
               <tbody>
                 {sortedDiagnostics.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="px-2 py-3 text-xs text-[#5a7383]">
+                    <td colSpan={5} className="px-2 py-3 text-xs text-[#5a7383]">
                       {t.diagNone}
                     </td>
                   </tr>
@@ -219,9 +212,6 @@ export function ManagerProgramsDatabase() {
                       <td className="px-2 py-2">{fmtWindow(diagnostic.startsAt, diagnostic.closesAt)}</td>
                       <td className="px-2 py-2">
                         {diagnostic.source === "surveys" ? t.sourceSurvey : t.sourceLegacy}
-                      </td>
-                      <td className="px-2 py-2">
-                        {diagnostic.linkedClientId ? t.usageAssigned : t.usageTemplate}
                       </td>
                       <td className="px-2 py-2">
                         <Link

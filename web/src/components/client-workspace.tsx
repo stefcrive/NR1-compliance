@@ -124,6 +124,19 @@ function fmtDate(value: string | null) {
   return new Intl.DateTimeFormat("pt-BR", { dateStyle: "short" }).format(new Date(value));
 }
 
+function campaignCollectionStatus(status: Campaign["status"]) {
+  if (status === "live") return "Questionario aberto (coletando respostas)";
+  if (status === "closed") return "Questionario fechado";
+  if (status === "draft") return "Questionario em rascunho";
+  return "Questionario arquivado";
+}
+
+function fmtTime(value: string) {
+  return new Intl.DateTimeFormat("pt-BR", { hour: "2-digit", minute: "2-digit", hour12: false }).format(
+    new Date(value),
+  );
+}
+
 function dayKey(value: Date) {
   return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
 }
@@ -141,8 +154,14 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
     return new Date(now.getFullYear(), now.getMonth(), 1);
   });
   const [availabilitySelection, setAvailabilitySelection] = useState<Record<string, string[]>>({});
+  const [activeAvailabilityRequestId, setActiveAvailabilityRequestId] = useState("");
   const [submittingAvailabilityId, setSubmittingAvailabilityId] = useState<string | null>(null);
+  const [requestingRescheduleProgramId, setRequestingRescheduleProgramId] = useState<string | null>(
+    null,
+  );
+  const [downloadingReportId, setDownloadingReportId] = useState<string | null>(null);
   const [availabilityFeedback, setAvailabilityFeedback] = useState("");
+  const [reportFeedback, setReportFeedback] = useState("");
 
   const loadData = useCallback(
     async (campaignId?: string) => {
@@ -192,6 +211,14 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
     () => payload?.campaigns.find((item) => item.id === selectedCampaignId) ?? payload?.selectedCampaign ?? null,
     [payload, selectedCampaignId],
   );
+  const openCampaigns = useMemo(
+    () => (payload?.campaigns ?? []).filter((campaign) => campaign.status === "live"),
+    [payload],
+  );
+  const selectedOpenCampaignId = useMemo(
+    () => (openCampaigns.some((campaign) => campaign.id === selectedCampaignId) ? selectedCampaignId : ""),
+    [openCampaigns, selectedCampaignId],
+  );
 
   const primaryContinuousProgram = useMemo(() => {
     if (!payload) return null;
@@ -206,6 +233,26 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
     () => (payload?.availabilityRequests ?? []).filter((request) => request.status === "pending"),
     [payload],
   );
+  const pendingByClientProgramId = useMemo(
+    () => new Set(pendingAvailabilityRequests.map((request) => request.clientProgramId)),
+    [pendingAvailabilityRequests],
+  );
+
+  useEffect(() => {
+    if (pendingAvailabilityRequests.length === 0) {
+      setActiveAvailabilityRequestId("");
+      return;
+    }
+    if (pendingAvailabilityRequests.some((request) => request.id === activeAvailabilityRequestId)) {
+      return;
+    }
+    setActiveAvailabilityRequestId(pendingAvailabilityRequests[0].id);
+  }, [activeAvailabilityRequestId, pendingAvailabilityRequests]);
+
+  const activeAvailabilityRequest = useMemo(
+    () => pendingAvailabilityRequests.find((request) => request.id === activeAvailabilityRequestId) ?? null,
+    [activeAvailabilityRequestId, pendingAvailabilityRequests],
+  );
 
   async function copyEmployeeLink(campaign: Campaign) {
     const link = campaign.employeeFormLink ?? `${window.location.origin}/s/${campaign.public_slug}`;
@@ -218,6 +265,96 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
     }
   }
 
+  async function requestRescheduleForProgram(assignment: AssignedProgram) {
+    setRequestingRescheduleProgramId(assignment.id);
+    setAvailabilityFeedback("");
+    try {
+      const response = await fetch(
+        `/api/client/portal/${clientSlug}/programs/${assignment.id}/reschedule`,
+        { method: "POST" },
+      );
+      const body = (await response.json().catch(() => ({}))) as {
+        error?: string;
+        request?: AvailabilityRequest;
+      };
+      if (!response.ok || !body.request) {
+        throw new Error(body.error ?? "Nao foi possivel abrir o reagendamento.");
+      }
+      await loadData(selectedCampaignId || undefined);
+      setActiveAvailabilityRequestId(body.request.id);
+      if (body.request.suggestedSlots.length > 0) {
+        const firstSlotDate = new Date(body.request.suggestedSlots[0].startsAt);
+        if (!Number.isNaN(firstSlotDate.getTime())) {
+          setCalendarMonth(new Date(firstSlotDate.getFullYear(), firstSlotDate.getMonth(), 1));
+        }
+      }
+      setAvailabilityFeedback("Reagendamento aberto. Escolha os horarios no calendario e envie.");
+    } catch (rescheduleError) {
+      setAvailabilityFeedback(
+        rescheduleError instanceof Error
+          ? rescheduleError.message
+          : "Nao foi possivel abrir o reagendamento.",
+      );
+    } finally {
+      setRequestingRescheduleProgramId(null);
+    }
+  }
+
+  async function downloadReport(report: Report) {
+    setDownloadingReportId(report.id);
+    setReportFeedback("");
+    try {
+      const response = await fetch(
+        `/api/client/portal/${clientSlug}/reports/${report.id}/download`,
+        { method: "POST" },
+      );
+      const body = (await response.json().catch(() => ({}))) as {
+        error?: string;
+        fileName?: string;
+        report?: {
+          id: string;
+          title: string;
+          status: string;
+          createdAt: string;
+          summary: Record<string, unknown>;
+        };
+      };
+      if (!response.ok || !body.report) {
+        throw new Error(body.error ?? "Nao foi possivel baixar o relatorio.");
+      }
+
+      const blob = new Blob(
+        [
+          JSON.stringify(
+            {
+              id: body.report.id,
+              title: body.report.title,
+              status: body.report.status,
+              createdAt: body.report.createdAt,
+              summary: body.report.summary,
+            },
+            null,
+            2,
+          ),
+        ],
+        { type: "application/json;charset=utf-8" },
+      );
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = body.fileName ?? `${body.report.id}.json`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+      setReportFeedback("Relatorio baixado com sucesso.");
+    } catch (downloadError) {
+      setReportFeedback(
+        downloadError instanceof Error ? downloadError.message : "Nao foi possivel baixar o relatorio.",
+      );
+    } finally {
+      setDownloadingReportId(null);
+    }
+  }
+
   function toggleAvailabilitySlot(requestId: string, startsAt: string) {
     setAvailabilitySelection((previous) => {
       const current = previous[requestId] ?? [];
@@ -225,21 +362,11 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
       if (exists) {
         return { ...previous, [requestId]: current.filter((value) => value !== startsAt) };
       }
-      if (current.length >= 3) {
-        return previous;
-      }
       return { ...previous, [requestId]: [...current, startsAt] };
     });
   }
 
   async function submitAvailability(request: AvailabilityRequest) {
-    if (request.id.startsWith("virtual-")) {
-      setAvailabilityFeedback(
-        "Envio indisponivel nesta base. Aplique a migration 20260302220000_master_calendar_availability.sql.",
-      );
-      return;
-    }
-
     const selectedSlots = availabilitySelection[request.id] ?? [];
     if (selectedSlots.length === 0) {
       setAvailabilityFeedback("Selecione pelo menos um horario para enviar a disponibilidade.");
@@ -250,7 +377,7 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
     setAvailabilityFeedback("");
     try {
       const response = await fetch(
-        `/api/client/portal/${clientSlug}/availability/${request.id}`,
+                `/api/client/portal/${clientSlug}/availability/${request.id}`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -261,7 +388,7 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
       if (!response.ok) {
         throw new Error(body.error ?? "Nao foi possivel enviar disponibilidade.");
       }
-      setAvailabilityFeedback("Disponibilidade enviada. Reunioes do processo continuo agendadas no calendario.");
+      setAvailabilityFeedback("Reagendamento enviado. O gestor recebeu uma notificacao interna.");
       await loadData(selectedCampaignId || undefined);
     } catch (submitError) {
       setAvailabilityFeedback(
@@ -313,6 +440,23 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
       return { value, key, inMonth: value.getMonth() === calendarMonth.getMonth(), events: eventsByDay.get(key) ?? [] };
     });
   }, [calendarMonth, eventsByDay]);
+
+  const activeRequestSlotsByDay = useMemo(() => {
+    const map = new Map<string, AvailabilitySlot[]>();
+    if (!activeAvailabilityRequest) return map;
+    for (const slot of activeAvailabilityRequest.suggestedSlots) {
+      const date = new Date(slot.startsAt);
+      if (Number.isNaN(date.getTime())) continue;
+      const key = dayKey(date);
+      map.set(key, [...(map.get(key) ?? []), slot]);
+    }
+    return map;
+  }, [activeAvailabilityRequest]);
+
+  const activeSelectedSlots = useMemo(
+    () => (activeAvailabilityRequest ? availabilitySelection[activeAvailabilityRequest.id] ?? [] : []),
+    [activeAvailabilityRequest, availabilitySelection],
+  );
 
   if (isLoading) {
     return <p className="text-sm text-[#3d5a69]">Carregando portal...</p>;
@@ -373,71 +517,59 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
       </section>
 
       <section className="rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
-        <h3 className="text-lg font-semibold text-[#123447]">Solicitacao de disponibilidade</h3>
+        <h3 className="text-lg font-semibold text-[#123447]">Popup de reagendamento</h3>
         <p className="mt-1 text-sm text-[#3d5a69]">
-          Quando um processo continuo for aplicado, selecione ate 3 horarios livres. As opcoes ja excluem reunioes
-          atuais e bloqueios do calendario mestre.
+          O popup so aparece quando voce iniciar o reagendamento na tabela de processos continuos.
         </p>
         {payload.availabilityRequestsUnavailable ? (
           <p className="mt-2 text-xs text-[#8a5b2d]">
-            Persistencia de solicitacoes indisponivel nesta base. Exibindo solicitacoes estimadas a partir dos
-            processos atribuidos.
+            Persistencia de solicitacoes indisponivel nesta base. Aplique a migration
+            20260302220000_master_calendar_availability.sql.
           </p>
         ) : null}
         {pendingAvailabilityRequests.length === 0 ? (
-          <p className="mt-3 text-sm text-[#5a7383]">Nenhuma solicitacao pendente no momento.</p>
+          <p className="mt-3 text-sm text-[#5a7383]">
+            Nenhum reagendamento em aberto. Se necessario, inicie pelo processo continuo abaixo.
+          </p>
         ) : (
-          <div className="mt-3 space-y-3">
-            {pendingAvailabilityRequests.map((request) => (
-              <article key={request.id} className="rounded-xl border border-[#d8e4ee] bg-[#f8fbfd] p-4">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <p className="text-sm font-semibold text-[#133748]">{request.programTitle}</p>
-                  <p className="text-xs text-[#4f6977]">
-                    Solicitado em {fmt(request.requestedAt)} | Prazo {fmt(request.dueAt)}
-                  </p>
-                </div>
-                <div className="mt-3 grid gap-2 md:grid-cols-2">
-                  {request.suggestedSlots.length === 0 ? (
-                    <p className="text-xs text-[#5a7383]">Sem horarios sugeridos no momento.</p>
-                  ) : (
-                    request.suggestedSlots.map((slot) => {
-                      const selected = (availabilitySelection[request.id] ?? []).includes(slot.startsAt);
-                      return (
-                        <label
-                          key={`${request.id}-${slot.startsAt}`}
-                          className={`flex cursor-pointer items-start gap-2 rounded-lg border px-3 py-2 text-sm ${
-                            selected ? "border-[#0f5b73] bg-[#e8f3f8]" : "border-[#d8e4ee] bg-white"
-                          }`}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={selected}
-                            onChange={() => toggleAvailabilitySlot(request.id, slot.startsAt)}
-                            className="mt-0.5"
-                          />
-                          <span>{fmt(slot.startsAt)} - {fmt(slot.endsAt)}</span>
-                        </label>
-                      );
-                    })
-                  )}
-                </div>
-                <div className="mt-3 flex flex-wrap items-center gap-2">
+          <div className="mt-3 space-y-3 rounded-xl border border-[#d8e4ee] bg-[#f8fbfd] p-4">
+            <label className="block text-xs text-[#4f6977]">
+              Processo com solicitacao pendente
+              <select
+                className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
+                value={activeAvailabilityRequestId}
+                onChange={(event) => setActiveAvailabilityRequestId(event.target.value)}
+              >
+                {pendingAvailabilityRequests.map((request) => (
+                  <option key={request.id} value={request.id}>
+                    {request.programTitle}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {activeAvailabilityRequest ? (
+              <>
+                <p className="text-xs text-[#4f6977]">
+                  Solicitado em {fmt(activeAvailabilityRequest.requestedAt)} | Prazo{" "}
+                  {fmt(activeAvailabilityRequest.dueAt)}
+                </p>
+                <div className="flex flex-wrap items-center gap-2">
                   <button
                     type="button"
-                    onClick={() => void submitAvailability(request)}
-                    disabled={submittingAvailabilityId === request.id || request.id.startsWith("virtual-")}
+                    onClick={() => void submitAvailability(activeAvailabilityRequest)}
+                    disabled={submittingAvailabilityId === activeAvailabilityRequest.id}
                     className="rounded-full bg-[#0f5b73] px-4 py-2 text-xs font-semibold text-white disabled:opacity-50"
                   >
-                    {request.id.startsWith("virtual-")
-                      ? "Envio indisponivel"
-                      : submittingAvailabilityId === request.id
-                        ? "Enviando..."
-                        : "Enviar disponibilidade"}
+                    {submittingAvailabilityId === activeAvailabilityRequest.id
+                      ? "Enviando..."
+                      : "Enviar disponibilidade"}
                   </button>
-                  <span className="text-xs text-[#4f6977]">Maximo de 3 horarios.</span>
+                  <span className="text-xs text-[#4f6977]">
+                    Selecionados no calendario: {activeSelectedSlots.length}
+                  </span>
                 </div>
-              </article>
-            ))}
+              </>
+            ) : null}
           </div>
         )}
         {availabilityFeedback ? <p className="mt-3 text-sm text-[#0f5b73]">{availabilityFeedback}</p> : null}
@@ -484,20 +616,31 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
           <h3 className="text-lg font-semibold text-[#123447]">Diagnosticos DRPS</h3>
           <select
             className="rounded border border-[#c9dce8] px-3 py-2 text-sm"
-            value={selectedCampaignId}
+            value={selectedOpenCampaignId}
+            disabled={openCampaigns.length === 0}
             onChange={(event) => {
               const value = event.target.value;
+              if (!value) return;
               setSelectedCampaignId(value);
               void loadData(value);
             }}
           >
-            {payload.campaigns.map((campaign) => (
+            {openCampaigns.length === 0 ? (
+              <option value="">Sem questionarios abertos</option>
+            ) : (
+              openCampaigns.map((campaign) => (
               <option key={campaign.id} value={campaign.id}>
-                {campaign.name} ({campaign.status})
+                {campaign.name} ({campaignCollectionStatus(campaign.status)})
               </option>
-            ))}
+              ))
+            )}
           </select>
         </div>
+        <p className="mt-2 text-xs text-[#4f6977]">
+          {selectedCampaign
+            ? `Questionario atual: ${campaignCollectionStatus(selectedCampaign.status)}`
+            : "Sem questionario selecionado."}
+        </p>
         <div className="mt-3 overflow-x-auto">
           <table className="min-w-full text-sm">
             <thead>
@@ -510,17 +653,17 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
               </tr>
             </thead>
             <tbody>
-              {payload.campaigns.length === 0 ? (
+              {openCampaigns.length === 0 ? (
                 <tr>
                   <td className="px-2 py-3 text-xs text-[#5a7383]" colSpan={5}>
-                    Sem diagnosticos atribuidos.
+                    Sem questionarios abertos coletando respostas no momento.
                   </td>
                 </tr>
               ) : (
-                payload.campaigns.map((campaign) => (
+                openCampaigns.map((campaign) => (
                   <tr key={campaign.id} className={`border-b ${campaign.id === selectedCampaignId ? "bg-[#f6fbfe]" : ""}`}>
                     <td className="px-2 py-2">{campaign.name}</td>
-                    <td className="px-2 py-2">{campaign.status}</td>
+                    <td className="px-2 py-2">{campaignCollectionStatus(campaign.status)}</td>
                     <td className="px-2 py-2">{fmt(campaign.starts_at)}</td>
                     <td className="px-2 py-2">{fmt(campaign.closes_at)}</td>
                     <td className="px-2 py-2">
@@ -589,7 +732,7 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
           {days.map((day) => (
             <div
               key={day.key}
-              className={`min-h-[105px] rounded-xl border p-2 ${
+              className={`min-h-[145px] rounded-xl border p-2 ${
                 day.inMonth ? "border-[#d7e6ee] bg-white" : "border-[#edf3f7] bg-[#f8fbfd]"
               }`}
             >
@@ -597,7 +740,7 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
                 {day.value.getDate()}
               </p>
               <div className="mt-1 space-y-1">
-                {day.events.slice(0, 3).map((event, idx) => (
+                {day.events.slice(0, 2).map((event, idx) => (
                   <p
                     key={`${event.day}-${idx}`}
                     title={event.title}
@@ -620,7 +763,27 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
                           : "Fim DRPS"}
                   </p>
                 ))}
-                {day.events.length > 3 ? <p className="text-[10px] text-[#527083]">+{day.events.length - 3}</p> : null}
+                {day.events.length > 2 ? <p className="text-[10px] text-[#527083]">+{day.events.length - 2}</p> : null}
+                {activeAvailabilityRequest
+                  ? (activeRequestSlotsByDay.get(day.key) ?? []).map((slot) => {
+                      const selected = activeSelectedSlots.includes(slot.startsAt);
+                      return (
+                        <button
+                          key={`${activeAvailabilityRequest.id}-${slot.startsAt}`}
+                          type="button"
+                          onClick={() => toggleAvailabilitySlot(activeAvailabilityRequest.id, slot.startsAt)}
+                          className={`block w-full rounded px-1 py-0.5 text-left text-[10px] ${
+                            selected
+                              ? "border border-[#0f5b73] bg-[#dceef6] text-[#0f5b73]"
+                              : "border border-[#b6d4e3] bg-[#eff7fb] text-[#24566b]"
+                          }`}
+                          title={`${fmt(slot.startsAt)} - ${fmt(slot.endsAt)}`}
+                        >
+                          {fmtTime(slot.startsAt)} disponivel
+                        </button>
+                      );
+                    })
+                  : null}
               </div>
             </div>
           ))}
@@ -670,12 +833,13 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
                 <th className="px-2 py-2 text-left">Titulo</th>
                 <th className="px-2 py-2 text-left">Status</th>
                 <th className="px-2 py-2 text-left">Data</th>
+                <th className="px-2 py-2 text-left">Acao</th>
               </tr>
             </thead>
             <tbody>
               {payload.reports.length === 0 ? (
                 <tr>
-                  <td className="px-2 py-3 text-xs text-[#5a7383]" colSpan={3}>
+                  <td className="px-2 py-3 text-xs text-[#5a7383]" colSpan={4}>
                     Sem relatorios ainda.
                   </td>
                 </tr>
@@ -685,12 +849,23 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
                     <td className="px-2 py-2">{report.report_title}</td>
                     <td className="px-2 py-2">{report.status}</td>
                     <td className="px-2 py-2">{fmt(report.created_at)}</td>
+                    <td className="px-2 py-2">
+                      <button
+                        type="button"
+                        onClick={() => void downloadReport(report)}
+                        disabled={downloadingReportId === report.id}
+                        className="rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73] disabled:opacity-50"
+                      >
+                        {downloadingReportId === report.id ? "Baixando..." : "Baixar"}
+                      </button>
+                    </td>
                   </tr>
                 ))
               )}
             </tbody>
           </table>
         </div>
+        {reportFeedback ? <p className="mt-3 text-sm text-[#0f5b73]">{reportFeedback}</p> : null}
       </section>
 
       <section className="rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
@@ -703,12 +878,13 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
                 <th className="px-2 py-2 text-left">Status</th>
                 <th className="px-2 py-2 text-left">Aplicado em</th>
                 <th className="px-2 py-2 text-left">Frequencia</th>
+                <th className="px-2 py-2 text-left">Acoes</th>
               </tr>
             </thead>
             <tbody>
               {payload.assignedPrograms.length === 0 ? (
                 <tr>
-                  <td colSpan={4} className="px-2 py-3 text-xs text-[#5a7383]">
+                  <td colSpan={5} className="px-2 py-3 text-xs text-[#5a7383]">
                     Nenhum processo continuo atribuido.
                   </td>
                 </tr>
@@ -719,6 +895,24 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
                     <td className="px-2 py-2">{assignment.status}</td>
                     <td className="px-2 py-2">{fmt(assignment.deployedAt)}</td>
                     <td className="px-2 py-2">{assignment.scheduleFrequency}</td>
+                    <td className="px-2 py-2">
+                      <button
+                        type="button"
+                        onClick={() => void requestRescheduleForProgram(assignment)}
+                        disabled={
+                          assignment.status === "Completed" ||
+                          pendingByClientProgramId.has(assignment.id) ||
+                          requestingRescheduleProgramId === assignment.id
+                        }
+                        className="rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73] disabled:opacity-50"
+                      >
+                        {requestingRescheduleProgramId === assignment.id
+                          ? "Abrindo..."
+                          : pendingByClientProgramId.has(assignment.id)
+                            ? "Popup aberto"
+                            : "Solicitar reagendamento"}
+                      </button>
+                    </td>
                   </tr>
                 ))
               )}

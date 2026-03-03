@@ -26,7 +26,7 @@ type LegacyDrpsCampaignRow = {
 
 const assignDrpsSchema = z.object({
   campaignName: z.string().trim().min(3).max(120),
-  publicSlug: z.string().trim().min(3).max(120).optional(),
+  publicSlug: z.string().trim().optional(),
   status: z.enum(["draft", "live"]).optional(),
   kAnonymityMin: z.number().int().min(3).max(20).optional(),
   sessionTtlMinutes: z.number().int().min(15).max(60).optional(),
@@ -104,7 +104,8 @@ export async function POST(
       }
 
       const fallbackSlugBase = slugify(legacyClient.company_name) || "client";
-      const slugBase = slugify(parsed.publicSlug || `${fallbackSlugBase}-${parsed.campaignName}`);
+      const slugSeed = (parsed.publicSlug || `${fallbackSlugBase}-${parsed.campaignName}`).slice(0, 240);
+      const slugBase = slugify(slugSeed).slice(0, 120);
       if (!slugBase) {
         return NextResponse.json({ error: "Could not derive campaign slug." }, { status: 400 });
       }
@@ -216,7 +217,8 @@ export async function POST(
   }
 
   const clientSlugSeed = client.portal_slug?.trim() || slugify(client.company_name) || "client";
-  const slugBase = slugify(parsed.publicSlug || `${clientSlugSeed}-${parsed.campaignName}`);
+  const slugSeed = (parsed.publicSlug || `${clientSlugSeed}-${parsed.campaignName}`).slice(0, 240);
+  const slugBase = slugify(slugSeed).slice(0, 120);
   if (!slugBase) {
     return NextResponse.json({ error: "Could not derive campaign slug." }, { status: 400 });
   }

@@ -32,6 +32,8 @@ npm install
    - `supabase/migrations/20260301190000_sector_tokens_and_risk_params.sql`
    - `supabase/migrations/20260301201000_manager_client_workspaces.sql`
    - `supabase/migrations/20260302110000_client_sector_onboarding_fields.sql`
+   - `supabase/migrations/20260302220000_master_calendar_availability.sql`
+   - `supabase/migrations/20260303090000_manager_notifications.sql`
    - Opcional via CLI:
 ```bash
 npx supabase db push --db-url "$SUPABASE_DB_URL" --include-all --workdir .

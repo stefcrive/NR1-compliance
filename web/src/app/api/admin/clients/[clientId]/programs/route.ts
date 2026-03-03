@@ -3,7 +3,10 @@ import { randomUUID } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
-import { buildSuggestedAvailabilitySlots } from "@/lib/availability-scheduler";
+import {
+  buildSuggestedAvailabilitySlots,
+  type AvailabilitySlot,
+} from "@/lib/availability-scheduler";
 import { isAdminApiAuthorized } from "@/lib/admin-auth";
 import {
   buildDrpsCalendarEvents,
@@ -43,6 +46,13 @@ type ClientCampaignRow = {
   closes_at: string | null;
 };
 
+type CalendarMeetingRow = {
+  source_client_program_id: string | null;
+  starts_at: string;
+  ends_at: string;
+  status: "scheduled" | "completed" | "cancelled";
+};
+
 const assignProgramSchema = z.object({
   programId: z.string().trim().min(1).max(120),
   status: z.enum(["Recommended", "Active", "Completed"]).optional(),
@@ -64,6 +74,10 @@ function mapAvailableProgram(program: PeriodicProgramRow) {
 function mapAssignedProgram(
   assignment: ClientProgramRow,
   programById: Map<string, PeriodicProgramRow>,
+  options?: {
+    cadenceSuggestedSlots?: AvailabilitySlot[];
+    calendarCommittedSlots?: AvailabilitySlot[];
+  },
 ) {
   const program = programById.get(assignment.program_id) ?? null;
   return {
@@ -77,6 +91,8 @@ function mapAssignedProgram(
     scheduleAnchorDate: program?.schedule_anchor_date ?? null,
     status: assignment.status,
     deployedAt: assignment.deployed_at ?? null,
+    cadenceSuggestedSlots: options?.cadenceSuggestedSlots ?? [],
+    calendarCommittedSlots: options?.calendarCommittedSlots ?? [],
   };
 }
 
@@ -185,68 +201,40 @@ async function loadClientMasterCalendarEvents(clientId: string): Promise<MasterC
   return mergeAndSortMasterCalendarEvents(drpsEvents, stored.events);
 }
 
-async function createAvailabilityRequestForAssignment(
+async function loadCommittedMeetingsByAssignment(
   clientId: string,
-  assignment: ClientProgramRow,
-  program: PeriodicProgramRow,
-) {
-  if (assignment.status === "Completed") {
-    return { created: false, reason: "completed" as const };
+  assignmentIds: string[],
+): Promise<{ byAssignment: Map<string, AvailabilitySlot[]>; unavailable: boolean }> {
+  if (assignmentIds.length === 0) {
+    return { byAssignment: new Map(), unavailable: false };
   }
 
-  const deployedAt = assignment.deployed_at ?? new Date().toISOString();
-  const events = await loadClientMasterCalendarEvents(clientId);
-  const suggestedSlots = buildSuggestedAvailabilitySlots({
-    deployedAt,
-    scheduleFrequency: program.schedule_frequency ?? null,
-    scheduleAnchorDate: program.schedule_anchor_date ?? null,
-    existingEvents: events,
-  });
-
-  const dueAt = new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString();
   const supabase = getSupabaseAdminClient();
-  const insertResult = await supabase
-    .from("client_program_availability_requests")
-    .insert({
-      request_id: randomUUID(),
-      client_id: clientId,
-      client_program_id: assignment.client_program_id,
-      status: "pending",
-      requested_at: new Date().toISOString(),
-      due_at: dueAt,
-      suggested_slots: suggestedSlots,
-      selected_slots: [],
-    })
-    .select("request_id,status,due_at")
-    .maybeSingle<{ request_id: string; status: string; due_at: string | null }>();
+  const result = await supabase
+    .from("calendar_events")
+    .select("source_client_program_id,starts_at,ends_at,status")
+    .eq("client_id", clientId)
+    .eq("event_type", "continuous_meeting")
+    .in("source_client_program_id", assignmentIds)
+    .order("starts_at", { ascending: true })
+    .returns<CalendarMeetingRow[]>();
 
-  if (insertResult.error) {
-    if (
-      isMissingTableError(insertResult.error, "client_program_availability_requests")
-    ) {
-      return { created: false, reason: "unavailable" as const };
+  if (result.error) {
+    if (isMissingTableError(result.error, "calendar_events")) {
+      return { byAssignment: new Map(), unavailable: true };
     }
-
-    if (insertResult.error.code === "23505") {
-      return { created: false, reason: "exists" as const };
-    }
-
-    throw insertResult.error;
+    throw result.error;
   }
 
-  if (!insertResult.data) {
-    return { created: false, reason: "unknown" as const };
+  const byAssignment = new Map<string, AvailabilitySlot[]>();
+  for (const row of result.data ?? []) {
+    if (!row.source_client_program_id) continue;
+    if (row.status === "cancelled") continue;
+    const list = byAssignment.get(row.source_client_program_id) ?? [];
+    list.push({ startsAt: row.starts_at, endsAt: row.ends_at });
+    byAssignment.set(row.source_client_program_id, list);
   }
-
-  return {
-    created: true,
-    request: {
-      id: insertResult.data.request_id,
-      status: insertResult.data.status,
-      dueAt: insertResult.data.due_at,
-      suggestedSlots,
-    },
-  };
+  return { byAssignment, unavailable: false };
 }
 
 export async function GET(
@@ -286,11 +274,46 @@ export async function GET(
   }
 
   const programById = new Map((programsResult.data ?? []).map((row) => [row.program_id, row]));
+  const assignments = assignmentsResult.data ?? [];
+
+  let clientMasterCalendarEvents: MasterCalendarEvent[] = [];
+  try {
+    clientMasterCalendarEvents = await loadClientMasterCalendarEvents(clientId);
+  } catch {
+    clientMasterCalendarEvents = [];
+  }
+
+  let committedByAssignment = new Map<string, AvailabilitySlot[]>();
+  try {
+    const loaded = await loadCommittedMeetingsByAssignment(
+      clientId,
+      assignments.map((assignment) => assignment.client_program_id),
+    );
+    committedByAssignment = loaded.byAssignment;
+  } catch {
+    committedByAssignment = new Map<string, AvailabilitySlot[]>();
+  }
 
   return NextResponse.json({
     availablePrograms: (programsResult.data ?? []).map(mapAvailableProgram),
-    assignedPrograms: (assignmentsResult.data ?? []).map((item) =>
-      mapAssignedProgram(item, programById),
+    assignedPrograms: assignments.map((item) =>
+      mapAssignedProgram(item, programById, {
+        cadenceSuggestedSlots:
+          item.status === "Completed"
+            ? []
+            : buildSuggestedAvailabilitySlots({
+                deployedAt: item.deployed_at ?? new Date().toISOString(),
+                scheduleFrequency:
+                  programById.get(item.program_id)?.schedule_frequency ?? null,
+                scheduleAnchorDate:
+                  programById.get(item.program_id)?.schedule_anchor_date ?? null,
+                existingEvents: clientMasterCalendarEvents.filter(
+                  (event) => event.sourceClientProgramId !== item.client_program_id,
+                ),
+              }),
+        calendarCommittedSlots:
+          committedByAssignment.get(item.client_program_id) ?? [],
+      }),
     ),
   });
 }
@@ -404,23 +427,26 @@ export async function POST(
     return NextResponse.json({ error: "Could not assign program." }, { status: 500 });
   }
 
-  let availabilityRequest: Awaited<ReturnType<typeof createAvailabilityRequestForAssignment>> | null =
-    null;
+  const programById = new Map([[programResult.data.program_id, programResult.data]]);
+  let cadenceSuggestedSlots: AvailabilitySlot[] = [];
   try {
-    availabilityRequest = await createAvailabilityRequestForAssignment(
-      clientId,
-      insertResult.data,
-      programResult.data,
-    );
+    const masterEvents = await loadClientMasterCalendarEvents(clientId);
+    cadenceSuggestedSlots = buildSuggestedAvailabilitySlots({
+      deployedAt: insertResult.data.deployed_at ?? new Date().toISOString(),
+      scheduleFrequency: programResult.data.schedule_frequency ?? null,
+      scheduleAnchorDate: programResult.data.schedule_anchor_date ?? null,
+      existingEvents: masterEvents,
+    });
   } catch {
-    availabilityRequest = null;
+    cadenceSuggestedSlots = [];
   }
 
-  const programById = new Map([[programResult.data.program_id, programResult.data]]);
   return NextResponse.json(
     {
-      assignment: mapAssignedProgram(insertResult.data, programById),
-      availabilityRequest,
+      assignment: mapAssignedProgram(insertResult.data, programById, {
+        cadenceSuggestedSlots,
+        calendarCommittedSlots: [],
+      }),
     },
     { status: 201 },
   );

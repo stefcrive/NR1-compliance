@@ -1,8 +1,5 @@
-import { randomUUID } from "node:crypto";
-
 import { NextRequest, NextResponse } from "next/server";
 
-import { buildSuggestedAvailabilitySlots } from "@/lib/availability-scheduler";
 import {
   buildDrpsCalendarEvents,
   loadStoredCalendarEvents,
@@ -397,100 +394,32 @@ export async function GET(
   }
   const masterCalendarEvents = mergeAndSortMasterCalendarEvents(drpsEvents, storedEvents);
 
-  let availabilityRows: AvailabilityRequestRow[] = availabilityMissing ? [] : availabilityResult.data ?? [];
-  if (!availabilityMissing && assignments.length > 0) {
-    const existingByAssignment = new Set(availabilityRows.map((row) => row.client_program_id));
-    const missingAssignments = assignments.filter(
-      (assignment) =>
-        assignment.status !== "Completed" && !existingByAssignment.has(assignment.client_program_id),
-    );
-
-    if (missingAssignments.length > 0) {
-      const nowIso = new Date().toISOString();
-      const dueAtIso = new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString();
-      const inserts = missingAssignments.map((assignment) => {
-        const program = programById.get(assignment.program_id);
-        const suggestedSlots = buildSuggestedAvailabilitySlots({
-          deployedAt: assignment.deployed_at ?? nowIso,
-          scheduleFrequency: program?.schedule_frequency ?? null,
-          scheduleAnchorDate: program?.schedule_anchor_date ?? null,
-          existingEvents: masterCalendarEvents,
-        });
-        return {
-          request_id: randomUUID(),
-          client_id: client.client_id,
-          client_program_id: assignment.client_program_id,
-          status: "pending",
-          requested_at: nowIso,
-          due_at: dueAtIso,
-          suggested_slots: suggestedSlots,
-          selected_slots: [],
-          submitted_at: null,
-          updated_at: nowIso,
-        };
-      });
-
-      const insertResult = await supabase
-        .from("client_program_availability_requests")
-        .insert(inserts)
-        .select(
-          "request_id,client_program_id,status,requested_at,due_at,suggested_slots,selected_slots,submitted_at",
-        )
-        .returns<AvailabilityRequestRow[]>();
-
-      if (!insertResult.error && Array.isArray(insertResult.data)) {
-        availabilityRows = [...insertResult.data, ...availabilityRows];
-      }
-    }
-  }
-
-  availabilityRows = availabilityRows
+  const availabilityRows: AvailabilityRequestRow[] = (availabilityMissing
+    ? []
+    : availabilityResult.data ?? []
+  )
     .slice()
     .sort(
       (a, b) =>
         new Date(b.requested_at).getTime() - new Date(a.requested_at).getTime(),
     );
 
-  const parsedAvailabilityRequests = availabilityMissing
-    ? assignments
-        .filter((assignment) => assignment.status !== "Completed")
-        .map((assignment) => {
-          const program = programById.get(assignment.program_id) ?? null;
-          const requestedAt = assignment.deployed_at ?? new Date().toISOString();
-          return {
-            id: `virtual-${assignment.client_program_id}`,
-            clientProgramId: assignment.client_program_id,
-            programId: assignment.program_id,
-            programTitle: program?.title ?? assignment.program_id ?? "Processo continuo",
-            status: "pending" as const,
-            requestedAt,
-            dueAt: null,
-            submittedAt: null,
-            suggestedSlots: buildSuggestedAvailabilitySlots({
-              deployedAt: requestedAt,
-              scheduleFrequency: program?.schedule_frequency ?? null,
-              scheduleAnchorDate: program?.schedule_anchor_date ?? null,
-              existingEvents: masterCalendarEvents,
-            }),
-            selectedSlots: [],
-          };
-        })
-    : availabilityRows.map((row) => {
-        const assignment = assignments.find((item) => item.client_program_id === row.client_program_id) ?? null;
-        const program = assignment ? programById.get(assignment.program_id) ?? null : null;
-        return {
-          id: row.request_id,
-          clientProgramId: row.client_program_id,
-          programId: assignment?.program_id ?? null,
-          programTitle: program?.title ?? assignment?.program_id ?? "Processo continuo",
-          status: row.status,
-          requestedAt: row.requested_at,
-          dueAt: row.due_at,
-          submittedAt: row.submitted_at,
-          suggestedSlots: parseSlots(row.suggested_slots),
-          selectedSlots: parseSlots(row.selected_slots),
-        };
-      });
+  const parsedAvailabilityRequests = availabilityRows.map((row) => {
+    const assignment = assignments.find((item) => item.client_program_id === row.client_program_id) ?? null;
+    const program = assignment ? programById.get(assignment.program_id) ?? null : null;
+    return {
+      id: row.request_id,
+      clientProgramId: row.client_program_id,
+      programId: assignment?.program_id ?? null,
+      programTitle: program?.title ?? assignment?.program_id ?? "Processo continuo",
+      status: row.status,
+      requestedAt: row.requested_at,
+      dueAt: row.due_at,
+      submittedAt: row.submitted_at,
+      suggestedSlots: parseSlots(row.suggested_slots),
+      selectedSlots: parseSlots(row.selected_slots),
+    };
+  });
 
   const basePayload = {
     client: {

@@ -58,7 +58,7 @@ function fmtDate(value: string | null) {
   return new Intl.DateTimeFormat("pt-BR", { dateStyle: "short" }).format(new Date(value));
 }
 
-function useClientPortalData(clientSlug: string, campaignId?: string) {
+function useClientPortalData(clientSlug: string, campaignId?: string, reloadToken = 0) {
   const [data, setData] = useState<ClientPortalPayload | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
@@ -95,9 +95,16 @@ function useClientPortalData(clientSlug: string, campaignId?: string) {
     return () => {
       ignore = true;
     };
-  }, [campaignId, clientSlug]);
+  }, [campaignId, clientSlug, reloadToken]);
 
   return { data, isLoading, error };
+}
+
+function questionnaireCollectionStatus(status: Diagnostic["status"]) {
+  if (status === "live") return "Questionario aberto (coletando respostas)";
+  if (status === "closed") return "Questionario fechado";
+  if (status === "draft") return "Questionario em rascunho";
+  return "Questionario arquivado";
 }
 
 function RiskBadge({ risk }: { risk: "low" | "medium" | "high" | "critical" | null | undefined }) {
@@ -187,7 +194,9 @@ export function ClientCompanyDataSection({ clientSlug }: { clientSlug: string })
 }
 
 export function ClientDiagnosticStatusSection({ clientSlug }: { clientSlug: string }) {
-  const { data, isLoading, error } = useClientPortalData(clientSlug);
+  const [selectedDiagnosticId, setSelectedDiagnosticId] = useState<string | undefined>(undefined);
+  const [reloadToken, setReloadToken] = useState(0);
+  const { data, isLoading, error } = useClientPortalData(clientSlug, selectedDiagnosticId, reloadToken);
   const [copiedDiagnosticId, setCopiedDiagnosticId] = useState<string | null>(null);
 
   async function copyEmployeeLink(diagnostic: Diagnostic) {
@@ -203,6 +212,8 @@ export function ClientDiagnosticStatusSection({ clientSlug }: { clientSlug: stri
 
   if (isLoading) return <p className="text-sm text-[#49697a]">Carregando diagnosticos DRPS...</p>;
   if (error || !data) return <p className="text-sm text-red-600">{error || "Diagnostic unavailable."}</p>;
+  const openCampaigns = data.campaigns.filter((campaign) => campaign.status === "live");
+  const hasClosedCampaigns = data.campaigns.some((campaign) => campaign.status === "closed");
 
   return (
     <div className="space-y-6">
@@ -210,6 +221,11 @@ export function ClientDiagnosticStatusSection({ clientSlug }: { clientSlug: stri
         <h2 className="text-2xl font-semibold text-[#141d24]">Diagnosticos DRPS (status e resultados)</h2>
         <p className="mt-1 text-sm text-[#475660]">
           Diagnosticos DRPS atribuidos pelo gestor com status de coleta e acesso ao resultado.
+        </p>
+        <p className="mt-1 text-xs text-[#5a7383]">
+          {data.selectedCampaign
+            ? `Questionario atual: ${questionnaireCollectionStatus(data.selectedCampaign.status)}`
+            : "Sem questionario selecionado."}
         </p>
       </section>
 
@@ -225,23 +241,19 @@ export function ClientDiagnosticStatusSection({ clientSlug }: { clientSlug: stri
               </tr>
             </thead>
             <tbody>
-              {data.campaigns.length === 0 ? (
+              {openCampaigns.length === 0 ? (
                 <tr>
                   <td colSpan={4} className="px-2 py-3 text-[#5a7383]">
-                    Nenhum diagnostico DRPS atribuido.
+                    {hasClosedCampaigns
+                      ? "Nao ha questionarios abertos. Os diagnosticos existentes estao fechados."
+                      : "Nenhum diagnostico DRPS atribuido."}
                   </td>
                 </tr>
               ) : (
-                data.campaigns.map((campaign) => (
+                openCampaigns.map((campaign) => (
                   <tr key={campaign.id} className="border-b">
                     <td className="px-2 py-2">{campaign.name}</td>
-                    <td className="px-2 py-2">
-                      {campaign.status === "live"
-                        ? "Coletando respostas"
-                        : campaign.status === "closed"
-                          ? "Concluido"
-                          : campaign.status}
-                    </td>
+                    <td className="px-2 py-2">{questionnaireCollectionStatus(campaign.status)}</td>
                     <td className="px-2 py-2">
                       {fmtDate(campaign.starts_at)} - {fmtDate(campaign.closes_at)}
                     </td>
@@ -254,12 +266,16 @@ export function ClientDiagnosticStatusSection({ clientSlug }: { clientSlug: stri
                         >
                           {copiedDiagnosticId === campaign.id ? "Link copiado" : "Gerar link colaboradores"}
                         </button>
-                        <Link
-                          href={`/client/${clientSlug}/diagnostic/${campaign.id}`}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedDiagnosticId(campaign.id);
+                            setReloadToken((previous) => previous + 1);
+                          }}
                           className="rounded-full border border-[#c8c8c8] px-3 py-1 text-xs font-semibold text-[#1b2832]"
                         >
-                          Ver resultados
-                        </Link>
+                          Ver
+                        </button>
                       </div>
                     </td>
                   </tr>
