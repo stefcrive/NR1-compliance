@@ -13,7 +13,7 @@ import {
   loadStoredCalendarEvents,
   mergeAndSortMasterCalendarEvents,
 } from "@/lib/master-calendar";
-import { isMissingTableError } from "@/lib/supabase-errors";
+import { isMissingColumnError, isMissingTableError } from "@/lib/supabase-errors";
 import { getSupabaseAdminClient } from "@/lib/supabase-admin";
 
 type ClientRow = {
@@ -32,6 +32,8 @@ type ClientProgramRow = {
   client_program_id: string;
   program_id: string;
   deployed_at: string | null;
+  schedule_frequency_override?: string | null;
+  schedule_anchor_date_override?: string | null;
 };
 
 type ProgramRow = {
@@ -135,23 +137,35 @@ export async function POST(
     return NextResponse.json({ error: "Availability request is closed." }, { status: 409 });
   }
 
-  const assignmentResult = await supabase
+  const withOverrides = await supabase
     .from("client_programs")
-    .select("client_program_id,program_id,deployed_at")
+    .select(
+      "client_program_id,program_id,deployed_at,schedule_frequency_override,schedule_anchor_date_override",
+    )
     .eq("client_program_id", availabilityRequest.client_program_id)
     .eq("client_id", clientId)
     .maybeSingle<ClientProgramRow>();
+  const assignmentResult =
+    withOverrides.error && isMissingColumnError(withOverrides.error, "schedule_frequency_override")
+      ? await supabase
+          .from("client_programs")
+          .select("client_program_id,program_id,deployed_at")
+          .eq("client_program_id", availabilityRequest.client_program_id)
+          .eq("client_id", clientId)
+          .maybeSingle<ClientProgramRow>()
+      : withOverrides;
   if (assignmentResult.error) {
     return NextResponse.json({ error: "Could not load assigned program." }, { status: 500 });
   }
   if (!assignmentResult.data) {
     return NextResponse.json({ error: "Assigned program not found." }, { status: 404 });
   }
+  const assignment = assignmentResult.data;
 
   const programResult = await supabase
     .from("periodic_programs")
     .select("title,schedule_frequency,schedule_anchor_date")
-    .eq("program_id", assignmentResult.data.program_id)
+    .eq("program_id", assignment.program_id)
     .maybeSingle<ProgramRow>();
   if (programResult.error && !isMissingTableError(programResult.error, "periodic_programs")) {
     return NextResponse.json({ error: "Could not load program details." }, { status: 500 });
@@ -162,18 +176,23 @@ export async function POST(
     const campaignsResult = await supabase
       .from("surveys")
       .select("id,client_id,name,starts_at,closes_at")
-      .eq("client_id", clientId)
       .returns<CampaignRow[]>();
     if (campaignsResult.error && !isMissingTableError(campaignsResult.error, "surveys")) {
       return NextResponse.json({ error: "Could not validate availability." }, { status: 500 });
     }
     const drpsEvents = buildDrpsCalendarEvents(campaignsResult.data ?? []);
-    const stored = await loadStoredCalendarEvents(supabase, { clientId });
+    const stored = await loadStoredCalendarEvents(supabase);
     const events = mergeAndSortMasterCalendarEvents(drpsEvents, stored.events);
     suggestedSlots = buildSuggestedAvailabilitySlots({
-      deployedAt: assignmentResult.data.deployed_at ?? new Date().toISOString(),
-      scheduleFrequency: programResult.data?.schedule_frequency ?? null,
-      scheduleAnchorDate: programResult.data?.schedule_anchor_date ?? null,
+      deployedAt: assignment.deployed_at ?? new Date().toISOString(),
+      scheduleFrequency:
+        assignment.schedule_frequency_override ??
+        programResult.data?.schedule_frequency ??
+        null,
+      scheduleAnchorDate:
+        assignment.schedule_anchor_date_override ??
+        programResult.data?.schedule_anchor_date ??
+        null,
       existingEvents: events,
     });
   }
@@ -190,13 +209,12 @@ export async function POST(
   const campaignsResult = await supabase
     .from("surveys")
     .select("id,client_id,name,starts_at,closes_at")
-    .eq("client_id", clientId)
     .returns<CampaignRow[]>();
   if (campaignsResult.error && !isMissingTableError(campaignsResult.error, "surveys")) {
     return NextResponse.json({ error: "Could not validate availability." }, { status: 500 });
   }
   const drpsEvents = buildDrpsCalendarEvents(campaignsResult.data ?? []);
-  const stored = await loadStoredCalendarEvents(supabase, { clientId });
+  const stored = await loadStoredCalendarEvents(supabase);
   const masterEvents = mergeAndSortMasterCalendarEvents(drpsEvents, stored.events);
 
   const safeSelected = selectedSlots as AvailabilitySlot[];
@@ -212,18 +230,19 @@ export async function POST(
     );
   }
 
-  const meetingTitle = `Reuniao processo continuo: ${programResult.data?.title ?? assignmentResult.data.program_id}`;
-
-  const deleteExisting = await supabase
+  const meetingTitle = `Reagendamento - provisoria: ${programResult.data?.title ?? assignment.program_id}`;
+  const existingEventsResult = await supabase
     .from("calendar_events")
-    .delete()
+    .select("event_id,metadata")
     .eq("client_id", clientId)
     .eq("source_client_program_id", availabilityRequest.client_program_id)
-    .eq("event_type", "continuous_meeting");
-  if (deleteExisting.error && !isMissingTableError(deleteExisting.error, "calendar_events")) {
+    .eq("event_type", "continuous_meeting")
+    .returns<Array<{ event_id: string; metadata: unknown }>>();
+
+  if (existingEventsResult.error && !isMissingTableError(existingEventsResult.error, "calendar_events")) {
     return NextResponse.json({ error: "Could not schedule meetings." }, { status: 500 });
   }
-  if (isMissingTableError(deleteExisting.error, "calendar_events")) {
+  if (isMissingTableError(existingEventsResult.error, "calendar_events")) {
     return NextResponse.json(
       {
         error:
@@ -233,27 +252,46 @@ export async function POST(
     );
   }
 
-  if (safeSelected.length > 0) {
-    const insertMeetings = await supabase.from("calendar_events").insert(
-      safeSelected.map((slot) => ({
-        event_id: randomUUID(),
-        client_id: clientId,
-        source_client_program_id: availabilityRequest.client_program_id,
-        event_type: "continuous_meeting",
-        title: meetingTitle,
-        starts_at: slot.startsAt,
-        ends_at: slot.endsAt,
-        status: "scheduled",
-        created_by: "client",
-        metadata: {
-          availabilityRequestId: availabilityRequest.request_id,
-        },
-        updated_at: new Date().toISOString(),
-      })),
-    );
-    if (insertMeetings.error) {
+  const idsToDelete = (existingEventsResult.data ?? [])
+    .filter((row) => {
+      if (!row.metadata || typeof row.metadata !== "object" || Array.isArray(row.metadata)) {
+        return false;
+      }
+      const metadata = row.metadata as Record<string, unknown>;
+      return metadata.eventLifecycle === "provisory" && metadata.proposalKind === "reschedule";
+    })
+    .map((row) => row.event_id);
+
+  if (idsToDelete.length > 0) {
+    const deleteExisting = await supabase.from("calendar_events").delete().in("event_id", idsToDelete);
+    if (deleteExisting.error) {
       return NextResponse.json({ error: "Could not schedule meetings." }, { status: 500 });
     }
+  }
+
+  const insertMeetings = await supabase.from("calendar_events").insert(
+    safeSelected.map((slot) => ({
+      event_id: randomUUID(),
+      client_id: clientId,
+      source_client_program_id: availabilityRequest.client_program_id,
+      event_type: "continuous_meeting",
+      title: meetingTitle,
+      starts_at: slot.startsAt,
+      ends_at: slot.endsAt,
+      status: "scheduled",
+      created_by: "client",
+      metadata: {
+        availabilityRequestId: availabilityRequest.request_id,
+        eventLifecycle: "provisory",
+        proposalKind: "reschedule",
+        content: `Reagendamento proposto para o programa ${programResult.data?.title ?? assignment.program_id}.`,
+        preparationRequired: "Aguardar confirmacao do gestor antes de considerar o horario final.",
+      },
+      updated_at: new Date().toISOString(),
+    })),
+  );
+  if (insertMeetings.error) {
+    return NextResponse.json({ error: "Could not schedule meetings." }, { status: 500 });
   }
 
   const nowIso = new Date().toISOString();
@@ -286,14 +324,14 @@ export async function POST(
     await createManagerNotification(supabase, {
       clientId,
       notificationType: "client_reschedule_submitted",
-      title: `Cliente reagendou processo continuo (${programResult.data?.title ?? assignmentResult.data.program_id})`,
-      message: `${clientCompanyName} enviou ${safeSelected.length} horario(s) para reagendamento.`,
+      title: `Cliente reagendou processo continuo (${programResult.data?.title ?? assignment.program_id})`,
+      message: `${clientCompanyName} enviou ${safeSelected.length} horario(s) provisoriamente. Confirmacao do gestor pendente.`,
       metadata: {
         clientSlug,
         clientCompanyName,
         availabilityRequestId: availabilityRequest.request_id,
         clientProgramId: availabilityRequest.client_program_id,
-        programId: assignmentResult.data.program_id,
+        programId: assignment.program_id,
         selectedSlots: safeSelected,
       },
     });

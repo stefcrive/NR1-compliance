@@ -99,11 +99,21 @@ type ReportRow = {
   summary: Record<string, unknown>;
 };
 
+type InvoiceRow = {
+  invoice_id: string;
+  client_id: string;
+  amount: number | string;
+  status: "Paid" | "Pending" | "Overdue";
+  due_date: string;
+};
+
 type ClientProgramRow = {
   client_program_id: string;
   program_id: string;
   status: "Recommended" | "Active" | "Completed";
   deployed_at?: string | null;
+  schedule_frequency_override?: string | null;
+  schedule_anchor_date_override?: string | null;
 };
 
 type ProgramRow = {
@@ -179,6 +189,10 @@ function mapAssignedProgram(
   programById: Map<string, ProgramRow>,
 ) {
   const program = programById.get(assignment.program_id) ?? null;
+  const scheduleFrequency =
+    assignment.schedule_frequency_override ?? program?.schedule_frequency ?? "monthly";
+  const scheduleAnchorDate =
+    assignment.schedule_anchor_date_override ?? program?.schedule_anchor_date ?? null;
   return {
     id: assignment.client_program_id,
     programId: assignment.program_id,
@@ -188,8 +202,8 @@ function mapAssignedProgram(
     programDescription: program?.description ?? null,
     targetRiskTopic: program ? Number(program.target_risk_topic) : null,
     triggerThreshold: program ? Number(program.trigger_threshold) : null,
-    scheduleFrequency: program?.schedule_frequency ?? "monthly",
-    scheduleAnchorDate: program?.schedule_anchor_date ?? null,
+    scheduleFrequency,
+    scheduleAnchorDate,
   };
 }
 
@@ -277,7 +291,8 @@ export async function GET(
     return NextResponse.json({ error: "Client not found." }, { status: 404 });
   }
 
-  const [campaignsResult, reportsResult, assignmentsResult, availabilityResult] = await Promise.all([
+  const [campaignsResult, reportsResult, invoicesResult, assignmentsWithOverridesResult, availabilityResult] =
+    await Promise.all([
     supabase
       .from("surveys")
       .select("id,client_id,name,public_slug,status,k_anonymity_min,starts_at,closes_at,created_at")
@@ -291,8 +306,16 @@ export async function GET(
       .order("created_at", { ascending: false })
       .returns<ReportRow[]>(),
     supabase
+      .from("invoices")
+      .select("invoice_id,client_id,amount,status,due_date")
+      .eq("client_id", client.client_id)
+      .order("due_date", { ascending: false })
+      .returns<InvoiceRow[]>(),
+    supabase
       .from("client_programs")
-      .select("client_program_id,program_id,status,deployed_at")
+      .select(
+        "client_program_id,program_id,status,deployed_at,schedule_frequency_override,schedule_anchor_date_override",
+      )
       .eq("client_id", client.client_id)
       .order("deployed_at", { ascending: false })
       .returns<ClientProgramRow[]>(),
@@ -306,7 +329,19 @@ export async function GET(
       .returns<AvailabilityRequestRow[]>(),
   ]);
 
+  const assignmentsResult =
+    assignmentsWithOverridesResult.error &&
+    isMissingColumnError(assignmentsWithOverridesResult.error, "schedule_frequency_override")
+      ? await supabase
+          .from("client_programs")
+          .select("client_program_id,program_id,status,deployed_at")
+          .eq("client_id", client.client_id)
+          .order("deployed_at", { ascending: false })
+          .returns<ClientProgramRow[]>()
+      : assignmentsWithOverridesResult;
+
   const reportsMissing = isMissingTableError(reportsResult.error, "client_reports");
+  const invoicesMissing = isMissingTableError(invoicesResult.error, "invoices");
   const assignmentsMissing = isMissingTableError(assignmentsResult.error, "client_programs");
   const availabilityMissing = isMissingTableError(
     availabilityResult.error,
@@ -318,6 +353,9 @@ export async function GET(
   }
   if (reportsResult.error && !reportsMissing) {
     return NextResponse.json({ error: "Could not load client campaigns." }, { status: 500 });
+  }
+  if (invoicesResult.error && !invoicesMissing) {
+    return NextResponse.json({ error: "Could not load client invoices." }, { status: 500 });
   }
   if (
     assignmentsResult.error &&
@@ -421,6 +459,13 @@ export async function GET(
     };
   });
 
+  const invoices = (invoicesMissing ? [] : invoicesResult.data ?? []).map((invoice) => ({
+    id: invoice.invoice_id,
+    amount: Number(invoice.amount),
+    status: invoice.status,
+    dueDate: invoice.due_date,
+  }));
+
   const basePayload = {
     client: {
       id: client.client_id,
@@ -445,6 +490,7 @@ export async function GET(
     assignedPrograms,
     availabilityRequests: parsedAvailabilityRequests,
     availabilityRequestsUnavailable: availabilityMissing,
+    invoices,
     masterCalendar: {
       events: masterCalendarEvents,
       calendarEventsUnavailable,
@@ -455,7 +501,7 @@ export async function GET(
     return NextResponse.json({
       ...basePayload,
       dashboard: null,
-      reports: reportsResult.data ?? [],
+      reports: reportsMissing ? [] : reportsResult.data ?? [],
     });
   }
 

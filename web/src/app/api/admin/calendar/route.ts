@@ -6,6 +6,7 @@ import { z } from "zod";
 import { isAdminApiAuthorized } from "@/lib/admin-auth";
 import {
   buildDrpsCalendarEvents,
+  extractCalendarEventDetails,
   loadStoredCalendarEvents,
   mergeAndSortMasterCalendarEvents,
   withClientNames,
@@ -39,6 +40,31 @@ type ProgramTitleRow = {
   title: string;
 };
 
+type EditableCalendarEventRow = {
+  event_id: string;
+  client_id: string | null;
+  source_client_program_id: string | null;
+  event_type: "continuous_meeting" | "blocked";
+  title: string;
+  starts_at: string;
+  ends_at: string;
+  status: "scheduled" | "completed" | "cancelled";
+  metadata: unknown;
+};
+
+type RelatedCalendarEventRow = {
+  event_id: string;
+  client_id: string | null;
+  source_client_program_id: string | null;
+  event_type: "continuous_meeting" | "blocked";
+  starts_at: string;
+  ends_at: string;
+  status: "scheduled" | "completed" | "cancelled";
+  metadata: unknown;
+};
+
+const detailTextSchema = z.string().trim().max(1500);
+
 const createBlockedEventSchema = z
   .object({
     eventType: z.literal("blocked").optional(),
@@ -46,11 +72,79 @@ const createBlockedEventSchema = z
     title: z.string().trim().min(3).max(160).optional(),
     startsAt: z.string().datetime(),
     endsAt: z.string().datetime(),
+    content: detailTextSchema.optional(),
+    preparationRequired: detailTextSchema.optional(),
   })
   .refine((value) => new Date(value.endsAt).getTime() > new Date(value.startsAt).getTime(), {
     message: "Invalid time range.",
     path: ["endsAt"],
   });
+
+const updateCalendarEventSchema = z
+  .object({
+    eventId: z.string().uuid(),
+    title: z.string().trim().min(3).max(160).optional(),
+    startsAt: z.string().datetime().optional(),
+    endsAt: z.string().datetime().optional(),
+    content: detailTextSchema.nullable().optional(),
+    preparationRequired: detailTextSchema.nullable().optional(),
+    commitProvisoryReschedule: z.boolean().optional(),
+  })
+  .refine((value) => Object.keys(value).some((key) => key !== "eventId"), {
+    message: "At least one editable field must be provided.",
+    path: ["eventId"],
+  });
+
+function normalizeMetadata(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  return { ...(value as Record<string, unknown>) };
+}
+
+function availabilityRequestIdFromMetadata(metadata: unknown): string | null {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return null;
+  const record = metadata as Record<string, unknown>;
+  const raw = record.availabilityRequestId ?? record.availability_request_id ?? null;
+  if (typeof raw !== "string") return null;
+  return raw.trim().length > 0 ? raw : null;
+}
+
+function overlaps(startA: Date, endA: Date, startB: Date, endB: Date): boolean {
+  return startA < endB && endA > startB;
+}
+
+async function hasMasterCalendarConflict(params: {
+  eventId: string;
+  startsAt: string;
+  endsAt: string;
+}): Promise<boolean> {
+  const [surveys, stored] = await Promise.all([
+    loadSurveyRows(),
+    loadStoredCalendarEvents(getSupabaseAdminClient()),
+  ]);
+
+  const masterEvents = mergeAndSortMasterCalendarEvents(
+    buildDrpsCalendarEvents(surveys),
+    stored.events,
+  );
+  const nextStart = new Date(params.startsAt);
+  const nextEnd = new Date(params.endsAt);
+  if (Number.isNaN(nextStart.getTime()) || Number.isNaN(nextEnd.getTime())) {
+    return true;
+  }
+
+  return masterEvents.some((candidate) => {
+    if (candidate.id === params.eventId) return false;
+    if (candidate.status === "cancelled") return false;
+    const candidateStart = new Date(candidate.startsAt);
+    const candidateEnd = new Date(candidate.endsAt);
+    if (Number.isNaN(candidateStart.getTime()) || Number.isNaN(candidateEnd.getTime())) {
+      return false;
+    }
+    return overlaps(nextStart, nextEnd, candidateStart, candidateEnd);
+  });
+}
 
 async function loadSurveyRows() {
   const supabase = getSupabaseAdminClient();
@@ -104,7 +198,6 @@ async function loadActiveContinuousPrograms() {
   const withDeployedAt = await supabase
     .from("client_programs")
     .select("client_program_id,client_id,program_id,status,deployed_at")
-    .eq("status", "Active")
     .returns<ActiveClientProgramRow[]>();
 
   const assignmentsResult =
@@ -112,7 +205,6 @@ async function loadActiveContinuousPrograms() {
       ? await supabase
           .from("client_programs")
           .select("client_program_id,client_id,program_id,status")
-          .eq("status", "Active")
           .returns<ActiveClientProgramRow[]>()
       : withDeployedAt;
 
@@ -150,6 +242,127 @@ async function loadActiveContinuousPrograms() {
   };
 }
 
+async function commitSubmittedReschedule(event: EditableCalendarEventRow): Promise<{
+  unavailable: boolean;
+  invalidState: boolean;
+}> {
+  const details = extractCalendarEventDetails(event.metadata);
+  const requestId = availabilityRequestIdFromMetadata(event.metadata);
+  if (
+    details.eventLifecycle !== "provisory" ||
+    details.proposalKind !== "reschedule" ||
+    !requestId ||
+    !event.source_client_program_id
+  ) {
+    return { unavailable: false, invalidState: true };
+  }
+
+  const supabase = getSupabaseAdminClient();
+  const relatedResult = await supabase
+    .from("calendar_events")
+    .select(
+      "event_id,client_id,source_client_program_id,event_type,starts_at,ends_at,status,metadata",
+    )
+    .eq("source_client_program_id", event.source_client_program_id)
+    .eq("event_type", "continuous_meeting")
+    .returns<RelatedCalendarEventRow[]>();
+
+  if (relatedResult.error) {
+    if (isMissingTableError(relatedResult.error, "calendar_events")) {
+      return { unavailable: true, invalidState: false };
+    }
+    throw relatedResult.error;
+  }
+
+  const nowIso = new Date().toISOString();
+  const events = relatedResult.data ?? [];
+  const toCommit = events.filter((row) => {
+    const rowDetails = extractCalendarEventDetails(row.metadata);
+    const rowRequestId = availabilityRequestIdFromMetadata(row.metadata);
+    return (
+      rowDetails.eventLifecycle === "provisory" &&
+      rowDetails.proposalKind === "reschedule" &&
+      rowRequestId === requestId &&
+      row.status !== "cancelled"
+    );
+  });
+
+  if (toCommit.length === 0) {
+    return { unavailable: false, invalidState: true };
+  }
+
+  for (const row of toCommit) {
+    const metadata = normalizeMetadata(row.metadata);
+    metadata.eventLifecycle = "committed";
+    metadata.proposalKind = "reschedule";
+    metadata.committedAt = nowIso;
+    metadata.committedBy = "manager";
+
+    const updateResult = await supabase
+      .from("calendar_events")
+      .update({
+        status: "scheduled",
+        metadata,
+        updated_at: nowIso,
+      })
+      .eq("event_id", row.event_id);
+    if (updateResult.error) {
+      throw updateResult.error;
+    }
+  }
+
+  const committedIds = new Set(toCommit.map((row) => row.event_id));
+  const toCancel = events.filter((row) => {
+    if (committedIds.has(row.event_id)) return false;
+    if (row.status === "cancelled") return false;
+    const rowDetails = extractCalendarEventDetails(row.metadata);
+    return rowDetails.eventLifecycle === "committed";
+  });
+
+  if (toCancel.length > 0) {
+    for (const row of toCancel) {
+      const metadata = normalizeMetadata(row.metadata);
+      metadata.cancelledByRescheduleRequestId = requestId;
+      metadata.cancelledAt = nowIso;
+      const cancelResult = await supabase
+        .from("calendar_events")
+        .update({
+          status: "cancelled",
+          metadata,
+          updated_at: nowIso,
+        })
+        .eq("event_id", row.event_id);
+      if (cancelResult.error) {
+        throw cancelResult.error;
+      }
+    }
+  }
+
+  const selectedSlots = toCommit.map((row) => ({
+    startsAt: row.starts_at,
+    endsAt: row.ends_at,
+  }));
+  const updateRequest = await supabase
+    .from("client_program_availability_requests")
+    .update({
+      status: "scheduled",
+      selected_slots: selectedSlots,
+      submitted_at: nowIso,
+      updated_at: nowIso,
+    })
+    .eq("request_id", requestId)
+    .eq("client_program_id", event.source_client_program_id);
+
+  if (
+    updateRequest.error &&
+    !isMissingTableError(updateRequest.error, "client_program_availability_requests")
+  ) {
+    throw updateRequest.error;
+  }
+
+  return { unavailable: false, invalidState: false };
+}
+
 export async function GET(request: NextRequest) {
   if (!isAdminApiAuthorized(request)) {
     return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
@@ -158,17 +371,18 @@ export async function GET(request: NextRequest) {
   try {
     const surveyRows = await loadSurveyRows();
     const activePrograms = await loadActiveContinuousPrograms();
+    const stored = await loadStoredCalendarEvents(getSupabaseAdminClient());
     const clientIds = Array.from(
       new Set(
         [
           ...surveyRows.map((row) => row.client_id),
           ...activePrograms.assignments.map((assignment) => assignment.client_id),
+          ...stored.events.map((event) => event.clientId),
         ].filter((value): value is string => Boolean(value)),
       ),
     );
     const clientNameById = await loadClientNames(clientIds);
     const drpsEvents = withClientNames(buildDrpsCalendarEvents(surveyRows), clientNameById);
-    const stored = await loadStoredCalendarEvents(getSupabaseAdminClient());
     const merged = withClientNames(
       mergeAndSortMasterCalendarEvents(drpsEvents, stored.events),
       clientNameById,
@@ -218,22 +432,16 @@ export async function POST(request: NextRequest) {
       ends_at: parsed.endsAt,
       status: "scheduled",
       created_by: "manager",
-      metadata: {},
+      metadata: {
+        content: parsed.content?.trim() || null,
+        preparationRequired: parsed.preparationRequired?.trim() || null,
+      },
       updated_at: new Date().toISOString(),
     })
     .select(
-      "event_id,client_id,source_client_program_id,event_type,title,starts_at,ends_at,status",
+      "event_id,client_id,source_client_program_id,event_type,title,starts_at,ends_at,status,metadata",
     )
-    .maybeSingle<{
-      event_id: string;
-      client_id: string | null;
-      source_client_program_id: string | null;
-      event_type: "continuous_meeting" | "blocked";
-      title: string;
-      starts_at: string;
-      ends_at: string;
-      status: "scheduled" | "completed" | "cancelled";
-    }>();
+    .maybeSingle<EditableCalendarEventRow>();
 
   if (insertResult.error) {
     if (isMissingTableError(insertResult.error, "calendar_events")) {
@@ -252,17 +460,184 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Could not create blocked window." }, { status: 500 });
   }
 
+  const clientNameById = await loadClientNames(
+    insertResult.data.client_id ? [insertResult.data.client_id] : [],
+  );
+
   return NextResponse.json({
     event: {
       id: insertResult.data.event_id,
       clientId: insertResult.data.client_id,
-      clientName: null,
+      clientName: insertResult.data.client_id
+        ? clientNameById.get(insertResult.data.client_id) ?? null
+        : null,
       eventType: insertResult.data.event_type,
       title: insertResult.data.title,
       startsAt: insertResult.data.starts_at,
       endsAt: insertResult.data.ends_at,
       status: insertResult.data.status,
       sourceClientProgramId: insertResult.data.source_client_program_id,
+      details: extractCalendarEventDetails(insertResult.data.metadata),
+    },
+  });
+}
+
+export async function PATCH(request: NextRequest) {
+  if (!isAdminApiAuthorized(request)) {
+    return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
+  }
+
+  let parsed: z.infer<typeof updateCalendarEventSchema>;
+  try {
+    parsed = updateCalendarEventSchema.parse(await request.json());
+  } catch {
+    return NextResponse.json({ error: "Invalid payload." }, { status: 400 });
+  }
+
+  const supabase = getSupabaseAdminClient();
+  const currentResult = await supabase
+    .from("calendar_events")
+    .select(
+      "event_id,client_id,source_client_program_id,event_type,title,starts_at,ends_at,status,metadata",
+    )
+    .eq("event_id", parsed.eventId)
+    .maybeSingle<EditableCalendarEventRow>();
+
+  if (currentResult.error) {
+    if (isMissingTableError(currentResult.error, "calendar_events")) {
+      return NextResponse.json(
+        {
+          error:
+            "Master calendar table unavailable. Apply migration 20260302220000_master_calendar_availability.sql.",
+        },
+        { status: 412 },
+      );
+    }
+    return NextResponse.json({ error: "Could not load calendar event." }, { status: 500 });
+  }
+
+  if (!currentResult.data) {
+    return NextResponse.json({ error: "Calendar event not found." }, { status: 404 });
+  }
+
+  if (
+    currentResult.data.event_type !== "blocked" &&
+    currentResult.data.event_type !== "continuous_meeting"
+  ) {
+    return NextResponse.json({ error: "Only managed events can be edited." }, { status: 409 });
+  }
+
+  const nextStartsAt = parsed.startsAt ?? currentResult.data.starts_at;
+  const nextEndsAt = parsed.endsAt ?? currentResult.data.ends_at;
+  if (new Date(nextEndsAt).getTime() <= new Date(nextStartsAt).getTime()) {
+    return NextResponse.json({ error: "Invalid time range." }, { status: 400 });
+  }
+
+  if (
+    parsed.startsAt !== undefined ||
+    parsed.endsAt !== undefined
+  ) {
+    const hasConflict = await hasMasterCalendarConflict({
+      eventId: currentResult.data.event_id,
+      startsAt: nextStartsAt,
+      endsAt: nextEndsAt,
+    });
+    if (hasConflict) {
+      return NextResponse.json(
+        { error: "Selected date/time conflicts with another master calendar event." },
+        { status: 409 },
+      );
+    }
+  }
+
+  const mergedMetadata = normalizeMetadata(currentResult.data.metadata);
+  if (parsed.content !== undefined) {
+    mergedMetadata.content = parsed.content?.trim() || null;
+  }
+  if (parsed.preparationRequired !== undefined) {
+    mergedMetadata.preparationRequired = parsed.preparationRequired?.trim() || null;
+    delete mergedMetadata.preparation_required;
+  }
+
+  const updatePayload = {
+    ...(parsed.title !== undefined ? { title: parsed.title } : {}),
+    ...(parsed.startsAt !== undefined ? { starts_at: parsed.startsAt } : {}),
+    ...(parsed.endsAt !== undefined ? { ends_at: parsed.endsAt } : {}),
+    ...(
+      parsed.content !== undefined || parsed.preparationRequired !== undefined
+        ? { metadata: mergedMetadata }
+        : {}
+    ),
+    updated_at: new Date().toISOString(),
+  };
+
+  const updateResult = await supabase
+    .from("calendar_events")
+    .update(updatePayload)
+    .eq("event_id", parsed.eventId)
+    .select(
+      "event_id,client_id,source_client_program_id,event_type,title,starts_at,ends_at,status,metadata",
+    )
+    .maybeSingle<EditableCalendarEventRow>();
+
+  if (updateResult.error) {
+    return NextResponse.json({ error: "Could not update calendar event." }, { status: 500 });
+  }
+
+  if (!updateResult.data) {
+    return NextResponse.json({ error: "Could not update calendar event." }, { status: 500 });
+  }
+
+  let finalEvent = updateResult.data;
+  if (parsed.commitProvisoryReschedule) {
+    const committed = await commitSubmittedReschedule(updateResult.data);
+    if (committed.unavailable) {
+      return NextResponse.json(
+        {
+          error:
+            "Master calendar table unavailable. Apply migration 20260302220000_master_calendar_availability.sql.",
+        },
+        { status: 412 },
+      );
+    }
+    if (committed.invalidState) {
+      return NextResponse.json(
+        { error: "Only provisory reschedule events can be committed." },
+        { status: 409 },
+      );
+    }
+
+    const refreshedResult = await supabase
+      .from("calendar_events")
+      .select(
+        "event_id,client_id,source_client_program_id,event_type,title,starts_at,ends_at,status,metadata",
+      )
+      .eq("event_id", parsed.eventId)
+      .maybeSingle<EditableCalendarEventRow>();
+    if (refreshedResult.error || !refreshedResult.data) {
+      return NextResponse.json({ error: "Could not refresh committed event." }, { status: 500 });
+    }
+    finalEvent = refreshedResult.data;
+  }
+
+  const updatedClientNameById = await loadClientNames(
+    finalEvent.client_id ? [finalEvent.client_id] : [],
+  );
+
+  return NextResponse.json({
+    event: {
+      id: finalEvent.event_id,
+      clientId: finalEvent.client_id,
+      clientName: finalEvent.client_id
+        ? updatedClientNameById.get(finalEvent.client_id) ?? null
+        : null,
+      eventType: finalEvent.event_type,
+      title: finalEvent.title,
+      startsAt: finalEvent.starts_at,
+      endsAt: finalEvent.ends_at,
+      status: finalEvent.status,
+      sourceClientProgramId: finalEvent.source_client_program_id,
+      details: extractCalendarEventDetails(finalEvent.metadata),
     },
   });
 }

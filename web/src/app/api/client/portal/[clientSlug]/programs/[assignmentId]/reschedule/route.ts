@@ -8,7 +8,7 @@ import {
   loadStoredCalendarEvents,
   mergeAndSortMasterCalendarEvents,
 } from "@/lib/master-calendar";
-import { isMissingTableError } from "@/lib/supabase-errors";
+import { isMissingColumnError, isMissingTableError } from "@/lib/supabase-errors";
 import { getSupabaseAdminClient } from "@/lib/supabase-admin";
 
 type ClientRow = {
@@ -21,6 +21,8 @@ type AssignmentRow = {
   program_id: string;
   status: "Recommended" | "Active" | "Completed";
   deployed_at: string | null;
+  schedule_frequency_override?: string | null;
+  schedule_anchor_date_override?: string | null;
 };
 
 type ProgramRow = {
@@ -95,12 +97,23 @@ export async function POST(
   }
   const client = clientResult.data;
 
-  const assignmentResult = await supabase
+  const withOverrides = await supabase
     .from("client_programs")
-    .select("client_program_id,program_id,status,deployed_at")
+    .select(
+      "client_program_id,program_id,status,deployed_at,schedule_frequency_override,schedule_anchor_date_override",
+    )
     .eq("client_id", client.client_id)
     .eq("client_program_id", assignmentId)
     .maybeSingle<AssignmentRow>();
+  const assignmentResult =
+    withOverrides.error && isMissingColumnError(withOverrides.error, "schedule_frequency_override")
+      ? await supabase
+          .from("client_programs")
+          .select("client_program_id,program_id,status,deployed_at")
+          .eq("client_id", client.client_id)
+          .eq("client_program_id", assignmentId)
+          .maybeSingle<AssignmentRow>()
+      : withOverrides;
   if (assignmentResult.error) {
     return NextResponse.json({ error: "Could not load assigned program." }, { status: 500 });
   }
@@ -126,22 +139,27 @@ export async function POST(
   const campaignsResult = await supabase
     .from("surveys")
     .select("id,client_id,name,starts_at,closes_at")
-    .eq("client_id", client.client_id)
     .returns<CampaignRow[]>();
   if (campaignsResult.error && !isMissingTableError(campaignsResult.error, "surveys")) {
     return NextResponse.json({ error: "Could not compute suggested dates." }, { status: 500 });
   }
 
   const drpsEvents = buildDrpsCalendarEvents(campaignsResult.data ?? []);
-  const stored = await loadStoredCalendarEvents(supabase, { clientId: client.client_id });
+  const stored = await loadStoredCalendarEvents(supabase);
   const existingEvents = mergeAndSortMasterCalendarEvents(drpsEvents, stored.events).filter(
     (event) => event.sourceClientProgramId !== assignmentResult.data?.client_program_id,
   );
 
   const suggestedSlots = buildSuggestedAvailabilitySlots({
     deployedAt: assignmentResult.data.deployed_at ?? new Date().toISOString(),
-    scheduleFrequency: programResult.data.schedule_frequency ?? null,
-    scheduleAnchorDate: programResult.data.schedule_anchor_date ?? null,
+    scheduleFrequency:
+      assignmentResult.data.schedule_frequency_override ??
+      programResult.data.schedule_frequency ??
+      null,
+    scheduleAnchorDate:
+      assignmentResult.data.schedule_anchor_date_override ??
+      programResult.data.schedule_anchor_date ??
+      null,
     existingEvents,
   });
 
@@ -219,6 +237,32 @@ export async function POST(
       return NextResponse.json({ error: "Could not open reschedule request." }, { status: 500 });
     }
     upserted = insertResult.data;
+  }
+
+  const existingProvisoryEvents = await supabase
+    .from("calendar_events")
+    .select("event_id,metadata")
+    .eq("client_id", client.client_id)
+    .eq("source_client_program_id", assignmentResult.data.client_program_id)
+    .eq("event_type", "continuous_meeting")
+    .returns<Array<{ event_id: string; metadata: unknown }>>();
+
+  if (existingProvisoryEvents.error && !isMissingTableError(existingProvisoryEvents.error, "calendar_events")) {
+    return NextResponse.json({ error: "Could not open reschedule request." }, { status: 500 });
+  }
+  if (!existingProvisoryEvents.error) {
+    const idsToDelete = (existingProvisoryEvents.data ?? [])
+      .filter((row) => {
+        if (!row.metadata || typeof row.metadata !== "object" || Array.isArray(row.metadata)) {
+          return false;
+        }
+        const metadata = row.metadata as Record<string, unknown>;
+        return metadata.eventLifecycle === "provisory" && metadata.proposalKind === "reschedule";
+      })
+      .map((row) => row.event_id);
+    if (idsToDelete.length > 0) {
+      await supabase.from("calendar_events").delete().in("event_id", idsToDelete);
+    }
   }
 
   return NextResponse.json({

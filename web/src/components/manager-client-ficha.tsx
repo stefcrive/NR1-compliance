@@ -69,6 +69,8 @@ type ContinuousProgramOption = {
   description: string | null;
   targetRiskTopic: number;
   triggerThreshold: number;
+  scheduleFrequency: string;
+  scheduleAnchorDate: string | null;
 };
 
 type AvailabilitySlot = {
@@ -86,6 +88,7 @@ type AssignedContinuousProgram = {
   scheduleFrequency?: string;
   scheduleAnchorDate?: string | null;
   cadenceSuggestedSlots?: AvailabilitySlot[];
+  calendarProvisorySlots?: AvailabilitySlot[];
   calendarCommittedSlots?: AvailabilitySlot[];
   status: ContinuousProgramStatus;
   deployedAt: string | null;
@@ -186,6 +189,21 @@ function toDateInput(value: string | null): string {
   return value.slice(0, 10);
 }
 
+function fmtTime(value: string | null): string {
+  if (!value) return "-";
+  return new Intl.DateTimeFormat("pt-BR", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(new Date(value));
+}
+
+function dayKey(value: Date) {
+  return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(
+    value.getDate(),
+  ).padStart(2, "0")}`;
+}
+
 function toNonNegativeInt(value: string, fallback: number): number {
   const parsed = Number.parseInt(value, 10);
   if (!Number.isFinite(parsed)) return fallback;
@@ -275,7 +293,13 @@ function EditIcon() {
   );
 }
 
-export function ManagerClientFicha({ clientId }: { clientId: string }) {
+export function ManagerClientFicha({
+  clientId,
+  initialTab = "overview",
+}: {
+  clientId: string;
+  initialTab?: ClientTab;
+}) {
   const router = useRouter();
   const [client, setClient] = useState<ClientDetail | null>(null);
   const [reports, setReports] = useState<Report[]>([]);
@@ -290,8 +314,11 @@ export function ManagerClientFicha({ clientId }: { clientId: string }) {
   const [copiedSectorId, setCopiedSectorId] = useState<string | null>(null);
   const [isLoadingLinksFor, setIsLoadingLinksFor] = useState<string | null>(null);
   const [openCampaignActionsFor, setOpenCampaignActionsFor] = useState<string | null>(null);
+  const [openAssignedProgramActionsFor, setOpenAssignedProgramActionsFor] = useState<string | null>(
+    null,
+  );
   const [editingCampaignId, setEditingCampaignId] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<ClientTab>("overview");
+  const [activeTab, setActiveTab] = useState<ClientTab>(initialTab);
   const [isEditingCompanyProfile, setIsEditingCompanyProfile] = useState(false);
   const [isSavingCompanyProfile, setIsSavingCompanyProfile] = useState(false);
   const [companyForm, setCompanyForm] = useState<ClientProfileForm>({
@@ -325,22 +352,32 @@ export function ManagerClientFicha({ clientId }: { clientId: string }) {
     programId: string;
     status: ContinuousProgramStatus;
     deployedAt: string;
+    scheduleFrequency: string;
+    scheduleAnchorDate: string;
   }>({
     programId: "",
     status: "Active",
     deployedAt: "",
+    scheduleFrequency: "monthly",
+    scheduleAnchorDate: "",
   });
   const [editingAssignedProgramId, setEditingAssignedProgramId] = useState<string | null>(null);
   const [editAssignedProgramForm, setEditAssignedProgramForm] = useState<{
     status: ContinuousProgramStatus;
     deployedAt: string;
-    commitCalendarEvents: boolean;
-    calendarSlotStartsAt: string[];
+    scheduleFrequency: string;
+    scheduleAnchorDate: string;
+    provisorySlots: AvailabilitySlot[];
   }>({
     status: "Active",
     deployedAt: "",
-    commitCalendarEvents: true,
-    calendarSlotStartsAt: [],
+    scheduleFrequency: "monthly",
+    scheduleAnchorDate: "",
+    provisorySlots: [],
+  });
+  const [editCalendarMonth, setEditCalendarMonth] = useState(() => {
+    const now = new Date();
+    return new Date(now.getFullYear(), now.getMonth(), 1);
   });
 
   const selectedCampaign = useMemo(
@@ -370,11 +407,41 @@ export function ManagerClientFicha({ clientId }: { clientId: string }) {
     [assignedPrograms, editingAssignedProgramId],
   );
   const editingCadenceSlots = editingAssignedProgram?.cadenceSuggestedSlots ?? [];
+  const editingProvisorySlots = editingAssignedProgram?.calendarProvisorySlots ?? [];
   const editingCommittedSlots = editingAssignedProgram?.calendarCommittedSlots ?? [];
-  const selectedEditCalendarSlotSet = useMemo(
-    () => new Set(editAssignedProgramForm.calendarSlotStartsAt),
-    [editAssignedProgramForm.calendarSlotStartsAt],
+  const editingCalendarSlots = useMemo(
+    () =>
+      editAssignedProgramForm.provisorySlots
+        .slice()
+        .sort((left, right) => new Date(left.startsAt).getTime() - new Date(right.startsAt).getTime()),
+    [editAssignedProgramForm.provisorySlots],
   );
+  const editingSlotsByDay = useMemo(() => {
+    const map = new Map<string, AvailabilitySlot[]>();
+    for (const slot of editingCalendarSlots) {
+      const date = new Date(slot.startsAt);
+      if (Number.isNaN(date.getTime())) continue;
+      const key = dayKey(date);
+      map.set(key, [...(map.get(key) ?? []), slot]);
+    }
+    return map;
+  }, [editingCalendarSlots]);
+  const editingCalendarDays = useMemo(() => {
+    const start = new Date(editCalendarMonth.getFullYear(), editCalendarMonth.getMonth(), 1);
+    const gridStart = new Date(start);
+    gridStart.setDate(1 - start.getDay());
+    return Array.from({ length: 42 }, (_, index) => {
+      const value = new Date(gridStart);
+      value.setDate(gridStart.getDate() + index);
+      const key = dayKey(value);
+      return {
+        key,
+        value,
+        inMonth: value.getMonth() === editCalendarMonth.getMonth(),
+        slots: editingSlotsByDay.get(key) ?? [],
+      };
+    });
+  }, [editCalendarMonth, editingSlotsByDay]);
 
   const loadContinuousPrograms = useCallback(async (targetClientId: string) => {
     const response = await fetch(`/api/admin/clients/${targetClientId}/programs`, { cache: "no-store" });
@@ -400,7 +467,15 @@ export function ManagerClientFicha({ clientId }: { clientId: string }) {
         )
           ? previous.programId
           : nextAvailable.find((program) => !nextAssignedIds.has(program.id))?.id ?? "";
-      return { ...previous, programId: nextProgramId };
+      const selectedProgram = nextAvailable.find((program) => program.id === nextProgramId) ?? null;
+      return {
+        ...previous,
+        programId: nextProgramId,
+        scheduleFrequency: selectedProgram?.scheduleFrequency ?? previous.scheduleFrequency,
+        scheduleAnchorDate: selectedProgram?.scheduleAnchorDate
+          ? toDateInput(selectedProgram.scheduleAnchorDate)
+          : "",
+      };
     });
   }, []);
 
@@ -473,9 +548,18 @@ export function ManagerClientFicha({ clientId }: { clientId: string }) {
   }, [client, isEditingCompanyProfile]);
 
   useEffect(() => {
+    setActiveTab(initialTab);
+  }, [initialTab]);
+
+  useEffect(() => {
     if (activeTab === "assigned-drps") return;
     setOpenCampaignActionsFor(null);
     setIsLinksModalOpen(false);
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (activeTab === "assigned-continuous") return;
+    setOpenAssignedProgramActionsFor(null);
   }, [activeTab]);
 
   async function updateDiagnostic(campaignId: string, payload: Record<string, unknown>) {
@@ -680,48 +764,85 @@ export function ManagerClientFicha({ clientId }: { clientId: string }) {
     router.push(`/client/${client.portalSlug}/diagnostic/${campaign.id}`);
   }
 
+  function openAssignedProgramDetails(assignment: AssignedContinuousProgram) {
+    if (!client) return;
+    router.push(`/manager/clients/${client.id}/assigned-continuous/${assignment.id}`);
+  }
+
   function closeLinksModal() {
     setIsLinksModalOpen(false);
     setCopiedSectorId(null);
   }
 
   function openAssignProgramModal() {
-    const firstAvailableProgramId = unassignedProgramOptions[0]?.id ?? "";
+    const firstAvailableProgram = unassignedProgramOptions[0] ?? null;
     setAssignProgramForm({
-      programId: firstAvailableProgramId,
+      programId: firstAvailableProgram?.id ?? "",
       status: "Active",
       deployedAt: toDatetimeLocal(new Date().toISOString()),
+      scheduleFrequency: firstAvailableProgram?.scheduleFrequency ?? "monthly",
+      scheduleAnchorDate: firstAvailableProgram?.scheduleAnchorDate
+        ? toDateInput(firstAvailableProgram.scheduleAnchorDate)
+        : "",
     });
     setContinuousError("");
     setIsProgramModalOpen(true);
   }
 
   function startEditingAssignedProgram(assignment: AssignedContinuousProgram) {
-    const suggested = assignment.cadenceSuggestedSlots ?? [];
-    const committed = assignment.calendarCommittedSlots ?? [];
+    const suggested = assignment.calendarProvisorySlots ?? assignment.cadenceSuggestedSlots ?? [];
+    const sortedSlots = suggested
+      .slice()
+      .sort((left, right) => new Date(left.startsAt).getTime() - new Date(right.startsAt).getTime());
+    const firstSlot = sortedSlots[0] ? new Date(sortedSlots[0].startsAt) : null;
     setEditingAssignedProgramId(assignment.id);
     setEditAssignedProgramForm({
       status: assignment.status,
       deployedAt: toDatetimeLocal(assignment.deployedAt),
-      commitCalendarEvents: true,
-      calendarSlotStartsAt:
-        committed.length > 0
-          ? committed.map((slot) => slot.startsAt)
-          : suggested.slice(0, 4).map((slot) => slot.startsAt),
+      scheduleFrequency: assignment.scheduleFrequency ?? "monthly",
+      scheduleAnchorDate: assignment.scheduleAnchorDate
+        ? toDateInput(assignment.scheduleAnchorDate)
+        : "",
+      provisorySlots: sortedSlots,
     });
+    if (firstSlot && !Number.isNaN(firstSlot.getTime())) {
+      setEditCalendarMonth(new Date(firstSlot.getFullYear(), firstSlot.getMonth(), 1));
+    }
     setContinuousError("");
   }
 
-  function toggleEditCalendarSlot(startsAt: string) {
-    setEditAssignedProgramForm((previous) => {
-      const exists = previous.calendarSlotStartsAt.includes(startsAt);
-      return {
-        ...previous,
-        calendarSlotStartsAt: exists
-          ? previous.calendarSlotStartsAt.filter((value) => value !== startsAt)
-          : [...previous.calendarSlotStartsAt, startsAt],
-      };
-    });
+  function updateEditProvisorySlot(index: number, field: "startsAt" | "endsAt", value: string) {
+    const iso = fromDatetimeLocal(value);
+    setEditAssignedProgramForm((previous) => ({
+      ...previous,
+      provisorySlots: previous.provisorySlots.map((slot, slotIndex) =>
+        slotIndex === index && iso
+          ? {
+              ...slot,
+              [field]: iso,
+            }
+          : slot,
+      ),
+    }));
+  }
+
+  function removeEditProvisorySlot(index: number) {
+    setEditAssignedProgramForm((previous) => ({
+      ...previous,
+      provisorySlots: previous.provisorySlots.filter((_, slotIndex) => slotIndex !== index),
+    }));
+  }
+
+  function addEditProvisorySlot() {
+    const base = new Date(editCalendarMonth);
+    base.setDate(Math.max(base.getDate(), 1));
+    base.setHours(10, 0, 0, 0);
+    const startsAt = base.toISOString();
+    const endsAt = new Date(base.getTime() + 60 * 60 * 1000).toISOString();
+    setEditAssignedProgramForm((previous) => ({
+      ...previous,
+      provisorySlots: [...previous.provisorySlots, { startsAt, endsAt }],
+    }));
   }
 
   async function assignContinuousProgram() {
@@ -741,6 +862,8 @@ export function ManagerClientFicha({ clientId }: { clientId: string }) {
         programId: assignProgramForm.programId,
         status: assignProgramForm.status,
         ...(deployedAtIso ? { deployedAt: deployedAtIso } : {}),
+        scheduleFrequency: assignProgramForm.scheduleFrequency,
+        scheduleAnchorDate: assignProgramForm.scheduleAnchorDate || "",
       }),
     });
     const data = (await response.json().catch(() => ({}))) as { error?: string };
@@ -765,6 +888,9 @@ export function ManagerClientFicha({ clientId }: { clientId: string }) {
     setIsSavingProgram(true);
     setContinuousError("");
     const deployedAtIso = fromDatetimeLocal(editAssignedProgramForm.deployedAt);
+    const sortedProvisorySlots = editAssignedProgramForm.provisorySlots
+      .slice()
+      .sort((left, right) => new Date(left.startsAt).getTime() - new Date(right.startsAt).getTime());
     const response = await fetch(
       `/api/admin/clients/${client.id}/programs/${editingAssignedProgramId}`,
       {
@@ -773,21 +899,22 @@ export function ManagerClientFicha({ clientId }: { clientId: string }) {
         body: JSON.stringify({
           status: editAssignedProgramForm.status,
           ...(deployedAtIso ? { deployedAt: deployedAtIso } : {}),
-          commitCalendarEvents: editAssignedProgramForm.commitCalendarEvents,
-          calendarSlotStartsAt: editAssignedProgramForm.calendarSlotStartsAt,
+          scheduleFrequency: editAssignedProgramForm.scheduleFrequency,
+          scheduleAnchorDate: editAssignedProgramForm.scheduleAnchorDate || "",
+          provisorySlots: sortedProvisorySlots,
         }),
       },
     );
     const data = (await response.json().catch(() => ({}))) as {
       error?: string;
-      suggestedSlots?: AvailabilitySlot[];
+      provisorySlots?: AvailabilitySlot[];
     };
     if (!response.ok) {
-      const suggestedSlots = Array.isArray(data.suggestedSlots) ? data.suggestedSlots : [];
-      if (response.status === 409 && suggestedSlots.length > 0) {
+      const provisorySlots = Array.isArray(data.provisorySlots) ? data.provisorySlots : [];
+      if (response.status === 409 && provisorySlots.length > 0) {
         setEditAssignedProgramForm((previous) => ({
           ...previous,
-          calendarSlotStartsAt: suggestedSlots.slice(0, 4).map((slot) => slot.startsAt),
+          provisorySlots,
         }));
       }
       setContinuousError(data.error ?? "Falha ao atualizar programa atribuido.");
@@ -1408,7 +1535,7 @@ export function ManagerClientFicha({ clientId }: { clientId: string }) {
 
       {activeTab === "assigned-drps" ? (
         <>
-          <section className="rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
+          <section className="h-auto rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
             <div className="flex flex-wrap gap-2">
               <Link href={`/manager/clients/${client.id}/assign-drps`} className="rounded-full bg-[#0f5b73] px-4 py-2 text-sm font-semibold text-white">
                 Atribuir diagnosticos DRPS
@@ -1455,7 +1582,7 @@ export function ManagerClientFicha({ clientId }: { clientId: string }) {
                                 }
                                 className="rounded-full border border-[#c9dce8] px-3 py-1 text-xs font-semibold text-[#123447]"
                               >
-                                Acoes
+                                ...
                               </button>
                               {openCampaignActionsFor === campaign.id ? (
                                 <div className="absolute right-0 top-full z-20 mt-2 w-56 overflow-hidden rounded-xl border border-[#d8e4ee] bg-white shadow-lg">
@@ -1746,30 +1873,61 @@ export function ManagerClientFicha({ clientId }: { clientId: string }) {
                         <td className="px-2 py-2">{fmt(assignment.deployedAt)}</td>
                         <td className="px-2 py-2">{assignment.scheduleFrequency ?? "-"}</td>
                         <td className="px-2 py-2">
-                          <div className="flex flex-wrap gap-2">
+                          <div className="relative inline-flex">
                             <button
                               type="button"
-                              onClick={() => startEditingAssignedProgram(assignment)}
-                              disabled={isSavingProgram}
-                              className="rounded-full border border-[#b9d8a5] px-3 py-1 text-xs font-semibold text-[#2d5f23] disabled:opacity-50"
+                              onClick={() =>
+                                setOpenAssignedProgramActionsFor((previous) =>
+                                  previous === assignment.id ? null : assignment.id,
+                                )
+                              }
+                              className="rounded-full border border-[#c9dce8] px-3 py-1 text-xs font-semibold text-[#123447]"
                             >
-                              Editar
+                              ...
                             </button>
-                            <button
-                              type="button"
-                              onClick={() => void removeAssignedProgram(assignment.id)}
-                              disabled={isSavingProgram}
-                              className="rounded-full border border-[#f0b6b6] px-3 py-1 text-xs font-semibold text-[#8a2d2d] disabled:opacity-50"
-                            >
-                              Remover
-                            </button>
+                            {openAssignedProgramActionsFor === assignment.id ? (
+                              <div className="absolute right-0 top-full z-20 mt-2 w-56 overflow-hidden rounded-xl border border-[#d8e4ee] bg-white shadow-lg">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setOpenAssignedProgramActionsFor(null);
+                                    openAssignedProgramDetails(assignment);
+                                  }}
+                                  className="block w-full px-3 py-2 text-left text-xs font-semibold text-[#123447] hover:bg-[#f4f9fc]"
+                                >
+                                  Open
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setOpenAssignedProgramActionsFor(null);
+                                    startEditingAssignedProgram(assignment);
+                                  }}
+                                  disabled={isSavingProgram}
+                                  className="block w-full px-3 py-2 text-left text-xs font-semibold text-[#2d5f23] hover:bg-[#f4f9fc] disabled:cursor-not-allowed disabled:text-[#a8b7c0]"
+                                >
+                                  Editar
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setOpenAssignedProgramActionsFor(null);
+                                    void removeAssignedProgram(assignment.id);
+                                  }}
+                                  disabled={isSavingProgram}
+                                  className="block w-full px-3 py-2 text-left text-xs font-semibold text-[#8a2d2d] hover:bg-[#fff4f4] disabled:cursor-not-allowed disabled:text-[#a8b7c0]"
+                                >
+                                  Remover
+                                </button>
+                              </div>
+                            ) : null}
                           </div>
                         </td>
                       </tr>
                       {editingAssignedProgramId === assignment.id ? (
                         <tr className="border-b bg-[#f8fbfd]">
                           <td colSpan={6} className="px-2 py-3">
-                            <div className="grid gap-2 md:grid-cols-3">
+                            <div className="grid gap-2 md:grid-cols-4">
                               <select
                                 className="rounded border border-[#c9dce8] px-3 py-2 text-sm"
                                 value={editAssignedProgramForm.status}
@@ -1795,18 +1953,37 @@ export function ManagerClientFicha({ clientId }: { clientId: string }) {
                                   }))
                                 }
                               />
-                              <label className="flex items-center gap-2 rounded border border-[#c9dce8] bg-white px-3 py-2 text-xs text-[#456576]">
+                              <select
+                                className="rounded border border-[#c9dce8] px-3 py-2 text-sm"
+                                value={editAssignedProgramForm.scheduleFrequency}
+                                onChange={(event) =>
+                                  setEditAssignedProgramForm((previous) => ({
+                                    ...previous,
+                                    scheduleFrequency: event.target.value,
+                                  }))
+                                }
+                              >
+                                <option value="weekly">weekly</option>
+                                <option value="biweekly">biweekly</option>
+                                <option value="monthly">monthly</option>
+                                <option value="quarterly">quarterly</option>
+                                <option value="semiannual">semiannual</option>
+                                <option value="annual">annual</option>
+                                <option value="custom">custom</option>
+                              </select>
+                              <label className="rounded border border-[#c9dce8] bg-white px-3 py-2 text-xs text-[#456576]">
+                                Data ancora da cadencia
                                 <input
-                                  type="checkbox"
-                                  checked={editAssignedProgramForm.commitCalendarEvents}
+                                  type="date"
+                                  className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
+                                  value={editAssignedProgramForm.scheduleAnchorDate}
                                   onChange={(event) =>
                                     setEditAssignedProgramForm((previous) => ({
                                       ...previous,
-                                      commitCalendarEvents: event.target.checked,
+                                      scheduleAnchorDate: event.target.value,
                                     }))
                                   }
                                 />
-                                Commitar eventos no calendario do cliente
                               </label>
                             </div>
                             {editingCommittedSlots.length > 0 ? (
@@ -1826,39 +2003,126 @@ export function ManagerClientFicha({ clientId }: { clientId: string }) {
                                 </div>
                               </div>
                             ) : null}
-                            {editAssignedProgramForm.commitCalendarEvents ? (
-                              <div className="mt-3 rounded-xl border border-[#d8e4ee] bg-white p-3">
+                            <div className="mt-3 rounded-xl border border-[#d8e4ee] bg-white p-3">
+                              <div className="flex items-center justify-between gap-2">
                                 <p className="text-xs font-semibold uppercase tracking-[0.08em] text-[#365668]">
-                                  Calendario sugerido pela cadencia ({editingCadenceSlots.length})
+                                  Calendario sugerido pela cadencia ({editingCalendarSlots.length})
                                 </p>
-                                {editingCadenceSlots.length === 0 ? (
-                                  <p className="mt-2 text-xs text-[#5a7383]">
-                                    Sem sugestoes de datas no momento. Salve para recalcular.
-                                  </p>
-                                ) : (
-                                  <div className="mt-2 grid gap-2 md:grid-cols-2">
-                                    {editingCadenceSlots.map((slot) => {
-                                      const selected = selectedEditCalendarSlotSet.has(slot.startsAt);
-                                      return (
-                                        <button
-                                          key={`cadence-${assignment.id}-${slot.startsAt}`}
-                                          type="button"
-                                          onClick={() => toggleEditCalendarSlot(slot.startsAt)}
-                                          className={`rounded-lg border px-3 py-2 text-left text-xs ${
-                                            selected
-                                              ? "border-[#0f5b73] bg-[#dceef6] text-[#0f5b73]"
-                                              : "border-[#c9dce8] bg-[#f7fbfe] text-[#35515f]"
-                                          }`}
-                                        >
-                                          <p className="font-semibold">{fmt(slot.startsAt)}</p>
-                                          <p className="mt-0.5 text-[11px]">Fim {fmt(slot.endsAt)}</p>
-                                        </button>
-                                      );
-                                    })}
-                                  </div>
-                                )}
+                                <div className="flex gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setEditCalendarMonth(
+                                        (previous) =>
+                                          new Date(previous.getFullYear(), previous.getMonth() - 1, 1),
+                                      )
+                                    }
+                                    className="rounded-full border border-[#c9dce8] px-2 py-0.5 text-[11px] font-semibold text-[#35515f]"
+                                  >
+                                    Mes anterior
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setEditCalendarMonth(
+                                        (previous) =>
+                                          new Date(previous.getFullYear(), previous.getMonth() + 1, 1),
+                                      )
+                                    }
+                                    className="rounded-full border border-[#c9dce8] px-2 py-0.5 text-[11px] font-semibold text-[#35515f]"
+                                  >
+                                    Proximo
+                                  </button>
+                                </div>
                               </div>
-                            ) : null}
+                              <p className="mt-1 text-xs text-[#5a7383]">
+                                {new Intl.DateTimeFormat("pt-BR", { month: "long", year: "numeric" }).format(
+                                  editCalendarMonth,
+                                )}
+                              </p>
+                              {editingCalendarSlots.length === 0 ? (
+                                <p className="mt-2 text-xs text-[#5a7383]">
+                                  Sem eventos provisorios. Adicione manualmente ou salve para recalcular.
+                                </p>
+                              ) : null}
+                              <div className="mt-3 grid grid-cols-7 gap-1">
+                                {["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sab"].map((label) => (
+                                  <p key={`weekday-${label}`} className="text-center text-[10px] font-semibold text-[#5e7d8d]">
+                                    {label}
+                                  </p>
+                                ))}
+                                {editingCalendarDays.map((day) => (
+                                  <div
+                                    key={day.key}
+                                    className={`min-h-[80px] rounded border p-1 ${
+                                      day.inMonth ? "border-[#d7e6ee] bg-white" : "border-[#edf3f7] bg-[#f8fbfd]"
+                                    }`}
+                                  >
+                                    <p className={`text-[10px] font-semibold ${day.inMonth ? "text-[#163748]" : "text-[#86a0ac]"}`}>
+                                      {day.value.getDate()}
+                                    </p>
+                                    <div className="mt-1 space-y-1">
+                                      {day.slots.slice(0, 2).map((slot) => (
+                                        <p
+                                          key={`slot-pill-${assignment.id}-${slot.startsAt}`}
+                                          className="truncate rounded bg-[#e8f3f8] px-1 py-0.5 text-[10px] text-[#0f5b73]"
+                                          title={`${fmt(slot.startsAt)} - ${fmt(slot.endsAt)}`}
+                                        >
+                                          {fmtTime(slot.startsAt)}
+                                        </p>
+                                      ))}
+                                      {day.slots.length > 2 ? (
+                                        <p className="text-[10px] text-[#527083]">+{day.slots.length - 2}</p>
+                                      ) : null}
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                              <div className="mt-3 space-y-2">
+                                {editingCalendarSlots.map((slot, slotIndex) => (
+                                  <div
+                                    key={`editable-slot-${assignment.id}-${slot.startsAt}-${slotIndex}`}
+                                    className="grid gap-2 rounded-lg border border-[#d7e6ee] bg-[#f8fbfd] p-2 md:grid-cols-[1fr_1fr_auto]"
+                                  >
+                                    <input
+                                      type="datetime-local"
+                                      className="rounded border border-[#c9dce8] px-3 py-2 text-xs"
+                                      value={toDatetimeLocal(slot.startsAt)}
+                                      onChange={(event) =>
+                                        updateEditProvisorySlot(slotIndex, "startsAt", event.target.value)
+                                      }
+                                    />
+                                    <input
+                                      type="datetime-local"
+                                      className="rounded border border-[#c9dce8] px-3 py-2 text-xs"
+                                      value={toDatetimeLocal(slot.endsAt)}
+                                      onChange={(event) =>
+                                        updateEditProvisorySlot(slotIndex, "endsAt", event.target.value)
+                                      }
+                                    />
+                                    <button
+                                      type="button"
+                                      onClick={() => removeEditProvisorySlot(slotIndex)}
+                                      className="rounded-full border border-[#f0b6b6] px-3 py-1 text-xs font-semibold text-[#8a2d2d]"
+                                    >
+                                      Remover
+                                    </button>
+                                  </div>
+                                ))}
+                              </div>
+                              <button
+                                type="button"
+                                onClick={addEditProvisorySlot}
+                                className="mt-2 rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
+                              >
+                                Adicionar evento provisorio
+                              </button>
+                              {editingProvisorySlots.length > 0 && editingCadenceSlots.length > 0 ? (
+                                <p className="mt-2 text-[11px] text-[#4f6977]">
+                                  Ultimo calculo automatico: {editingCadenceSlots.length} sugestoes.
+                                </p>
+                              ) : null}
+                            </div>
                             <div className="mt-3 flex gap-2">
                               <button
                                 type="button"
@@ -1909,10 +2173,21 @@ export function ManagerClientFicha({ clientId }: { clientId: string }) {
                           className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
                           value={assignProgramForm.programId}
                           onChange={(event) =>
-                            setAssignProgramForm((previous) => ({
-                              ...previous,
-                              programId: event.target.value,
-                            }))
+                            setAssignProgramForm((previous) => {
+                              const nextProgram =
+                                unassignedProgramOptions.find(
+                                  (program) => program.id === event.target.value,
+                                ) ?? null;
+                              return {
+                                ...previous,
+                                programId: event.target.value,
+                                scheduleFrequency:
+                                  nextProgram?.scheduleFrequency ?? previous.scheduleFrequency,
+                                scheduleAnchorDate: nextProgram?.scheduleAnchorDate
+                                  ? toDateInput(nextProgram.scheduleAnchorDate)
+                                  : "",
+                              };
+                            })
                           }
                         >
                           {unassignedProgramOptions.map((program) => (
@@ -1939,6 +2214,27 @@ export function ManagerClientFicha({ clientId }: { clientId: string }) {
                           <option value="Completed">Completed</option>
                         </select>
                       </label>
+                      <label className="text-xs text-[#4f6977]">
+                        Recorrencia para este cliente
+                        <select
+                          className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
+                          value={assignProgramForm.scheduleFrequency}
+                          onChange={(event) =>
+                            setAssignProgramForm((previous) => ({
+                              ...previous,
+                              scheduleFrequency: event.target.value,
+                            }))
+                          }
+                        >
+                          <option value="weekly">weekly</option>
+                          <option value="biweekly">biweekly</option>
+                          <option value="monthly">monthly</option>
+                          <option value="quarterly">quarterly</option>
+                          <option value="semiannual">semiannual</option>
+                          <option value="annual">annual</option>
+                          <option value="custom">custom</option>
+                        </select>
+                      </label>
                       <label className="text-xs text-[#4f6977] md:col-span-2">
                         Data de aplicacao
                         <input
@@ -1953,6 +2249,20 @@ export function ManagerClientFicha({ clientId }: { clientId: string }) {
                           }
                         />
                       </label>
+                      <label className="text-xs text-[#4f6977] md:col-span-2">
+                        Data ancora da recorrencia (opcional)
+                        <input
+                          type="date"
+                          className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
+                          value={assignProgramForm.scheduleAnchorDate}
+                          onChange={(event) =>
+                            setAssignProgramForm((previous) => ({
+                              ...previous,
+                              scheduleAnchorDate: event.target.value,
+                            }))
+                          }
+                        />
+                      </label>
                     </div>
                     {selectedProgramToAssign ? (
                       <div className="mt-3 rounded-xl border border-[#d8e4ee] bg-[#f8fbfd] p-3">
@@ -1960,6 +2270,9 @@ export function ManagerClientFicha({ clientId }: { clientId: string }) {
                         <p className="mt-1 text-xs text-[#4f6977]">
                           Topico alvo {selectedProgramToAssign.targetRiskTopic} | Gatilho{" "}
                           {selectedProgramToAssign.triggerThreshold.toFixed(2)}
+                        </p>
+                        <p className="mt-1 text-xs text-[#4f6977]">
+                          Recorrencia padrao: {selectedProgramToAssign.scheduleFrequency}
                         </p>
                         <p className="mt-1 text-xs text-[#5a7383]">{selectedProgramToAssign.description ?? "-"}</p>
                       </div>

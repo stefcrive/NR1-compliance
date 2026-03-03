@@ -10,6 +10,7 @@ import {
 import { isAdminApiAuthorized } from "@/lib/admin-auth";
 import {
   buildDrpsCalendarEvents,
+  extractCalendarEventDetails,
   loadStoredCalendarEvents,
   mergeAndSortMasterCalendarEvents,
   type MasterCalendarEvent,
@@ -36,6 +37,8 @@ type ClientProgramRow = {
   program_id: string;
   status: "Recommended" | "Active" | "Completed";
   deployed_at?: string | null;
+  schedule_frequency_override?: string | null;
+  schedule_anchor_date_override?: string | null;
 };
 
 type ClientCampaignRow = {
@@ -47,16 +50,34 @@ type ClientCampaignRow = {
 };
 
 type CalendarMeetingRow = {
+  event_id: string;
   source_client_program_id: string | null;
   starts_at: string;
   ends_at: string;
   status: "scheduled" | "completed" | "cancelled";
+  metadata?: unknown;
 };
+
+const cadenceFrequencyValues = [
+  "weekly",
+  "biweekly",
+  "monthly",
+  "quarterly",
+  "semiannual",
+  "annual",
+  "custom",
+] as const;
 
 const assignProgramSchema = z.object({
   programId: z.string().trim().min(1).max(120),
   status: z.enum(["Recommended", "Active", "Completed"]).optional(),
   deployedAt: z.string().datetime().optional().or(z.literal("")),
+  scheduleFrequency: z.enum(cadenceFrequencyValues).optional(),
+  scheduleAnchorDate: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .optional()
+    .or(z.literal("")),
 });
 
 function mapAvailableProgram(program: PeriodicProgramRow) {
@@ -76,10 +97,15 @@ function mapAssignedProgram(
   programById: Map<string, PeriodicProgramRow>,
   options?: {
     cadenceSuggestedSlots?: AvailabilitySlot[];
+    calendarProvisorySlots?: AvailabilitySlot[];
     calendarCommittedSlots?: AvailabilitySlot[];
   },
 ) {
   const program = programById.get(assignment.program_id) ?? null;
+  const scheduleFrequency =
+    assignment.schedule_frequency_override ?? program?.schedule_frequency ?? "monthly";
+  const scheduleAnchorDate =
+    assignment.schedule_anchor_date_override ?? program?.schedule_anchor_date ?? null;
   return {
     id: assignment.client_program_id,
     programId: assignment.program_id,
@@ -87,11 +113,12 @@ function mapAssignedProgram(
     programDescription: program?.description ?? null,
     targetRiskTopic: program ? Number(program.target_risk_topic) : null,
     triggerThreshold: program ? Number(program.trigger_threshold) : null,
-    scheduleFrequency: program?.schedule_frequency ?? "monthly",
-    scheduleAnchorDate: program?.schedule_anchor_date ?? null,
+    scheduleFrequency,
+    scheduleAnchorDate,
     status: assignment.status,
     deployedAt: assignment.deployed_at ?? null,
     cadenceSuggestedSlots: options?.cadenceSuggestedSlots ?? [],
+    calendarProvisorySlots: options?.calendarProvisorySlots ?? [],
     calendarCommittedSlots: options?.calendarCommittedSlots ?? [],
   };
 }
@@ -161,14 +188,36 @@ async function loadProgramById(programId: string) {
 
 async function loadAssignments(clientId: string) {
   const supabase = getSupabaseAdminClient();
-  const withDeployedAt = await supabase
+  const withOverrides = await supabase
     .from("client_programs")
-    .select("client_program_id,program_id,status,deployed_at")
+    .select(
+      "client_program_id,program_id,status,deployed_at,schedule_frequency_override,schedule_anchor_date_override",
+    )
     .eq("client_id", clientId)
     .order("deployed_at", { ascending: false })
     .returns<ClientProgramRow[]>();
 
-  if (withDeployedAt.error && isMissingColumnError(withDeployedAt.error, "deployed_at")) {
+  if (withOverrides.error && isMissingColumnError(withOverrides.error, "schedule_frequency_override")) {
+    const withoutOverrides = await supabase
+      .from("client_programs")
+      .select("client_program_id,program_id,status,deployed_at")
+      .eq("client_id", clientId)
+      .order("deployed_at", { ascending: false })
+      .returns<ClientProgramRow[]>();
+
+    if (withoutOverrides.error && isMissingColumnError(withoutOverrides.error, "deployed_at")) {
+      const fallback = await supabase
+        .from("client_programs")
+        .select("client_program_id,program_id,status")
+        .eq("client_id", clientId)
+        .returns<ClientProgramRow[]>();
+      return fallback;
+    }
+
+    return withoutOverrides;
+  }
+
+  if (withOverrides.error && isMissingColumnError(withOverrides.error, "deployed_at")) {
     const fallback = await supabase
       .from("client_programs")
       .select("client_program_id,program_id,status")
@@ -177,15 +226,14 @@ async function loadAssignments(clientId: string) {
     return fallback;
   }
 
-  return withDeployedAt;
+  return withOverrides;
 }
 
-async function loadClientMasterCalendarEvents(clientId: string): Promise<MasterCalendarEvent[]> {
+async function loadManagerMasterCalendarEvents(): Promise<MasterCalendarEvent[]> {
   const supabase = getSupabaseAdminClient();
   const campaignsResult = await supabase
     .from("surveys")
     .select("id,client_id,name,starts_at,closes_at")
-    .eq("client_id", clientId)
     .returns<ClientCampaignRow[]>();
 
   if (
@@ -197,22 +245,30 @@ async function loadClientMasterCalendarEvents(clientId: string): Promise<MasterC
   }
 
   const drpsEvents = buildDrpsCalendarEvents(campaignsResult.data ?? []);
-  const stored = await loadStoredCalendarEvents(supabase, { clientId });
+  const stored = await loadStoredCalendarEvents(supabase);
   return mergeAndSortMasterCalendarEvents(drpsEvents, stored.events);
 }
 
 async function loadCommittedMeetingsByAssignment(
   clientId: string,
   assignmentIds: string[],
-): Promise<{ byAssignment: Map<string, AvailabilitySlot[]>; unavailable: boolean }> {
+): Promise<{
+  committedByAssignment: Map<string, AvailabilitySlot[]>;
+  provisoryByAssignment: Map<string, AvailabilitySlot[]>;
+  unavailable: boolean;
+}> {
   if (assignmentIds.length === 0) {
-    return { byAssignment: new Map(), unavailable: false };
+    return {
+      committedByAssignment: new Map(),
+      provisoryByAssignment: new Map(),
+      unavailable: false,
+    };
   }
 
   const supabase = getSupabaseAdminClient();
   const result = await supabase
     .from("calendar_events")
-    .select("source_client_program_id,starts_at,ends_at,status")
+    .select("event_id,source_client_program_id,starts_at,ends_at,status,metadata")
     .eq("client_id", clientId)
     .eq("event_type", "continuous_meeting")
     .in("source_client_program_id", assignmentIds)
@@ -221,20 +277,80 @@ async function loadCommittedMeetingsByAssignment(
 
   if (result.error) {
     if (isMissingTableError(result.error, "calendar_events")) {
-      return { byAssignment: new Map(), unavailable: true };
+      return {
+        committedByAssignment: new Map(),
+        provisoryByAssignment: new Map(),
+        unavailable: true,
+      };
     }
     throw result.error;
   }
 
-  const byAssignment = new Map<string, AvailabilitySlot[]>();
+  const committedByAssignment = new Map<string, AvailabilitySlot[]>();
+  const provisoryByAssignment = new Map<string, AvailabilitySlot[]>();
   for (const row of result.data ?? []) {
     if (!row.source_client_program_id) continue;
     if (row.status === "cancelled") continue;
-    const list = byAssignment.get(row.source_client_program_id) ?? [];
+    const details = extractCalendarEventDetails(row.metadata);
+    const targetMap =
+      details.eventLifecycle === "provisory" ? provisoryByAssignment : committedByAssignment;
+    const list = targetMap.get(row.source_client_program_id) ?? [];
     list.push({ startsAt: row.starts_at, endsAt: row.ends_at });
-    byAssignment.set(row.source_client_program_id, list);
+    targetMap.set(row.source_client_program_id, list);
   }
-  return { byAssignment, unavailable: false };
+  return { committedByAssignment, provisoryByAssignment, unavailable: false };
+}
+
+function resolveCadenceForAssignment(
+  assignment: ClientProgramRow,
+  program: PeriodicProgramRow | null,
+): { scheduleFrequency: string; scheduleAnchorDate: string | null } {
+  return {
+    scheduleFrequency:
+      assignment.schedule_frequency_override ?? program?.schedule_frequency ?? "monthly",
+    scheduleAnchorDate:
+      assignment.schedule_anchor_date_override ?? program?.schedule_anchor_date ?? null,
+  };
+}
+
+async function insertProvisoryAssignmentEvents(params: {
+  clientId: string;
+  assignmentId: string;
+  programTitle: string;
+  slots: AvailabilitySlot[];
+}) {
+  if (params.slots.length === 0) return { unavailable: false as const };
+  const supabase = getSupabaseAdminClient();
+  const insertEvents = await supabase.from("calendar_events").insert(
+    params.slots.map((slot) => ({
+      event_id: randomUUID(),
+      client_id: params.clientId,
+      source_client_program_id: params.assignmentId,
+      event_type: "continuous_meeting",
+      title: `Reuniao processo continuo: ${params.programTitle}`,
+      starts_at: slot.startsAt,
+      ends_at: slot.endsAt,
+      status: "scheduled",
+      created_by: "manager",
+      metadata: {
+        source: "manager_assignment_auto",
+        eventLifecycle: "provisory",
+        proposalKind: "assignment",
+        content: `Reuniao provisoria gerada pela cadencia do programa ${params.programTitle}.`,
+        preparationRequired: "Revisar indicadores recentes e alinhar proximos passos.",
+      },
+      updated_at: new Date().toISOString(),
+    })),
+  );
+
+  if (insertEvents.error) {
+    if (isMissingTableError(insertEvents.error, "calendar_events")) {
+      return { unavailable: true as const };
+    }
+    throw insertEvents.error;
+  }
+
+  return { unavailable: false as const };
 }
 
 export async function GET(
@@ -278,43 +394,51 @@ export async function GET(
 
   let clientMasterCalendarEvents: MasterCalendarEvent[] = [];
   try {
-    clientMasterCalendarEvents = await loadClientMasterCalendarEvents(clientId);
+    clientMasterCalendarEvents = await loadManagerMasterCalendarEvents();
   } catch {
     clientMasterCalendarEvents = [];
   }
 
   let committedByAssignment = new Map<string, AvailabilitySlot[]>();
+  let provisoryByAssignment = new Map<string, AvailabilitySlot[]>();
   try {
     const loaded = await loadCommittedMeetingsByAssignment(
       clientId,
       assignments.map((assignment) => assignment.client_program_id),
     );
-    committedByAssignment = loaded.byAssignment;
+    committedByAssignment = loaded.committedByAssignment;
+    provisoryByAssignment = loaded.provisoryByAssignment;
   } catch {
     committedByAssignment = new Map<string, AvailabilitySlot[]>();
+    provisoryByAssignment = new Map<string, AvailabilitySlot[]>();
   }
 
   return NextResponse.json({
     availablePrograms: (programsResult.data ?? []).map(mapAvailableProgram),
-    assignedPrograms: assignments.map((item) =>
-      mapAssignedProgram(item, programById, {
-        cadenceSuggestedSlots:
-          item.status === "Completed"
-            ? []
+    assignedPrograms: assignments.map((item) => {
+      const program = programById.get(item.program_id) ?? null;
+      const cadence = resolveCadenceForAssignment(item, program);
+      const provisorySlots = provisoryByAssignment.get(item.client_program_id) ?? [];
+      const cadenceSuggestedSlots =
+        item.status === "Completed"
+          ? []
+          : provisorySlots.length > 0
+            ? provisorySlots
             : buildSuggestedAvailabilitySlots({
                 deployedAt: item.deployed_at ?? new Date().toISOString(),
-                scheduleFrequency:
-                  programById.get(item.program_id)?.schedule_frequency ?? null,
-                scheduleAnchorDate:
-                  programById.get(item.program_id)?.schedule_anchor_date ?? null,
+                scheduleFrequency: cadence.scheduleFrequency,
+                scheduleAnchorDate: cadence.scheduleAnchorDate,
                 existingEvents: clientMasterCalendarEvents.filter(
                   (event) => event.sourceClientProgramId !== item.client_program_id,
                 ),
-              }),
-        calendarCommittedSlots:
-          committedByAssignment.get(item.client_program_id) ?? [],
-      }),
-    ),
+              });
+
+      return mapAssignedProgram(item, programById, {
+        cadenceSuggestedSlots,
+        calendarProvisorySlots: provisorySlots,
+        calendarCommittedSlots: committedByAssignment.get(item.client_program_id) ?? [],
+      });
+    }),
   });
 }
 
@@ -406,11 +530,27 @@ export async function POST(
       status: parsed.status ?? "Active",
       deployed_at:
         parsed.deployedAt && parsed.deployedAt.length > 0 ? parsed.deployedAt : new Date().toISOString(),
+      schedule_frequency_override: parsed.scheduleFrequency ?? null,
+      schedule_anchor_date_override:
+        parsed.scheduleAnchorDate && parsed.scheduleAnchorDate.length > 0
+          ? parsed.scheduleAnchorDate
+          : null,
     })
-    .select("client_program_id,program_id,status,deployed_at")
+    .select(
+      "client_program_id,program_id,status,deployed_at,schedule_frequency_override,schedule_anchor_date_override",
+    )
     .maybeSingle<ClientProgramRow>();
 
   if (insertResult.error) {
+    if (isMissingColumnError(insertResult.error, "schedule_frequency_override")) {
+      return NextResponse.json(
+        {
+          error:
+            "Cadence override columns are unavailable. Apply migration 20260303130000_client_program_cadence_override.sql.",
+        },
+        { status: 412 },
+      );
+    }
     if (isMissingTableError(insertResult.error, "client_programs")) {
       return NextResponse.json(
         {
@@ -429,14 +569,23 @@ export async function POST(
 
   const programById = new Map([[programResult.data.program_id, programResult.data]]);
   let cadenceSuggestedSlots: AvailabilitySlot[] = [];
+  const cadence = resolveCadenceForAssignment(insertResult.data, programResult.data);
+  let calendarUnavailable = false;
   try {
-    const masterEvents = await loadClientMasterCalendarEvents(clientId);
+    const masterEvents = await loadManagerMasterCalendarEvents();
     cadenceSuggestedSlots = buildSuggestedAvailabilitySlots({
       deployedAt: insertResult.data.deployed_at ?? new Date().toISOString(),
-      scheduleFrequency: programResult.data.schedule_frequency ?? null,
-      scheduleAnchorDate: programResult.data.schedule_anchor_date ?? null,
+      scheduleFrequency: cadence.scheduleFrequency,
+      scheduleAnchorDate: cadence.scheduleAnchorDate,
       existingEvents: masterEvents,
     });
+    const inserted = await insertProvisoryAssignmentEvents({
+      clientId,
+      assignmentId: insertResult.data.client_program_id,
+      programTitle: programResult.data.title,
+      slots: cadenceSuggestedSlots,
+    });
+    calendarUnavailable = inserted.unavailable;
   } catch {
     cadenceSuggestedSlots = [];
   }
@@ -445,8 +594,10 @@ export async function POST(
     {
       assignment: mapAssignedProgram(insertResult.data, programById, {
         cadenceSuggestedSlots,
+        calendarProvisorySlots: cadenceSuggestedSlots,
         calendarCommittedSlots: [],
       }),
+      calendarUnavailable,
     },
     { status: 201 },
   );

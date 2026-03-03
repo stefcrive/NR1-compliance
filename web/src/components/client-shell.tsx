@@ -14,16 +14,6 @@ function HomeIcon({ className = "h-4 w-4" }: IconProps) {
   );
 }
 
-function BuildingIcon({ className = "h-4 w-4" }: IconProps) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={className}>
-      <path d="M4 21h16" />
-      <path d="M6 21V5h12v16" />
-      <path d="M9 9h.01M12 9h.01M15 9h.01M9 13h.01M12 13h.01M15 13h.01" />
-    </svg>
-  );
-}
-
 function ClipboardIcon({ className = "h-4 w-4" }: IconProps) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={className}>
@@ -42,6 +32,27 @@ function GridIcon({ className = "h-4 w-4" }: IconProps) {
   );
 }
 
+function ReportIcon({ className = "h-4 w-4" }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={className}>
+      <path d="M6 3h9l3 3v15H6z" />
+      <path d="M15 3v4h4" />
+      <path d="M9 11h6M9 15h6M9 19h4" />
+    </svg>
+  );
+}
+
+function ContractIcon({ className = "h-4 w-4" }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={className}>
+      <path d="M7 4h10l2 2v12l-2 2H7l-2-2V6z" />
+      <path d="M9 10h6M9 14h6" />
+      <circle cx="9" cy="18" r="1" />
+      <circle cx="15" cy="18" r="1" />
+    </svg>
+  );
+}
+
 function LinkIcon({ className = "h-4 w-4" }: IconProps) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={className}>
@@ -53,9 +64,10 @@ function LinkIcon({ className = "h-4 w-4" }: IconProps) {
 }
 
 const NAV_ITEMS = [
-  { key: "company", suffix: "company", label: "Company", icon: BuildingIcon },
   { key: "diagnostic", suffix: "diagnostic", label: "DRPS Diagnostics", icon: ClipboardIcon },
-  { key: "programs", suffix: "programs", label: "Continuous Programs", icon: GridIcon },
+  { key: "programs", suffix: "programs", label: "Continuous Program", icon: GridIcon },
+  { key: "reports", suffix: "reports", label: "Reports", icon: ReportIcon },
+  { key: "contracts", suffix: "contracts", label: "Contracts and invoces", icon: ContractIcon },
 ] as const;
 
 export function ClientShell({
@@ -86,7 +98,7 @@ export function ClientShell({
                   <Link
                     href={companyHref}
                     className={`flex items-center gap-2 rounded-xl px-3 py-2 text-sm ${
-                      pathname === companyHref
+                      pathname === companyHref || pathname === `/client/${clientSlug}`
                         ? "bg-white font-semibold text-[#0f1720]"
                         : "text-[#202f38] hover:bg-white/70"
                     }`}

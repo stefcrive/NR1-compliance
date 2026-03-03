@@ -43,6 +43,13 @@ type MasterCalendarEvent = {
   endsAt: string;
   status: "scheduled" | "completed" | "cancelled";
   sourceClientProgramId: string | null;
+  details: {
+    content: string | null;
+    preparationRequired: string | null;
+    eventLifecycle: "provisory" | "committed";
+    proposalKind: "assignment" | "reschedule" | null;
+    availabilityRequestId: string | null;
+  };
 };
 
 type ActiveContinuousProgram = {
@@ -97,6 +104,7 @@ const COPY = {
     billingOverdue: "Overdue",
     billingBlocked: "Blocked",
     calendarTitle: "DRPS diagnostics calendar",
+    calendarHint: "Click events to see details. Drag managed events to move the day.",
     prevMonth: "Previous month",
     nextMonth: "Next month",
     liveDrps: "Active DRPS diagnostics",
@@ -136,6 +144,37 @@ const COPY = {
     loadClientsError: "Failed to load clients.",
     campaignsDownError: "DRPS diagnostics are unavailable now. Clients area is still operational.",
     workspaceLoadError: "Failed to load manager workspace.",
+    eventDetailsTitle: "Event details",
+    eventDetailsType: "Type",
+    eventDetailsCompany: "Company",
+    eventDetailsWhen: "When",
+    eventDetailsLifecycle: "Lifecycle",
+    eventDetailsContent: "Content",
+    eventDetailsPreparation: "Preparation required",
+    eventDetailsNoContent: "No detailed content registered.",
+    eventDetailsNoPreparation: "No preparation registered.",
+    eventTypeDrpsStart: "DRPS start",
+    eventTypeDrpsClose: "DRPS close",
+    eventTypeMeeting: "Continuous meeting",
+    eventTypeBlocked: "Blocked time",
+    eventReadOnly: "This event is read-only.",
+    eventEditTitleLabel: "Title",
+    eventEditStartLabel: "Start",
+    eventEditEndLabel: "End",
+    eventEditSave: "Save changes",
+    eventEditSaving: "Saving...",
+    eventEditSuccess: "Event updated.",
+    eventEditError: "Could not update event.",
+    invalidTimeRange: "Invalid time range.",
+    eventCloseAction: "Close",
+    eventOpenDrpsResults: "Open DRPS results",
+    eventOpenProgramDetails: "Open process details",
+    eventLifecycleCommitted: "Committed",
+    eventLifecycleProvisory: "Provisory",
+    eventProposalAssignment: "Cadence suggestion",
+    eventProposalReschedule: "Reschedule request",
+    eventCommitReschedule: "Confirm reschedule",
+    eventCommitRescheduleError: "Could not confirm reschedule.",
   },
   pt: {
     title: "Area do gestor",
@@ -168,6 +207,7 @@ const COPY = {
     billingOverdue: "Atrasado",
     billingBlocked: "Bloqueado",
     calendarTitle: "Calendario de diagnosticos DRPS",
+    calendarHint: "Clique para ver detalhes. Arraste eventos gerenciados para mover o dia.",
     prevMonth: "Mes anterior",
     nextMonth: "Proximo",
     liveDrps: "Diagnosticos DRPS ativos",
@@ -207,6 +247,37 @@ const COPY = {
     loadClientsError: "Falha ao carregar clientes.",
     campaignsDownError: "Diagnosticos DRPS indisponiveis no momento. A area de clientes segue operacional.",
     workspaceLoadError: "Erro ao carregar area do gestor.",
+    eventDetailsTitle: "Detalhes do evento",
+    eventDetailsType: "Tipo",
+    eventDetailsCompany: "Empresa",
+    eventDetailsWhen: "Quando",
+    eventDetailsLifecycle: "Ciclo",
+    eventDetailsContent: "Conteudo",
+    eventDetailsPreparation: "Preparacao necessaria",
+    eventDetailsNoContent: "Nenhum conteudo detalhado cadastrado.",
+    eventDetailsNoPreparation: "Nenhuma preparacao cadastrada.",
+    eventTypeDrpsStart: "Inicio DRPS",
+    eventTypeDrpsClose: "Fechamento DRPS",
+    eventTypeMeeting: "Reuniao continua",
+    eventTypeBlocked: "Bloqueio",
+    eventReadOnly: "Este evento e somente leitura.",
+    eventEditTitleLabel: "Titulo",
+    eventEditStartLabel: "Inicio",
+    eventEditEndLabel: "Fim",
+    eventEditSave: "Salvar alteracoes",
+    eventEditSaving: "Salvando...",
+    eventEditSuccess: "Evento atualizado.",
+    eventEditError: "Nao foi possivel atualizar o evento.",
+    invalidTimeRange: "Intervalo de horario invalido.",
+    eventCloseAction: "Fechar",
+    eventOpenDrpsResults: "Abrir resultado DRPS",
+    eventOpenProgramDetails: "Abrir detalhes do processo",
+    eventLifecycleCommitted: "Commitado",
+    eventLifecycleProvisory: "Provisorio",
+    eventProposalAssignment: "Sugestao de cadencia",
+    eventProposalReschedule: "Pedido de reagendamento",
+    eventCommitReschedule: "Confirmar reagendamento",
+    eventCommitRescheduleError: "Nao foi possivel confirmar o reagendamento.",
   },
 } as const;
 
@@ -223,6 +294,12 @@ function toDate(value: string, locale: ManagerLocale) {
 function toDatetimeLocal(value: Date) {
   const local = new Date(value.getTime() - value.getTimezoneOffset() * 60000);
   return local.toISOString().slice(0, 16);
+}
+
+function toDatetimeLocalFromIso(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return toDatetimeLocal(date);
 }
 
 function dayKey(date: Date) {
@@ -319,6 +396,15 @@ export function ManagerWorkspace({
   const [blockEndsAt, setBlockEndsAt] = useState(() => toDatetimeLocal(new Date(Date.now() + 25 * 60 * 60 * 1000)));
   const [isSavingBlock, setIsSavingBlock] = useState(false);
   const [blockFeedback, setBlockFeedback] = useState("");
+  const [selectedCalendarEventId, setSelectedCalendarEventId] = useState<string | null>(null);
+  const [eventEditTitle, setEventEditTitle] = useState("");
+  const [eventEditStartsAt, setEventEditStartsAt] = useState("");
+  const [eventEditEndsAt, setEventEditEndsAt] = useState("");
+  const [eventEditContent, setEventEditContent] = useState("");
+  const [eventEditPreparation, setEventEditPreparation] = useState("");
+  const [isSavingEventEdit, setIsSavingEventEdit] = useState(false);
+  const [eventEditFeedback, setEventEditFeedback] = useState("");
+  const [draggingEventId, setDraggingEventId] = useState<string | null>(null);
 
   const loadAll = useCallback(async () => {
     setLoading(true);
@@ -450,12 +536,309 @@ export function ManagerWorkspace({
     );
   }, [calendarEvents, calendarIsolation]);
 
+  const isEditableCalendarEvent = useCallback(
+    (event: MasterCalendarEvent) =>
+      event.eventType === "blocked" || event.eventType === "continuous_meeting",
+    [],
+  );
+
+  const selectedCalendarEvent = useMemo(
+    () =>
+      selectedCalendarEventId
+        ? calendarEvents.find((event) => event.id === selectedCalendarEventId) ?? null
+        : null,
+    [calendarEvents, selectedCalendarEventId],
+  );
+
+  useEffect(() => {
+    if (!selectedCalendarEventId) return;
+    if (calendarEvents.some((event) => event.id === selectedCalendarEventId)) return;
+    setSelectedCalendarEventId(null);
+  }, [calendarEvents, selectedCalendarEventId]);
+
+  useEffect(() => {
+    if (!selectedCalendarEvent) {
+      setEventEditTitle("");
+      setEventEditStartsAt("");
+      setEventEditEndsAt("");
+      setEventEditContent("");
+      setEventEditPreparation("");
+      setEventEditFeedback("");
+      return;
+    }
+    setEventEditTitle(selectedCalendarEvent.title);
+    setEventEditStartsAt(toDatetimeLocalFromIso(selectedCalendarEvent.startsAt));
+    setEventEditEndsAt(toDatetimeLocalFromIso(selectedCalendarEvent.endsAt));
+    setEventEditContent(selectedCalendarEvent.details?.content ?? "");
+    setEventEditPreparation(selectedCalendarEvent.details?.preparationRequired ?? "");
+    setEventEditFeedback("");
+  }, [selectedCalendarEvent]);
+
+  const updateCalendarEvent = useCallback(
+    async (payload: {
+      eventId: string;
+      title?: string;
+      startsAt?: string;
+      endsAt?: string;
+      content?: string | null;
+      preparationRequired?: string | null;
+      commitProvisoryReschedule?: boolean;
+    }) => {
+      const response = await fetch("/api/admin/calendar", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const body = (await response.json().catch(() => ({}))) as {
+        error?: string;
+        event?: MasterCalendarEvent;
+      };
+      if (!response.ok || !body.event) {
+        throw new Error(body.error ?? t.eventEditError);
+      }
+      const nextEvent = body.event;
+      setCalendarEvents((previous) =>
+        previous.map((event) =>
+          event.id === nextEvent.id
+            ? {
+                ...event,
+                ...nextEvent,
+                clientName: nextEvent.clientName ?? event.clientName,
+              }
+            : event,
+        ),
+      );
+      return nextEvent;
+    },
+    [t.eventEditError],
+  );
+
+  const saveSelectedCalendarEvent = useCallback(async () => {
+    if (!selectedCalendarEvent || !isEditableCalendarEvent(selectedCalendarEvent)) return;
+
+    const nextStart = new Date(eventEditStartsAt);
+    const nextEnd = new Date(eventEditEndsAt);
+    if (
+      Number.isNaN(nextStart.getTime()) ||
+      Number.isNaN(nextEnd.getTime()) ||
+      nextEnd.getTime() <= nextStart.getTime()
+    ) {
+      setEventEditFeedback(t.invalidTimeRange);
+      return;
+    }
+
+    setIsSavingEventEdit(true);
+    setEventEditFeedback("");
+    try {
+      await updateCalendarEvent({
+        eventId: selectedCalendarEvent.id,
+        title: eventEditTitle.trim(),
+        startsAt: nextStart.toISOString(),
+        endsAt: nextEnd.toISOString(),
+        content: eventEditContent.trim() || null,
+        preparationRequired: eventEditPreparation.trim() || null,
+      });
+      setEventEditFeedback(t.eventEditSuccess);
+    } catch (eventUpdateError) {
+      setEventEditFeedback(
+        eventUpdateError instanceof Error ? eventUpdateError.message : t.eventEditError,
+      );
+    } finally {
+      setIsSavingEventEdit(false);
+    }
+  }, [
+    eventEditContent,
+    eventEditEndsAt,
+    eventEditPreparation,
+    eventEditStartsAt,
+    eventEditTitle,
+    isEditableCalendarEvent,
+    selectedCalendarEvent,
+    t.eventEditError,
+    t.eventEditSuccess,
+    t.invalidTimeRange,
+    updateCalendarEvent,
+  ]);
+
+  const commitSelectedReschedule = useCallback(async () => {
+    if (
+      !selectedCalendarEvent ||
+      selectedCalendarEvent.eventType !== "continuous_meeting" ||
+      selectedCalendarEvent.details.eventLifecycle !== "provisory" ||
+      selectedCalendarEvent.details.proposalKind !== "reschedule"
+    ) {
+      return;
+    }
+    setIsSavingEventEdit(true);
+    setEventEditFeedback("");
+    try {
+      await updateCalendarEvent({
+        eventId: selectedCalendarEvent.id,
+        commitProvisoryReschedule: true,
+      });
+      setEventEditFeedback(t.eventEditSuccess);
+      await loadAll();
+    } catch (commitError) {
+      setEventEditFeedback(
+        commitError instanceof Error ? commitError.message : t.eventCommitRescheduleError,
+      );
+    } finally {
+      setIsSavingEventEdit(false);
+    }
+  }, [
+    loadAll,
+    selectedCalendarEvent,
+    t.eventCommitRescheduleError,
+    t.eventEditSuccess,
+    updateCalendarEvent,
+  ]);
+
+  const moveCalendarEventToDay = useCallback(
+    async (eventId: string, targetDay: Date) => {
+      const event = calendarEvents.find((item) => item.id === eventId) ?? null;
+      if (!event || !isEditableCalendarEvent(event)) return;
+
+      const start = new Date(event.startsAt);
+      const end = new Date(event.endsAt);
+      if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return;
+
+      const movedStart = new Date(start);
+      movedStart.setFullYear(targetDay.getFullYear(), targetDay.getMonth(), targetDay.getDate());
+      if (dayKey(movedStart) === dayKey(start)) return;
+
+      const durationMs = end.getTime() - start.getTime();
+      const movedEnd = new Date(movedStart.getTime() + durationMs);
+
+      try {
+        const updatedEvent = await updateCalendarEvent({
+          eventId: event.id,
+          startsAt: movedStart.toISOString(),
+          endsAt: movedEnd.toISOString(),
+        });
+        if (selectedCalendarEventId === updatedEvent.id) {
+          setEventEditStartsAt(toDatetimeLocalFromIso(updatedEvent.startsAt));
+          setEventEditEndsAt(toDatetimeLocalFromIso(updatedEvent.endsAt));
+          setEventEditFeedback(t.eventEditSuccess);
+        }
+      } catch (eventUpdateError) {
+        setEventEditFeedback(
+          eventUpdateError instanceof Error ? eventUpdateError.message : t.eventEditError,
+        );
+      }
+    },
+    [
+      calendarEvents,
+      isEditableCalendarEvent,
+      selectedCalendarEventId,
+      t.eventEditError,
+      t.eventEditSuccess,
+      updateCalendarEvent,
+    ],
+  );
+
+  const selectedEventTypeLabel = useMemo(() => {
+    if (!selectedCalendarEvent) return "";
+    if (selectedCalendarEvent.eventType === "drps_start") return t.eventTypeDrpsStart;
+    if (selectedCalendarEvent.eventType === "drps_close") return t.eventTypeDrpsClose;
+    if (selectedCalendarEvent.eventType === "continuous_meeting") return t.eventTypeMeeting;
+    return t.eventTypeBlocked;
+  }, [
+    selectedCalendarEvent,
+    t.eventTypeBlocked,
+    t.eventTypeDrpsClose,
+    t.eventTypeDrpsStart,
+    t.eventTypeMeeting,
+  ]);
+
+  const selectedLifecycleLabel = useMemo(() => {
+    if (!selectedCalendarEvent) return "";
+    const lifecycle =
+      selectedCalendarEvent.details.eventLifecycle === "provisory"
+        ? t.eventLifecycleProvisory
+        : t.eventLifecycleCommitted;
+    const proposal =
+      selectedCalendarEvent.details.proposalKind === "reschedule"
+        ? t.eventProposalReschedule
+        : selectedCalendarEvent.details.proposalKind === "assignment"
+          ? t.eventProposalAssignment
+          : null;
+    return proposal ? `${lifecycle} (${proposal})` : lifecycle;
+  }, [
+    selectedCalendarEvent,
+    t.eventLifecycleCommitted,
+    t.eventLifecycleProvisory,
+    t.eventProposalAssignment,
+    t.eventProposalReschedule,
+  ]);
+
+  const canCommitSelectedReschedule = useMemo(
+    () =>
+      Boolean(
+        selectedCalendarEvent &&
+          selectedCalendarEvent.eventType === "continuous_meeting" &&
+          selectedCalendarEvent.details.eventLifecycle === "provisory" &&
+          selectedCalendarEvent.details.proposalKind === "reschedule",
+      ),
+    [selectedCalendarEvent],
+  );
+
+  const clientPortalSlugById = useMemo(
+    () => new Map(clients.map((client) => [client.id, client.portalSlug])),
+    [clients],
+  );
+
+  const selectedCalendarEventLink = useMemo(() => {
+    if (!selectedCalendarEvent) return null;
+
+    if (
+      selectedCalendarEvent.eventType === "drps_start" ||
+      selectedCalendarEvent.eventType === "drps_close"
+    ) {
+      const campaignId = extractCampaignIdFromCalendarEvent(selectedCalendarEvent);
+      if (!campaignId) return null;
+      const clientSlug = selectedCalendarEvent.clientId
+        ? clientPortalSlugById.get(selectedCalendarEvent.clientId) ?? null
+        : null;
+      return {
+        href: clientSlug
+          ? `/client/${clientSlug}/diagnostic/${campaignId}`
+          : `/manager/programs/drps/${campaignId}`,
+        label: t.eventOpenDrpsResults,
+      };
+    }
+
+    if (
+      selectedCalendarEvent.eventType === "continuous_meeting" &&
+      selectedCalendarEvent.sourceClientProgramId
+    ) {
+      const assignment =
+        activeContinuousPrograms.find(
+          (program) => program.id === selectedCalendarEvent.sourceClientProgramId,
+        ) ?? null;
+      if (!assignment) return null;
+      return {
+        href: `/manager/clients/${assignment.clientId}/assigned-continuous/${assignment.id}`,
+        label: t.eventOpenProgramDetails,
+      };
+    }
+
+    return null;
+  }, [
+    activeContinuousPrograms,
+    clientPortalSlugById,
+    selectedCalendarEvent,
+    t.eventOpenDrpsResults,
+    t.eventOpenProgramDetails,
+  ]);
+
   const events = useMemo(() => {
     const list: Array<{
       key: string;
+      id: string;
       title: string;
       type: "start" | "close" | "meeting" | "blocked";
       label: string;
+      source: MasterCalendarEvent;
     }> = [];
     for (const event of isolatedCalendarEvents) {
       const value = new Date(event.startsAt);
@@ -471,11 +854,11 @@ export function ManagerWorkspace({
               : "blocked";
       const label =
         type === "meeting"
-          ? `${client} reuniao`
+          ? event.title
           : type === "blocked"
-            ? `${client} bloqueio`
+            ? event.title
             : `${client} DRPS`;
-      list.push({ key: dayKey(value), title: event.title, type, label });
+      list.push({ key: dayKey(value), id: event.id, title: event.title, type, label, source: event });
     }
     return list;
   }, [isolatedCalendarEvents, t.noCompany]);
@@ -781,6 +1164,7 @@ export function ManagerWorkspace({
               </div>
             </div>
             <p className="mt-2 text-sm text-[#465864]">{monthLabel(month, locale)}</p>
+            <p className="mt-1 text-xs text-[#58717f]">{t.calendarHint}</p>
             {calendarIsolation.kind !== "none" ? (
               <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-[#3e5a68]">
                 <span>
@@ -807,14 +1191,33 @@ export function ManagerWorkspace({
                   className={`min-h-[110px] rounded-xl border p-2 ${
                     d.inMonth ? "border-[#dbdbdb] bg-white" : "border-[#e8e8e8] bg-[#f1f1f1]"
                   }`}
+                  onDragOver={(event) => {
+                    if (!draggingEventId) return;
+                    event.preventDefault();
+                  }}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    if (!draggingEventId) return;
+                    const movedEventId = draggingEventId;
+                    setDraggingEventId(null);
+                    void moveCalendarEventToDay(movedEventId, d.value);
+                  }}
                 >
                   <p className={`text-xs font-semibold ${d.inMonth ? "text-[#163748]" : "text-[#8497a4]"}`}>
                     {d.value.getDate()}
                   </p>
                   <div className="mt-1 space-y-1">
-                    {d.events.slice(0, 3).map((e, idx) => (
-                      <p
-                        key={`${e.key}-${idx}`}
+                    {d.events.slice(0, 3).map((e) => (
+                      <button
+                        type="button"
+                        key={e.id}
+                        draggable={isEditableCalendarEvent(e.source)}
+                        onDragStart={() => {
+                          if (!isEditableCalendarEvent(e.source)) return;
+                          setDraggingEventId(e.id);
+                        }}
+                        onDragEnd={() => setDraggingEventId(null)}
+                        onClick={() => setSelectedCalendarEventId(e.id)}
                         className={`rounded px-1 py-0.5 text-[10px] ${
                           e.type === "start"
                             ? "bg-[#e2f4ea] text-[#1f5b38]"
@@ -823,11 +1226,13 @@ export function ManagerWorkspace({
                               : e.type === "meeting"
                                 ? "bg-[#e8f3f8] text-[#0f5b73]"
                                 : "bg-[#fce6f1] text-[#7a2755]"
+                        } w-full truncate text-left ${
+                          isEditableCalendarEvent(e.source) ? "cursor-move" : "cursor-pointer"
                         }`}
-                        title={e.title}
+                        title={`${e.title} - ${toDate(e.source.startsAt, locale)}`}
                       >
                         {e.label}
-                      </p>
+                      </button>
                     ))}
                     {d.events.length > 3 ? <p className="text-[10px] text-[#527083]">+{d.events.length - 3}</p> : null}
                   </div>
@@ -999,6 +1404,151 @@ export function ManagerWorkspace({
           </article>
         </section>
       )}
+
+      {selectedCalendarEvent ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4"
+          onClick={() => setSelectedCalendarEventId(null)}
+        >
+          <article
+            className="w-full max-w-3xl rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-center justify-between gap-3">
+              <h4 className="text-lg font-semibold text-[#123447]">{t.eventDetailsTitle}</h4>
+              <button
+                type="button"
+                onClick={() => setSelectedCalendarEventId(null)}
+                className="rounded-full border border-[#cad8e2] px-3 py-1 text-xs font-semibold text-[#123447]"
+              >
+                {t.eventCloseAction}
+              </button>
+            </div>
+
+            <div className="mt-4 grid gap-3 md:grid-cols-2">
+              <div className="rounded-lg border border-[#e0e9ee] bg-[#f7fbfd] p-3">
+                <p className="text-xs text-[#4d6a79]">{t.eventDetailsType}</p>
+                <p className="text-sm font-semibold text-[#123447]">{selectedEventTypeLabel}</p>
+              </div>
+              <div className="rounded-lg border border-[#e0e9ee] bg-[#f7fbfd] p-3">
+                <p className="text-xs text-[#4d6a79]">{t.eventDetailsCompany}</p>
+                <p className="text-sm font-semibold text-[#123447]">
+                  {selectedCalendarEvent.clientName ?? t.noCompany}
+                </p>
+              </div>
+              <div className="rounded-lg border border-[#e0e9ee] bg-[#f7fbfd] p-3 md:col-span-2">
+                <p className="text-xs text-[#4d6a79]">{t.eventDetailsWhen}</p>
+                <p className="text-sm font-semibold text-[#123447]">
+                  {toDate(selectedCalendarEvent.startsAt, locale)} -{" "}
+                  {toDate(selectedCalendarEvent.endsAt, locale)}
+                </p>
+              </div>
+              <div className="rounded-lg border border-[#e0e9ee] bg-[#f7fbfd] p-3 md:col-span-2">
+                <p className="text-xs text-[#4d6a79]">{t.eventDetailsLifecycle}</p>
+                <p className="text-sm font-semibold text-[#123447]">{selectedLifecycleLabel}</p>
+              </div>
+            </div>
+
+            <div className="mt-3 grid gap-3 md:grid-cols-2">
+              <div className="rounded-lg border border-[#e0e9ee] p-3">
+                <p className="text-xs text-[#4d6a79]">{t.eventDetailsContent}</p>
+                <p className="mt-1 text-sm text-[#123447]">
+                  {selectedCalendarEvent.details?.content ?? t.eventDetailsNoContent}
+                </p>
+              </div>
+              <div className="rounded-lg border border-[#e0e9ee] p-3">
+                <p className="text-xs text-[#4d6a79]">{t.eventDetailsPreparation}</p>
+                <p className="mt-1 text-sm text-[#123447]">
+                  {selectedCalendarEvent.details?.preparationRequired ?? t.eventDetailsNoPreparation}
+                </p>
+              </div>
+            </div>
+
+            {selectedCalendarEventLink ? (
+              <div className="mt-3">
+                <Link
+                  href={selectedCalendarEventLink.href}
+                  className="inline-flex rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
+                >
+                  {selectedCalendarEventLink.label}
+                </Link>
+              </div>
+            ) : null}
+
+            {isEditableCalendarEvent(selectedCalendarEvent) ? (
+              <div className="mt-4 space-y-3 rounded-lg border border-[#d8e4ee] bg-[#f8fbfd] p-3">
+                <label className="block">
+                  <span className="text-xs text-[#4d6a79]">{t.eventEditTitleLabel}</span>
+                  <input
+                    value={eventEditTitle}
+                    onChange={(event) => setEventEditTitle(event.target.value)}
+                    className="mt-1 w-full rounded border border-[#c8d7e1] px-2 py-1.5 text-sm"
+                  />
+                </label>
+                <div className="grid gap-2 md:grid-cols-2">
+                  <label className="block">
+                    <span className="text-xs text-[#4d6a79]">{t.eventEditStartLabel}</span>
+                    <input
+                      type="datetime-local"
+                      value={eventEditStartsAt}
+                      onChange={(event) => setEventEditStartsAt(event.target.value)}
+                      className="mt-1 w-full rounded border border-[#c8d7e1] px-2 py-1.5 text-sm"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="text-xs text-[#4d6a79]">{t.eventEditEndLabel}</span>
+                    <input
+                      type="datetime-local"
+                      value={eventEditEndsAt}
+                      onChange={(event) => setEventEditEndsAt(event.target.value)}
+                      className="mt-1 w-full rounded border border-[#c8d7e1] px-2 py-1.5 text-sm"
+                    />
+                  </label>
+                </div>
+                <label className="block">
+                  <span className="text-xs text-[#4d6a79]">{t.eventDetailsContent}</span>
+                  <textarea
+                    rows={3}
+                    value={eventEditContent}
+                    onChange={(event) => setEventEditContent(event.target.value)}
+                    className="mt-1 w-full rounded border border-[#c8d7e1] px-2 py-1.5 text-sm"
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-xs text-[#4d6a79]">{t.eventDetailsPreparation}</span>
+                  <textarea
+                    rows={3}
+                    value={eventEditPreparation}
+                    onChange={(event) => setEventEditPreparation(event.target.value)}
+                    className="mt-1 w-full rounded border border-[#c8d7e1] px-2 py-1.5 text-sm"
+                  />
+                </label>
+                <button
+                  type="button"
+                  onClick={() => void saveSelectedCalendarEvent()}
+                  disabled={isSavingEventEdit}
+                  className="rounded-full bg-[#123447] px-4 py-2 text-xs font-semibold text-white disabled:opacity-50"
+                >
+                  {isSavingEventEdit ? t.eventEditSaving : t.eventEditSave}
+                </button>
+                {canCommitSelectedReschedule ? (
+                  <button
+                    type="button"
+                    onClick={() => void commitSelectedReschedule()}
+                    disabled={isSavingEventEdit}
+                    className="rounded-full border border-[#0f5b73] px-4 py-2 text-xs font-semibold text-[#0f5b73] disabled:opacity-50"
+                  >
+                    {t.eventCommitReschedule}
+                  </button>
+                ) : null}
+                {eventEditFeedback ? <p className="text-xs text-[#365160]">{eventEditFeedback}</p> : null}
+              </div>
+            ) : (
+              <p className="mt-4 text-xs text-[#5a7383]">{t.eventReadOnly}</p>
+            )}
+          </article>
+        </div>
+      ) : null}
     </div>
   );
 }

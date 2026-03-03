@@ -8,6 +8,17 @@ export type MasterCalendarEventType =
   | "continuous_meeting"
   | "blocked";
 
+export type CalendarEventLifecycle = "provisory" | "committed";
+export type CalendarEventProposalKind = "assignment" | "reschedule" | null;
+
+export type MasterCalendarEventDetails = {
+  content: string | null;
+  preparationRequired: string | null;
+  eventLifecycle: CalendarEventLifecycle;
+  proposalKind: CalendarEventProposalKind;
+  availabilityRequestId: string | null;
+};
+
 export type MasterCalendarEvent = {
   id: string;
   clientId: string | null;
@@ -18,6 +29,7 @@ export type MasterCalendarEvent = {
   endsAt: string;
   status: "scheduled" | "completed" | "cancelled";
   sourceClientProgramId: string | null;
+  details: MasterCalendarEventDetails;
 };
 
 type CampaignCalendarRow = {
@@ -37,7 +49,51 @@ type CalendarEventRow = {
   starts_at: string;
   ends_at: string;
   status: "scheduled" | "completed" | "cancelled";
+  metadata?: unknown;
 };
+
+function normalizeDetailText(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim();
+  return normalized.length > 0 ? normalized : null;
+}
+
+function normalizeLifecycle(value: unknown): CalendarEventLifecycle {
+  return value === "provisory" ? "provisory" : "committed";
+}
+
+function normalizeProposalKind(value: unknown): CalendarEventProposalKind {
+  if (value === "assignment" || value === "reschedule") return value;
+  return null;
+}
+
+export function extractCalendarEventDetails(metadata: unknown): MasterCalendarEventDetails {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    return {
+      content: null,
+      preparationRequired: null,
+      eventLifecycle: "committed",
+      proposalKind: null,
+      availabilityRequestId: null,
+    };
+  }
+
+  const record = metadata as Record<string, unknown>;
+  const availabilityRequestIdRaw =
+    record.availabilityRequestId ?? record.availability_request_id ?? null;
+  return {
+    content: normalizeDetailText(record.content) ?? normalizeDetailText(record.notes),
+    preparationRequired:
+      normalizeDetailText(record.preparationRequired) ??
+      normalizeDetailText(record.preparation_required),
+    eventLifecycle: normalizeLifecycle(record.eventLifecycle),
+    proposalKind: normalizeProposalKind(record.proposalKind),
+    availabilityRequestId:
+      typeof availabilityRequestIdRaw === "string" && availabilityRequestIdRaw.trim().length > 0
+        ? availabilityRequestIdRaw
+        : null,
+  };
+}
 
 function toDate(value: string | null | undefined): Date | null {
   if (!value) return null;
@@ -77,6 +133,13 @@ export function buildDrpsCalendarEvents(
         endsAt: plusOneHour(start).toISOString(),
         status: "scheduled",
         sourceClientProgramId: null,
+        details: {
+          content: null,
+          preparationRequired: null,
+          eventLifecycle: "committed",
+          proposalKind: null,
+          availabilityRequestId: null,
+        },
       });
     }
 
@@ -91,6 +154,13 @@ export function buildDrpsCalendarEvents(
         endsAt: plusOneHour(close).toISOString(),
         status: "scheduled",
         sourceClientProgramId: null,
+        details: {
+          content: null,
+          preparationRequired: null,
+          eventLifecycle: "committed",
+          proposalKind: null,
+          availabilityRequestId: null,
+        },
       });
     }
   }
@@ -104,7 +174,7 @@ export async function loadStoredCalendarEvents(
 ): Promise<{ events: MasterCalendarEvent[]; unavailable: boolean }> {
   const query = supabase
     .from("calendar_events")
-    .select("event_id,client_id,source_client_program_id,event_type,title,starts_at,ends_at,status")
+    .select("event_id,client_id,source_client_program_id,event_type,title,starts_at,ends_at,status,metadata")
     .order("starts_at", { ascending: true });
 
   const scoped = options?.clientId ? query.eq("client_id", options.clientId) : query;
@@ -127,6 +197,7 @@ export async function loadStoredCalendarEvents(
     endsAt: row.ends_at,
     status: row.status,
     sourceClientProgramId: row.source_client_program_id ?? null,
+    details: extractCalendarEventDetails(row.metadata),
   })) satisfies MasterCalendarEvent[];
 
   return { events: sortByStart(events), unavailable: false };
