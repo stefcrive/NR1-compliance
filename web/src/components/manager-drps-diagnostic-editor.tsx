@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { useManagerLocale } from "@/components/manager-locale";
 
@@ -19,10 +19,50 @@ type DrpsDiagnostic = {
 
 type CampaignQuestion = {
   id: string;
+  topicId: number;
   position: number;
   prompt: string;
   isActive: boolean;
 };
+
+type TopicGroup = {
+  topicId: number;
+  label: string;
+  questions: CampaignQuestion[];
+};
+
+const TOPIC_LABELS = {
+  en: {
+    1: "T01 Harassment",
+    2: "T02 Lack of support",
+    3: "T03 Poor change management",
+    4: "T04 Low role clarity",
+    5: "T05 Low rewards and recognition",
+    6: "T06 Low control and autonomy",
+    7: "T07 Low organizational fairness",
+    8: "T08 Violent or traumatic events",
+    9: "T09 Low demand",
+    10: "T10 Work overload",
+    11: "T11 Poor relationships",
+    12: "T12 Difficult communication",
+    13: "T13 Remote and isolated work",
+  } as Record<number, string>,
+  pt: {
+    1: "T01 Assedio de qualquer natureza",
+    2: "T02 Falta de suporte e apoio",
+    3: "T03 Ma gestao de mudancas",
+    4: "T04 Baixa clareza de papel",
+    5: "T05 Baixas recompensas e reconhecimento",
+    6: "T06 Baixo controle e falta de autonomia",
+    7: "T07 Baixa justica organizacional",
+    8: "T08 Eventos violentos e traumaticos",
+    9: "T09 Baixa demanda",
+    10: "T10 Excesso de demandas",
+    11: "T11 Maus relacionamentos",
+    12: "T12 Dificil comunicacao",
+    13: "T13 Trabalho remoto e isolado",
+  } as Record<number, string>,
+} as const;
 
 const COPY = {
   en: {
@@ -45,6 +85,7 @@ const COPY = {
       "Legacy DRPS campaigns do not have editable questionnaire records in the current schema.",
     questionsLoadError: "Could not load questionnaire.",
     noQuestions: "No active questions found for this diagnostic.",
+    uncategorized: "Uncategorized",
     questionLabel: "Question",
     addQuestion: "Add question",
     removeQuestion: "Remove",
@@ -73,6 +114,7 @@ const COPY = {
       "Campanhas DRPS legadas nao possuem registros de questionario editaveis no schema atual.",
     questionsLoadError: "Nao foi possivel carregar o questionario.",
     noQuestions: "Nenhuma pergunta ativa encontrada para este diagnostico.",
+    uncategorized: "Sem categoria",
     questionLabel: "Pergunta",
     addQuestion: "Adicionar pergunta",
     removeQuestion: "Remover",
@@ -97,12 +139,31 @@ export function ManagerDrpsDiagnosticEditor({ campaignId }: { campaignId: string
   const t = COPY[locale];
 
   const [diagnostic, setDiagnostic] = useState<DrpsDiagnostic | null>(null);
-  const [prompts, setPrompts] = useState<string[]>([]);
+  const [questions, setQuestions] = useState<CampaignQuestion[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState("");
   const [questionError, setQuestionError] = useState("");
   const [saveNotice, setSaveNotice] = useState("");
+
+  const topicGroups = useMemo<TopicGroup[]>(() => {
+    const byTopic = new Map<number, CampaignQuestion[]>();
+    for (const question of questions) {
+      const list = byTopic.get(question.topicId) ?? [];
+      list.push(question);
+      byTopic.set(question.topicId, list);
+    }
+
+    return Array.from(byTopic.entries())
+      .sort((a, b) => a[0] - b[0])
+      .map(([topicId, groupQuestions]) => ({
+        topicId,
+        label:
+          TOPIC_LABELS[locale][topicId] ??
+          `${locale === "pt" ? "Topico" : "Topic"} ${topicId || t.uncategorized}`,
+        questions: [...groupQuestions].sort((a, b) => a.position - b.position),
+      }));
+  }, [locale, questions, t.uncategorized]);
 
   const loadData = useCallback(async () => {
     setIsLoading(true);
@@ -125,7 +186,7 @@ export function ManagerDrpsDiagnosticEditor({ campaignId }: { campaignId: string
       setDiagnostic(found);
 
       if (found.source !== "surveys") {
-        setPrompts([]);
+        setQuestions([]);
         setQuestionError(t.legacyQuestionnaireInfo);
         return;
       }
@@ -137,27 +198,26 @@ export function ManagerDrpsDiagnosticEditor({ campaignId }: { campaignId: string
       if (!questionsResponse.ok) {
         const questionPayload = (await questionsResponse.json().catch(() => ({}))) as { error?: string };
         setQuestionError(questionPayload.error ?? t.questionsLoadError);
-        setPrompts([""]);
+        setQuestions([]);
         return;
       }
 
       const questionsPayload = (await questionsResponse.json()) as { questions: CampaignQuestion[] };
-      const loadedPrompts = (questionsPayload.questions ?? [])
+      const loadedQuestions = (questionsPayload.questions ?? [])
         .filter((item) => item.isActive)
-        .sort((a, b) => a.position - b.position)
-        .map((item) => item.prompt);
+        .sort((a, b) => a.position - b.position);
 
-      if (loadedPrompts.length === 0) {
+      if (loadedQuestions.length === 0) {
         setQuestionError(t.noQuestions);
-        setPrompts([""]);
+        setQuestions([]);
         return;
       }
 
-      setPrompts(loadedPrompts);
+      setQuestions(loadedQuestions);
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : t.notFound);
       setDiagnostic(null);
-      setPrompts([]);
+      setQuestions([]);
     } finally {
       setIsLoading(false);
     }
@@ -173,20 +233,51 @@ export function ManagerDrpsDiagnosticEditor({ campaignId }: { campaignId: string
     void loadData();
   }, [loadData]);
 
-  function updatePrompt(index: number, value: string) {
-    setPrompts((previous) => previous.map((item, idx) => (idx === index ? value : item)));
+  function updatePrompt(questionId: string, value: string) {
+    setQuestions((previous) =>
+      previous.map((item) =>
+        item.id === questionId
+          ? {
+              ...item,
+              prompt: value,
+            }
+          : item,
+      ),
+    );
   }
 
   function addPrompt() {
-    setPrompts((previous) => [...previous, ""]);
+    setQuestions((previous) => {
+      const fallbackTopic = previous.at(-1)?.topicId ?? 1;
+      return [
+        ...previous,
+        {
+          id: `new-${Date.now()}-${previous.length + 1}`,
+          topicId: fallbackTopic,
+          position: previous.length + 1,
+          prompt: "",
+          isActive: true,
+        },
+      ];
+    });
   }
 
-  function removePrompt(index: number) {
-    setPrompts((previous) => previous.filter((_, idx) => idx !== index));
+  function removePrompt(questionId: string) {
+    setQuestions((previous) =>
+      previous
+        .filter((item) => item.id !== questionId)
+        .map((item, index) => ({
+          ...item,
+          position: index + 1,
+        })),
+    );
   }
 
   async function saveQuestionnaire() {
-    const normalizedPrompts = prompts.map((item) => item.trim()).filter((item) => item.length > 0);
+    const normalizedPrompts = [...questions]
+      .sort((a, b) => a.position - b.position)
+      .map((item) => item.prompt.trim())
+      .filter((item) => item.length > 0);
     if (normalizedPrompts.some((item) => item.length < 3) || normalizedPrompts.length === 0) {
       setSaveNotice("");
       setQuestionError(t.validationError);
@@ -206,7 +297,7 @@ export function ManagerDrpsDiagnosticEditor({ campaignId }: { campaignId: string
         const payload = (await response.json().catch(() => ({}))) as { error?: string };
         throw new Error(payload.error ?? t.questionsLoadError);
       }
-      setPrompts(normalizedPrompts);
+      await loadData();
       setSaveNotice(t.saved);
     } catch (saveError) {
       setQuestionError(saveError instanceof Error ? saveError.message : t.questionsLoadError);
@@ -271,28 +362,44 @@ export function ManagerDrpsDiagnosticEditor({ campaignId }: { campaignId: string
         {diagnostic.source !== "surveys" ? null : (
           <>
             <div className="space-y-3">
-              {prompts.map((prompt, index) => (
-                <div key={`${index}-${diagnostic.id}`} className="rounded-xl border border-[#d8e4ee] p-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[#4d6a79]">
-                      {t.questionLabel} {index + 1}
-                    </p>
-                    <button
-                      type="button"
-                      onClick={() => removePrompt(index)}
-                      disabled={prompts.length <= 1}
-                      className="rounded-full border border-[#e7c9c9] px-3 py-1 text-xs font-semibold text-[#8a2d2d] disabled:opacity-50"
-                    >
-                      {t.removeQuestion}
-                    </button>
+              {topicGroups.map((group) => (
+                <article
+                  key={`${diagnostic.id}-${group.topicId}`}
+                  className="rounded-xl border border-[#d8e4ee] bg-[#f8fcff] p-4"
+                >
+                  <header className="mb-3 flex items-center justify-between gap-2">
+                    <p className="text-sm font-semibold text-[#1d4257]">{group.label}</p>
+                    <span className="rounded-full bg-white px-2 py-0.5 text-xs font-medium text-[#4d6a79]">
+                      {group.questions.length}
+                    </span>
+                  </header>
+
+                  <div className="space-y-3">
+                    {group.questions.map((question) => (
+                      <div key={question.id} className="rounded-xl border border-[#d8e4ee] bg-white p-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[#4d6a79]">
+                            {t.questionLabel} {question.position}
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => removePrompt(question.id)}
+                            disabled={questions.length <= 1}
+                            className="rounded-full border border-[#e7c9c9] px-3 py-1 text-xs font-semibold text-[#8a2d2d] disabled:opacity-50"
+                          >
+                            {t.removeQuestion}
+                          </button>
+                        </div>
+                        <textarea
+                          value={question.prompt}
+                          onChange={(event) => updatePrompt(question.id, event.target.value)}
+                          className="mt-2 w-full rounded-lg border border-[#c9dce8] px-3 py-2 text-sm"
+                          rows={3}
+                        />
+                      </div>
+                    ))}
                   </div>
-                  <textarea
-                    value={prompt}
-                    onChange={(event) => updatePrompt(index, event.target.value)}
-                    className="mt-2 w-full rounded-lg border border-[#c9dce8] px-3 py-2 text-sm"
-                    rows={3}
-                  />
-                </div>
+                </article>
               ))}
             </div>
 

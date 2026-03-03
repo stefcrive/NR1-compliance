@@ -1,5 +1,14 @@
+import { randomUUID } from "node:crypto";
+
 import { NextRequest, NextResponse } from "next/server";
 
+import { buildSuggestedAvailabilitySlots } from "@/lib/availability-scheduler";
+import {
+  buildDrpsCalendarEvents,
+  loadStoredCalendarEvents,
+  mergeAndSortMasterCalendarEvents,
+  type MasterCalendarEvent,
+} from "@/lib/master-calendar";
 import { classifyScore, resolveRisk } from "@/lib/risk";
 import { slugify } from "@/lib/slug";
 import { isMissingColumnError, isMissingTableError } from "@/lib/supabase-errors";
@@ -93,6 +102,39 @@ type ReportRow = {
   summary: Record<string, unknown>;
 };
 
+type ClientProgramRow = {
+  client_program_id: string;
+  program_id: string;
+  status: "Recommended" | "Active" | "Completed";
+  deployed_at?: string | null;
+};
+
+type ProgramRow = {
+  program_id: string;
+  title: string;
+  description: string | null;
+  target_risk_topic: number | string;
+  trigger_threshold: number | string;
+  schedule_frequency?: string | null;
+  schedule_anchor_date?: string | null;
+};
+
+type AvailabilityRequestRow = {
+  request_id: string;
+  client_program_id: string;
+  status: "pending" | "submitted" | "scheduled" | "closed";
+  requested_at: string;
+  due_at: string | null;
+  suggested_slots: unknown;
+  selected_slots: unknown;
+  submitted_at: string | null;
+};
+
+type AvailabilitySlot = {
+  startsAt: string;
+  endsAt: string;
+};
+
 function normalizeTopic(row: TopicAggregateRow) {
   const meanProbability = row.mean_probability ?? row.mean_severity;
   const severityClass = classifyScore(row.mean_severity);
@@ -111,6 +153,47 @@ function normalizeTopic(row: TopicAggregateRow) {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
+}
+
+function parseSlots(value: unknown): AvailabilitySlot[] {
+  if (!Array.isArray(value)) return [];
+  const slots: AvailabilitySlot[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object") continue;
+    const startsAt = "startsAt" in item ? String(item.startsAt) : "";
+    const endsAt = "endsAt" in item ? String(item.endsAt) : "";
+    const startDate = new Date(startsAt);
+    const endDate = new Date(endsAt);
+    if (
+      startsAt.length > 0 &&
+      endsAt.length > 0 &&
+      !Number.isNaN(startDate.getTime()) &&
+      !Number.isNaN(endDate.getTime()) &&
+      endDate.getTime() > startDate.getTime()
+    ) {
+      slots.push({ startsAt, endsAt });
+    }
+  }
+  return slots;
+}
+
+function mapAssignedProgram(
+  assignment: ClientProgramRow,
+  programById: Map<string, ProgramRow>,
+) {
+  const program = programById.get(assignment.program_id) ?? null;
+  return {
+    id: assignment.client_program_id,
+    programId: assignment.program_id,
+    status: assignment.status,
+    deployedAt: assignment.deployed_at ?? null,
+    programTitle: program?.title ?? assignment.program_id,
+    programDescription: program?.description ?? null,
+    targetRiskTopic: program ? Number(program.target_risk_topic) : null,
+    triggerThreshold: program ? Number(program.trigger_threshold) : null,
+    scheduleFrequency: program?.schedule_frequency ?? "monthly",
+    scheduleAnchorDate: program?.schedule_anchor_date ?? null,
+  };
 }
 
 function computeAdjustedSectorRisk(
@@ -197,7 +280,7 @@ export async function GET(
     return NextResponse.json({ error: "Client not found." }, { status: 404 });
   }
 
-  const [campaignsResult, reportsResult] = await Promise.all([
+  const [campaignsResult, reportsResult, assignmentsResult, availabilityResult] = await Promise.all([
     supabase
       .from("surveys")
       .select("id,client_id,name,public_slug,status,k_anonymity_min,starts_at,closes_at,created_at")
@@ -210,15 +293,44 @@ export async function GET(
       .eq("client_id", client.client_id)
       .order("created_at", { ascending: false })
       .returns<ReportRow[]>(),
+    supabase
+      .from("client_programs")
+      .select("client_program_id,program_id,status,deployed_at")
+      .eq("client_id", client.client_id)
+      .order("deployed_at", { ascending: false })
+      .returns<ClientProgramRow[]>(),
+    supabase
+      .from("client_program_availability_requests")
+      .select(
+        "request_id,client_program_id,status,requested_at,due_at,suggested_slots,selected_slots,submitted_at",
+      )
+      .eq("client_id", client.client_id)
+      .order("requested_at", { ascending: false })
+      .returns<AvailabilityRequestRow[]>(),
   ]);
 
   const reportsMissing = isMissingTableError(reportsResult.error, "client_reports");
+  const assignmentsMissing = isMissingTableError(assignmentsResult.error, "client_programs");
+  const availabilityMissing = isMissingTableError(
+    availabilityResult.error,
+    "client_program_availability_requests",
+  );
 
   if (campaignsResult.error && !isMissingColumnError(campaignsResult.error, "client_id")) {
     return NextResponse.json({ error: "Could not load client campaigns." }, { status: 500 });
   }
   if (reportsResult.error && !reportsMissing) {
     return NextResponse.json({ error: "Could not load client campaigns." }, { status: 500 });
+  }
+  if (
+    assignmentsResult.error &&
+    !assignmentsMissing &&
+    !isMissingColumnError(assignmentsResult.error, "deployed_at")
+  ) {
+    return NextResponse.json({ error: "Could not load assigned programs." }, { status: 500 });
+  }
+  if (availabilityResult.error && !availabilityMissing) {
+    return NextResponse.json({ error: "Could not load availability requests." }, { status: 500 });
   }
 
   const campaigns = isMissingColumnError(campaignsResult.error, "client_id")
@@ -234,28 +346,185 @@ export async function GET(
     campaignsWithLinks[0] ??
     null;
 
+  const assignments = assignmentsMissing ? [] : assignmentsResult.data ?? [];
+  const programIds = Array.from(new Set(assignments.map((item) => item.program_id)));
+
+  let programRows: ProgramRow[] = [];
+  if (programIds.length > 0) {
+    const withSchedule = await supabase
+      .from("periodic_programs")
+      .select(
+        "program_id,title,description,target_risk_topic,trigger_threshold,schedule_frequency,schedule_anchor_date",
+      )
+      .in("program_id", programIds)
+      .returns<ProgramRow[]>();
+
+    if (
+      withSchedule.error &&
+      isMissingColumnError(withSchedule.error, "schedule_frequency")
+    ) {
+      const fallback = await supabase
+        .from("periodic_programs")
+        .select("program_id,title,description,target_risk_topic,trigger_threshold")
+        .in("program_id", programIds)
+        .returns<ProgramRow[]>();
+      if (fallback.error && !isMissingTableError(fallback.error, "periodic_programs")) {
+        return NextResponse.json({ error: "Could not load assigned programs." }, { status: 500 });
+      }
+      programRows = fallback.data ?? [];
+    } else if (
+      withSchedule.error &&
+      !isMissingTableError(withSchedule.error, "periodic_programs")
+    ) {
+      return NextResponse.json({ error: "Could not load assigned programs." }, { status: 500 });
+    } else {
+      programRows = withSchedule.data ?? [];
+    }
+  }
+
+  const programById = new Map(programRows.map((row) => [row.program_id, row]));
+  const assignedPrograms = assignments.map((assignment) => mapAssignedProgram(assignment, programById));
+
+  const drpsEvents = buildDrpsCalendarEvents(campaignsWithLinks);
+  let storedEvents: MasterCalendarEvent[] = [];
+  let calendarEventsUnavailable = false;
+  try {
+    const loaded = await loadStoredCalendarEvents(supabase, { clientId: client.client_id });
+    storedEvents = loaded.events;
+    calendarEventsUnavailable = loaded.unavailable;
+  } catch {
+    calendarEventsUnavailable = true;
+  }
+  const masterCalendarEvents = mergeAndSortMasterCalendarEvents(drpsEvents, storedEvents);
+
+  let availabilityRows: AvailabilityRequestRow[] = availabilityMissing ? [] : availabilityResult.data ?? [];
+  if (!availabilityMissing && assignments.length > 0) {
+    const existingByAssignment = new Set(availabilityRows.map((row) => row.client_program_id));
+    const missingAssignments = assignments.filter(
+      (assignment) =>
+        assignment.status !== "Completed" && !existingByAssignment.has(assignment.client_program_id),
+    );
+
+    if (missingAssignments.length > 0) {
+      const nowIso = new Date().toISOString();
+      const dueAtIso = new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString();
+      const inserts = missingAssignments.map((assignment) => {
+        const program = programById.get(assignment.program_id);
+        const suggestedSlots = buildSuggestedAvailabilitySlots({
+          deployedAt: assignment.deployed_at ?? nowIso,
+          scheduleFrequency: program?.schedule_frequency ?? null,
+          scheduleAnchorDate: program?.schedule_anchor_date ?? null,
+          existingEvents: masterCalendarEvents,
+        });
+        return {
+          request_id: randomUUID(),
+          client_id: client.client_id,
+          client_program_id: assignment.client_program_id,
+          status: "pending",
+          requested_at: nowIso,
+          due_at: dueAtIso,
+          suggested_slots: suggestedSlots,
+          selected_slots: [],
+          submitted_at: null,
+          updated_at: nowIso,
+        };
+      });
+
+      const insertResult = await supabase
+        .from("client_program_availability_requests")
+        .insert(inserts)
+        .select(
+          "request_id,client_program_id,status,requested_at,due_at,suggested_slots,selected_slots,submitted_at",
+        )
+        .returns<AvailabilityRequestRow[]>();
+
+      if (!insertResult.error && Array.isArray(insertResult.data)) {
+        availabilityRows = [...insertResult.data, ...availabilityRows];
+      }
+    }
+  }
+
+  availabilityRows = availabilityRows
+    .slice()
+    .sort(
+      (a, b) =>
+        new Date(b.requested_at).getTime() - new Date(a.requested_at).getTime(),
+    );
+
+  const parsedAvailabilityRequests = availabilityMissing
+    ? assignments
+        .filter((assignment) => assignment.status !== "Completed")
+        .map((assignment) => {
+          const program = programById.get(assignment.program_id) ?? null;
+          const requestedAt = assignment.deployed_at ?? new Date().toISOString();
+          return {
+            id: `virtual-${assignment.client_program_id}`,
+            clientProgramId: assignment.client_program_id,
+            programId: assignment.program_id,
+            programTitle: program?.title ?? assignment.program_id ?? "Processo continuo",
+            status: "pending" as const,
+            requestedAt,
+            dueAt: null,
+            submittedAt: null,
+            suggestedSlots: buildSuggestedAvailabilitySlots({
+              deployedAt: requestedAt,
+              scheduleFrequency: program?.schedule_frequency ?? null,
+              scheduleAnchorDate: program?.schedule_anchor_date ?? null,
+              existingEvents: masterCalendarEvents,
+            }),
+            selectedSlots: [],
+          };
+        })
+    : availabilityRows.map((row) => {
+        const assignment = assignments.find((item) => item.client_program_id === row.client_program_id) ?? null;
+        const program = assignment ? programById.get(assignment.program_id) ?? null : null;
+        return {
+          id: row.request_id,
+          clientProgramId: row.client_program_id,
+          programId: assignment?.program_id ?? null,
+          programTitle: program?.title ?? assignment?.program_id ?? "Processo continuo",
+          status: row.status,
+          requestedAt: row.requested_at,
+          dueAt: row.due_at,
+          submittedAt: row.submitted_at,
+          suggestedSlots: parseSlots(row.suggested_slots),
+          selectedSlots: parseSlots(row.selected_slots),
+        };
+      });
+
+  const basePayload = {
+    client: {
+      id: client.client_id,
+      companyName: client.company_name,
+      cnpj: client.cnpj,
+      status: client.status,
+      billingStatus: client.billing_status,
+      portalSlug: client.portal_slug,
+      totalEmployees: client.total_employees,
+      remoteEmployees: client.remote_employees,
+      onsiteEmployees: client.onsite_employees,
+      hybridEmployees: client.hybrid_employees,
+      contactName: client.contact_name,
+      contactEmail: client.contact_email,
+      contactPhone: client.contact_phone,
+      contractStartDate: client.contract_start_date,
+      contractEndDate: client.contract_end_date,
+      updatedAt: client.updated_at,
+    },
+    campaigns: campaignsWithLinks,
+    selectedCampaign,
+    assignedPrograms,
+    availabilityRequests: parsedAvailabilityRequests,
+    availabilityRequestsUnavailable: availabilityMissing,
+    masterCalendar: {
+      events: masterCalendarEvents,
+      calendarEventsUnavailable,
+    },
+  };
+
   if (!selectedCampaign) {
     return NextResponse.json({
-      client: {
-        id: client.client_id,
-        companyName: client.company_name,
-        cnpj: client.cnpj,
-        status: client.status,
-        billingStatus: client.billing_status,
-        portalSlug: client.portal_slug,
-        totalEmployees: client.total_employees,
-        remoteEmployees: client.remote_employees,
-        onsiteEmployees: client.onsite_employees,
-        hybridEmployees: client.hybrid_employees,
-        contactName: client.contact_name,
-        contactEmail: client.contact_email,
-        contactPhone: client.contact_phone,
-        contractStartDate: client.contract_start_date,
-        contractEndDate: client.contract_end_date,
-        updatedAt: client.updated_at,
-      },
-      campaigns: campaignsWithLinks,
-      selectedCampaign: null,
+      ...basePayload,
       dashboard: null,
       reports: reportsResult.data ?? [],
     });
@@ -415,26 +684,7 @@ export async function GET(
   sectors.sort((a, b) => b.nResponses - a.nResponses);
 
   return NextResponse.json({
-    client: {
-      id: client.client_id,
-      companyName: client.company_name,
-      cnpj: client.cnpj,
-      status: client.status,
-      billingStatus: client.billing_status,
-      portalSlug: client.portal_slug,
-      totalEmployees: client.total_employees,
-      remoteEmployees: client.remote_employees,
-      onsiteEmployees: client.onsite_employees,
-      hybridEmployees: client.hybrid_employees,
-      contactName: client.contact_name,
-      contactEmail: client.contact_email,
-      contactPhone: client.contact_phone,
-      contractStartDate: client.contract_start_date,
-      contractEndDate: client.contract_end_date,
-      updatedAt: client.updated_at,
-    },
-    campaigns: campaignsWithLinks,
-    selectedCampaign,
+    ...basePayload,
     dashboard: {
       totals: {
         responses: globalRows[0]?.n_responses ?? 0,

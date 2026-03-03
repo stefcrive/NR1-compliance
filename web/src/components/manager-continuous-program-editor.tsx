@@ -1,9 +1,19 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ChangeEvent } from "react";
 
 import { useManagerLocale } from "@/components/manager-locale";
+import {
+  CONTINUOUS_PROGRAM_MATERIAL_ACCEPT_ATTR,
+  CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCIES,
+  DEFAULT_CONTINUOUS_PROGRAM_METRICS,
+  DEFAULT_CONTINUOUS_PROGRAM_QUESTIONS,
+  DEFAULT_CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCY,
+  type ContinuousProgramMaterial,
+  type ContinuousProgramMetrics,
+  type ContinuousProgramScheduleFrequency,
+} from "@/lib/continuous-programs";
 
 type ContinuousProgram = {
   id: string;
@@ -11,6 +21,11 @@ type ContinuousProgram = {
   description: string | null;
   targetRiskTopic: number;
   triggerThreshold: number;
+  scheduleFrequency: ContinuousProgramScheduleFrequency;
+  scheduleAnchorDate: string | null;
+  evaluationQuestions: string[];
+  materials: ContinuousProgramMaterial[];
+  metrics: ContinuousProgramMetrics;
   assignments: {
     total: number;
     recommended: number;
@@ -30,6 +45,27 @@ const COPY = {
     fieldDescription: "Description",
     fieldTopic: "Target risk topic",
     fieldThreshold: "Trigger threshold",
+    fieldFrequency: "Calendar frequency",
+    fieldAnchorDate: "Calendar anchor date",
+    materialsTitle: "Campaign materials",
+    materialsHint: "Upload PDF, PPT, DOC, XLS and support assets for this campaign.",
+    materialsUpload: "Upload files",
+    materialsUploading: "Uploading...",
+    materialsNone: "No materials uploaded yet.",
+    materialsTitleField: "Material title",
+    materialsRemove: "Remove",
+    materialsRemoving: "Removing...",
+    materialsUploaded: "Material uploaded.",
+    materialsRemoved: "Material removed.",
+    evaluationTitle: "Evaluation questionnaire",
+    evaluationHint: "Define short post-campaign questions (1 to 5 score in client portal).",
+    evaluationAdd: "Add question",
+    evaluationRemove: "Remove",
+    metricsTitle: "Target metrics",
+    metricParticipation: "Participation target (%)",
+    metricCompletion: "Completion target (%)",
+    metricAdherence: "Adherence target (%)",
+    metricSatisfaction: "Satisfaction target (1-5)",
     assignments: "Assignments",
     assignedTotal: "Total",
     assignedRecommended: "Recommended",
@@ -41,9 +77,23 @@ const COPY = {
     saved: "Program saved.",
     loadError: "Could not load continuous program.",
     saveError: "Could not save program.",
+    uploadError: "Could not upload material.",
+    removeError: "Could not remove material.",
     validationTitle: "Title must have at least 3 characters.",
     validationTopic: "Target topic must be between 1 and 13.",
     validationThreshold: "Trigger threshold must be between 1.00 and 3.00.",
+    validationQuestions: "Add at least one evaluation question.",
+    validationQuestionLength: "Each evaluation question must have at least 5 characters.",
+    validationMetrics: "Metrics are invalid.",
+    frequencies: {
+      weekly: "Weekly",
+      biweekly: "Biweekly",
+      monthly: "Monthly",
+      quarterly: "Quarterly",
+      semiannual: "Semiannual",
+      annual: "Annual",
+      custom: "Custom",
+    } satisfies Record<ContinuousProgramScheduleFrequency, string>,
   },
   pt: {
     breadcrumbBase: "Base de programas",
@@ -55,6 +105,27 @@ const COPY = {
     fieldDescription: "Descricao",
     fieldTopic: "Topico de risco alvo",
     fieldThreshold: "Gatilho",
+    fieldFrequency: "Frequencia no calendario",
+    fieldAnchorDate: "Data de referencia",
+    materialsTitle: "Materiais da campanha",
+    materialsHint: "Envie PDF, PPT, DOC, XLS e materiais de apoio para esta campanha.",
+    materialsUpload: "Enviar arquivos",
+    materialsUploading: "Enviando...",
+    materialsNone: "Nenhum material enviado.",
+    materialsTitleField: "Titulo do material",
+    materialsRemove: "Remover",
+    materialsRemoving: "Removendo...",
+    materialsUploaded: "Material enviado.",
+    materialsRemoved: "Material removido.",
+    evaluationTitle: "Questionario de avaliacao",
+    evaluationHint: "Defina perguntas curtas de pos-campanha (nota 1 a 5 no portal do cliente).",
+    evaluationAdd: "Adicionar pergunta",
+    evaluationRemove: "Remover",
+    metricsTitle: "Metas de metricas",
+    metricParticipation: "Meta de participacao (%)",
+    metricCompletion: "Meta de conclusao (%)",
+    metricAdherence: "Meta de aderencia (%)",
+    metricSatisfaction: "Meta de satisfacao (1-5)",
     assignments: "Atribuicoes",
     assignedTotal: "Total",
     assignedRecommended: "Recomendados",
@@ -66,11 +137,36 @@ const COPY = {
     saved: "Programa salvo.",
     loadError: "Nao foi possivel carregar o programa continuo.",
     saveError: "Nao foi possivel salvar o programa.",
+    uploadError: "Nao foi possivel enviar o material.",
+    removeError: "Nao foi possivel remover o material.",
     validationTitle: "Titulo deve ter pelo menos 3 caracteres.",
     validationTopic: "Topico alvo deve estar entre 1 e 13.",
     validationThreshold: "Gatilho deve estar entre 1.00 e 3.00.",
+    validationQuestions: "Adicione pelo menos uma pergunta de avaliacao.",
+    validationQuestionLength: "Cada pergunta de avaliacao precisa ter pelo menos 5 caracteres.",
+    validationMetrics: "Metricas invalidas.",
+    frequencies: {
+      weekly: "Semanal",
+      biweekly: "Quinzenal",
+      monthly: "Mensal",
+      quarterly: "Trimestral",
+      semiannual: "Semestral",
+      annual: "Anual",
+      custom: "Personalizada",
+    } satisfies Record<ContinuousProgramScheduleFrequency, string>,
   },
 } as const;
+
+function clampToTwoDecimals(value: number) {
+  return Number(value.toFixed(2));
+}
+
+function formatFileSize(sizeBytes: number) {
+  if (!Number.isFinite(sizeBytes) || sizeBytes < 0) return "-";
+  if (sizeBytes < 1024) return `${sizeBytes} B`;
+  if (sizeBytes < 1024 * 1024) return `${(sizeBytes / 1024).toFixed(1)} KB`;
+  return `${(sizeBytes / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 export function ManagerContinuousProgramEditor({ programId }: { programId: string }) {
   const { locale } = useManagerLocale();
@@ -81,8 +177,19 @@ export function ManagerContinuousProgramEditor({ programId }: { programId: strin
   const [description, setDescription] = useState("");
   const [targetRiskTopic, setTargetRiskTopic] = useState(1);
   const [triggerThreshold, setTriggerThreshold] = useState(1);
+  const [scheduleFrequency, setScheduleFrequency] = useState<ContinuousProgramScheduleFrequency>(
+    DEFAULT_CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCY,
+  );
+  const [scheduleAnchorDate, setScheduleAnchorDate] = useState("");
+  const [evaluationQuestions, setEvaluationQuestions] = useState<string[]>(
+    DEFAULT_CONTINUOUS_PROGRAM_QUESTIONS,
+  );
+  const [materials, setMaterials] = useState<ContinuousProgramMaterial[]>([]);
+  const [metrics, setMetrics] = useState<ContinuousProgramMetrics>(DEFAULT_CONTINUOUS_PROGRAM_METRICS);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const [removingMaterialId, setRemovingMaterialId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
@@ -107,6 +214,15 @@ export function ManagerContinuousProgramEditor({ programId }: { programId: strin
       setDescription(payload.program.description ?? "");
       setTargetRiskTopic(payload.program.targetRiskTopic);
       setTriggerThreshold(payload.program.triggerThreshold);
+      setScheduleFrequency(payload.program.scheduleFrequency);
+      setScheduleAnchorDate(payload.program.scheduleAnchorDate ?? "");
+      setEvaluationQuestions(
+        payload.program.evaluationQuestions.length > 0
+          ? payload.program.evaluationQuestions
+          : DEFAULT_CONTINUOUS_PROGRAM_QUESTIONS,
+      );
+      setMaterials(payload.program.materials ?? []);
+      setMetrics(payload.program.metrics ?? DEFAULT_CONTINUOUS_PROGRAM_METRICS);
     } catch (loadError) {
       setProgram(null);
       setError(loadError instanceof Error ? loadError.message : t.loadError);
@@ -118,6 +234,101 @@ export function ManagerContinuousProgramEditor({ programId }: { programId: strin
   useEffect(() => {
     void loadProgram();
   }, [loadProgram]);
+
+  async function uploadMaterials(files: FileList | null) {
+    if (!files || files.length === 0) return;
+
+    setIsUploading(true);
+    setError("");
+    setNotice("");
+
+    try {
+      const uploads = Array.from(files);
+      const addedMaterials: ContinuousProgramMaterial[] = [];
+
+      for (const file of uploads) {
+        const formData = new FormData();
+        formData.append("file", file);
+
+        const response = await fetch(
+          `/api/admin/programs-database/continuous/${programId}/materials`,
+          {
+            method: "POST",
+            body: formData,
+          },
+        );
+
+        if (!response.ok) {
+          const payload = (await response.json().catch(() => ({}))) as { error?: string };
+          throw new Error(payload.error ?? t.uploadError);
+        }
+
+        const payload = (await response.json()) as { material?: ContinuousProgramMaterial };
+        if (payload.material) {
+          addedMaterials.push(payload.material);
+        }
+      }
+
+      if (addedMaterials.length > 0) {
+        setMaterials((prev) => [...prev, ...addedMaterials]);
+        setNotice(t.materialsUploaded);
+      }
+    } catch (uploadError) {
+      setError(uploadError instanceof Error ? uploadError.message : t.uploadError);
+    } finally {
+      setIsUploading(false);
+    }
+  }
+
+  async function removeMaterial(materialId: string) {
+    setRemovingMaterialId(materialId);
+    setError("");
+    setNotice("");
+
+    try {
+      const response = await fetch(
+        `/api/admin/programs-database/continuous/${programId}/materials`,
+        {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ materialId }),
+        },
+      );
+
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => ({}))) as { error?: string };
+        throw new Error(payload.error ?? t.removeError);
+      }
+
+      setMaterials((prev) => prev.filter((item) => item.id !== materialId));
+      setNotice(t.materialsRemoved);
+    } catch (removeError) {
+      setError(removeError instanceof Error ? removeError.message : t.removeError);
+    } finally {
+      setRemovingMaterialId(null);
+    }
+  }
+
+  function updateQuestion(index: number, value: string) {
+    setEvaluationQuestions((prev) => prev.map((question, itemIndex) => (itemIndex === index ? value : question)));
+  }
+
+  function removeQuestion(index: number) {
+    setEvaluationQuestions((prev) => {
+      if (prev.length <= 1) return prev;
+      return prev.filter((_, itemIndex) => itemIndex !== index);
+    });
+  }
+
+  function addQuestion() {
+    setEvaluationQuestions((prev) => [...prev, ""]);
+  }
+
+  function updateMaterialTitle(materialId: string, nextTitle: string) {
+    setMaterials((prev) =>
+      prev.map((item) => (item.id === materialId ? { ...item, title: nextTitle } : item)),
+    );
+  }
 
   async function saveProgram() {
     if (title.trim().length < 3) {
@@ -133,6 +344,47 @@ export function ManagerContinuousProgramEditor({ programId }: { programId: strin
       return;
     }
 
+    const normalizedQuestions = evaluationQuestions.map((item) => item.trim()).filter((item) => item.length > 0);
+    if (normalizedQuestions.length === 0) {
+      setError(t.validationQuestions);
+      return;
+    }
+    if (normalizedQuestions.some((item) => item.length < 5)) {
+      setError(t.validationQuestionLength);
+      return;
+    }
+
+    const normalizedMetrics = {
+      participationTarget: clampToTwoDecimals(metrics.participationTarget),
+      completionTarget: clampToTwoDecimals(metrics.completionTarget),
+      adherenceTarget: clampToTwoDecimals(metrics.adherenceTarget),
+      satisfactionTarget: clampToTwoDecimals(metrics.satisfactionTarget),
+    };
+
+    const metricsAreValid =
+      Number.isFinite(normalizedMetrics.participationTarget) &&
+      normalizedMetrics.participationTarget >= 0 &&
+      normalizedMetrics.participationTarget <= 100 &&
+      Number.isFinite(normalizedMetrics.completionTarget) &&
+      normalizedMetrics.completionTarget >= 0 &&
+      normalizedMetrics.completionTarget <= 100 &&
+      Number.isFinite(normalizedMetrics.adherenceTarget) &&
+      normalizedMetrics.adherenceTarget >= 0 &&
+      normalizedMetrics.adherenceTarget <= 100 &&
+      Number.isFinite(normalizedMetrics.satisfactionTarget) &&
+      normalizedMetrics.satisfactionTarget >= 1 &&
+      normalizedMetrics.satisfactionTarget <= 5;
+
+    if (!metricsAreValid) {
+      setError(t.validationMetrics);
+      return;
+    }
+
+    const normalizedMaterials = materials.map((item) => ({
+      ...item,
+      title: item.title.trim().length > 0 ? item.title.trim() : item.fileName,
+    }));
+
     setIsSaving(true);
     setError("");
     setNotice("");
@@ -144,7 +396,12 @@ export function ManagerContinuousProgramEditor({ programId }: { programId: strin
           title: title.trim(),
           description: description.trim() || null,
           targetRiskTopic,
-          triggerThreshold: Number(triggerThreshold.toFixed(2)),
+          triggerThreshold: clampToTwoDecimals(triggerThreshold),
+          scheduleFrequency,
+          scheduleAnchorDate: scheduleAnchorDate || null,
+          evaluationQuestions: normalizedQuestions,
+          materials: normalizedMaterials,
+          metrics: normalizedMetrics,
         }),
       });
       if (!response.ok) {
@@ -158,6 +415,11 @@ export function ManagerContinuousProgramEditor({ programId }: { programId: strin
         setDescription(payload.program.description ?? "");
         setTargetRiskTopic(payload.program.targetRiskTopic);
         setTriggerThreshold(payload.program.triggerThreshold);
+        setScheduleFrequency(payload.program.scheduleFrequency);
+        setScheduleAnchorDate(payload.program.scheduleAnchorDate ?? "");
+        setEvaluationQuestions(payload.program.evaluationQuestions);
+        setMaterials(payload.program.materials);
+        setMetrics(payload.program.metrics);
       }
       setNotice(t.saved);
     } catch (saveError) {
@@ -247,6 +509,198 @@ export function ManagerContinuousProgramEditor({ programId }: { programId: strin
           </label>
         </div>
 
+        <div className="grid gap-4 md:grid-cols-2">
+          <label className="space-y-1">
+            <span className="text-sm font-medium text-[#214759]">{t.fieldFrequency}</span>
+            <select
+              className="w-full rounded-lg border border-[#c9dce8] px-3 py-2 text-sm"
+              value={scheduleFrequency}
+              onChange={(event) =>
+                setScheduleFrequency(event.target.value as ContinuousProgramScheduleFrequency)
+              }
+            >
+              {CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCIES.map((frequency) => (
+                <option key={frequency} value={frequency}>
+                  {t.frequencies[frequency]}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="space-y-1">
+            <span className="text-sm font-medium text-[#214759]">{t.fieldAnchorDate}</span>
+            <input
+              type="date"
+              className="w-full rounded-lg border border-[#c9dce8] px-3 py-2 text-sm"
+              value={scheduleAnchorDate}
+              onChange={(event) => setScheduleAnchorDate(event.target.value)}
+            />
+          </label>
+        </div>
+
+        <div className="rounded-xl border border-[#d8e4ee] bg-[#f8fbfd] p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <p className="text-sm font-semibold text-[#123447]">{t.materialsTitle}</p>
+              <p className="text-xs text-[#35515f]">{t.materialsHint}</p>
+            </div>
+            <label className="cursor-pointer rounded-full border border-[#9ec8db] px-4 py-2 text-xs font-semibold text-[#0f5b73]">
+              {isUploading ? t.materialsUploading : t.materialsUpload}
+              <input
+                type="file"
+                multiple
+                accept={CONTINUOUS_PROGRAM_MATERIAL_ACCEPT_ATTR}
+                className="hidden"
+                onChange={(event: ChangeEvent<HTMLInputElement>) => {
+                  void uploadMaterials(event.target.files);
+                  event.target.value = "";
+                }}
+                disabled={isUploading}
+              />
+            </label>
+          </div>
+
+          {materials.length === 0 ? (
+            <p className="mt-3 text-xs text-[#55707f]">{t.materialsNone}</p>
+          ) : (
+            <ul className="mt-3 space-y-2">
+              {materials.map((item) => (
+                <li key={item.id} className="rounded-xl border border-[#d8e4ee] bg-white p-3">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1 space-y-1">
+                      <label className="space-y-1">
+                        <span className="text-xs font-medium text-[#214759]">{t.materialsTitleField}</span>
+                        <input
+                          value={item.title}
+                          onChange={(event) => updateMaterialTitle(item.id, event.target.value)}
+                          className="w-full rounded-lg border border-[#c9dce8] px-3 py-1.5 text-sm"
+                        />
+                      </label>
+                      <p className="text-xs text-[#55707f]">
+                        {item.fileName} | {formatFileSize(item.sizeBytes)}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <a
+                        href={item.downloadUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="rounded-full border border-[#c8c8c8] px-3 py-1 text-xs font-semibold text-[#1b2832]"
+                      >
+                        Download
+                      </a>
+                      <button
+                        type="button"
+                        onClick={() => void removeMaterial(item.id)}
+                        disabled={removingMaterialId === item.id}
+                        className="rounded-full border border-[#e8c1c1] px-3 py-1 text-xs font-semibold text-[#8d1c1c] disabled:opacity-60"
+                      >
+                        {removingMaterialId === item.id ? t.materialsRemoving : t.materialsRemove}
+                      </button>
+                    </div>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        <div className="rounded-xl border border-[#d8e4ee] bg-[#f8fbfd] p-3">
+          <p className="text-sm font-semibold text-[#123447]">{t.evaluationTitle}</p>
+          <p className="text-xs text-[#35515f]">{t.evaluationHint}</p>
+          <div className="mt-3 space-y-2">
+            {evaluationQuestions.map((question, index) => (
+              <div key={`${index}-${question.slice(0, 12)}`} className="flex gap-2">
+                <input
+                  value={question}
+                  onChange={(event) => updateQuestion(index, event.target.value)}
+                  className="w-full rounded-lg border border-[#c9dce8] px-3 py-2 text-sm"
+                />
+                <button
+                  type="button"
+                  onClick={() => removeQuestion(index)}
+                  disabled={evaluationQuestions.length <= 1}
+                  className="rounded-full border border-[#e8c1c1] px-3 py-1 text-xs font-semibold text-[#8d1c1c] disabled:opacity-50"
+                >
+                  {t.evaluationRemove}
+                </button>
+              </div>
+            ))}
+          </div>
+          <button
+            type="button"
+            onClick={addQuestion}
+            className="mt-3 rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
+          >
+            {t.evaluationAdd}
+          </button>
+        </div>
+
+        <div className="rounded-xl border border-[#d8e4ee] bg-[#f8fbfd] p-3">
+          <p className="text-sm font-semibold text-[#123447]">{t.metricsTitle}</p>
+          <div className="mt-3 grid gap-3 md:grid-cols-2">
+            <label className="space-y-1">
+              <span className="text-xs font-medium text-[#214759]">{t.metricParticipation}</span>
+              <input
+                type="number"
+                min={0}
+                max={100}
+                step={0.1}
+                className="w-full rounded-lg border border-[#c9dce8] px-3 py-2 text-sm"
+                value={metrics.participationTarget}
+                onChange={(event) =>
+                  setMetrics((prev) => ({ ...prev, participationTarget: Number(event.target.value || 0) }))
+                }
+              />
+            </label>
+
+            <label className="space-y-1">
+              <span className="text-xs font-medium text-[#214759]">{t.metricCompletion}</span>
+              <input
+                type="number"
+                min={0}
+                max={100}
+                step={0.1}
+                className="w-full rounded-lg border border-[#c9dce8] px-3 py-2 text-sm"
+                value={metrics.completionTarget}
+                onChange={(event) =>
+                  setMetrics((prev) => ({ ...prev, completionTarget: Number(event.target.value || 0) }))
+                }
+              />
+            </label>
+
+            <label className="space-y-1">
+              <span className="text-xs font-medium text-[#214759]">{t.metricAdherence}</span>
+              <input
+                type="number"
+                min={0}
+                max={100}
+                step={0.1}
+                className="w-full rounded-lg border border-[#c9dce8] px-3 py-2 text-sm"
+                value={metrics.adherenceTarget}
+                onChange={(event) =>
+                  setMetrics((prev) => ({ ...prev, adherenceTarget: Number(event.target.value || 0) }))
+                }
+              />
+            </label>
+
+            <label className="space-y-1">
+              <span className="text-xs font-medium text-[#214759]">{t.metricSatisfaction}</span>
+              <input
+                type="number"
+                min={1}
+                max={5}
+                step={0.1}
+                className="w-full rounded-lg border border-[#c9dce8] px-3 py-2 text-sm"
+                value={metrics.satisfactionTarget}
+                onChange={(event) =>
+                  setMetrics((prev) => ({ ...prev, satisfactionTarget: Number(event.target.value || 0) }))
+                }
+              />
+            </label>
+          </div>
+        </div>
+
         <div className="rounded-xl border border-[#d8e4ee] bg-[#f8fbfd] p-3">
           <p className="text-sm font-semibold text-[#123447]">{t.assignments}</p>
           <div className="mt-2 grid gap-2 text-xs text-[#35515f] md:grid-cols-4">
@@ -268,7 +722,7 @@ export function ManagerContinuousProgramEditor({ programId }: { programId: strin
         <div className="flex flex-wrap gap-2">
           <button
             type="button"
-            disabled={isSaving}
+            disabled={isSaving || isUploading || removingMaterialId !== null}
             onClick={() => void saveProgram()}
             className="rounded-full bg-[#0f5b73] px-4 py-2 text-xs font-semibold text-white disabled:opacity-60"
           >

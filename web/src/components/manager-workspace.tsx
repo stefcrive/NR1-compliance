@@ -33,6 +33,17 @@ type Campaign = {
   created_at?: string;
 };
 
+type MasterCalendarEvent = {
+  id: string;
+  clientId: string | null;
+  clientName: string | null;
+  eventType: "drps_start" | "drps_close" | "continuous_meeting" | "blocked";
+  title: string;
+  startsAt: string;
+  endsAt: string;
+  status: "scheduled" | "completed" | "cancelled";
+};
+
 const WEEK_LABELS = {
   en: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
   pt: ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sab"],
@@ -74,6 +85,17 @@ const COPY = {
     nextMonth: "Next month",
     liveDrps: "Active DRPS diagnostics",
     noActiveCampaigns: "No active DRPS diagnostics.",
+    calendarDownError: "Master calendar is unavailable now. Clients area is still operational.",
+    blockWindowTitle: "Block time window",
+    blockWindowClient: "Company",
+    blockWindowGeneral: "General (all companies)",
+    blockWindowLabel: "Label",
+    blockWindowStart: "Start",
+    blockWindowEnd: "End",
+    blockWindowSave: "Save block",
+    blockWindowSaving: "Saving...",
+    blockWindowSaved: "Block saved.",
+    blockWindowError: "Could not save blocked window.",
     noCompany: "No company",
     noLink: "Unlinked",
     startLabel: "Start",
@@ -123,6 +145,17 @@ const COPY = {
     nextMonth: "Proximo",
     liveDrps: "Diagnosticos DRPS ativos",
     noActiveCampaigns: "Nenhum diagnostico DRPS ativo.",
+    calendarDownError: "Calendario mestre indisponivel no momento. A area de clientes segue operacional.",
+    blockWindowTitle: "Bloquear horario",
+    blockWindowClient: "Empresa",
+    blockWindowGeneral: "Geral (todas empresas)",
+    blockWindowLabel: "Descricao",
+    blockWindowStart: "Inicio",
+    blockWindowEnd: "Fim",
+    blockWindowSave: "Salvar bloqueio",
+    blockWindowSaving: "Salvando...",
+    blockWindowSaved: "Bloqueio salvo.",
+    blockWindowError: "Nao foi possivel salvar bloqueio.",
     noCompany: "Sem empresa",
     noLink: "Sem vinculo",
     startLabel: "Inicio",
@@ -147,6 +180,11 @@ function toDate(value: string, locale: ManagerLocale) {
   return new Intl.DateTimeFormat(uiLocale(locale), { dateStyle: "short", timeStyle: "short" }).format(
     new Date(value),
   );
+}
+
+function toDatetimeLocal(value: Date) {
+  const local = new Date(value.getTime() - value.getTimezoneOffset() * 60000);
+  return local.toISOString().slice(0, 16);
 }
 
 function dayKey(date: Date) {
@@ -221,37 +259,51 @@ export function ManagerWorkspace({
   });
   const [clients, setClients] = useState<Client[]>([]);
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
+  const [calendarEvents, setCalendarEvents] = useState<MasterCalendarEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [clientStatusFilter, setClientStatusFilter] = useState<ClientStatusFilter>("all");
   const [billingFilter, setBillingFilter] = useState<BillingFilter>("all");
   const [clientListView, setClientListView] = useState<ClientListView>("cards");
+  const [blockClientId, setBlockClientId] = useState("");
+  const [blockTitle, setBlockTitle] = useState("Bloqueio operacional");
+  const [blockStartsAt, setBlockStartsAt] = useState(() => toDatetimeLocal(new Date(Date.now() + 24 * 60 * 60 * 1000)));
+  const [blockEndsAt, setBlockEndsAt] = useState(() => toDatetimeLocal(new Date(Date.now() + 25 * 60 * 60 * 1000)));
+  const [isSavingBlock, setIsSavingBlock] = useState(false);
+  const [blockFeedback, setBlockFeedback] = useState("");
 
   const loadAll = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
-      const [clientsRes, campaignsRes] = await Promise.all([
+      const [clientsRes, campaignsRes, calendarRes] = await Promise.all([
         fetch("/api/admin/clients", { cache: "no-store" }),
         fetch("/api/admin/campaigns", { cache: "no-store" }),
+        fetch("/api/admin/calendar", { cache: "no-store" }),
       ]);
       if (!clientsRes.ok) throw new Error(t.loadClientsError);
       const clientsPayload = (await clientsRes.json()) as { clients: Client[] };
       const campaignsPayload = campaignsRes.ok
         ? ((await campaignsRes.json()) as { campaigns: Campaign[] })
         : { campaigns: [] as Campaign[] };
+      const calendarPayload = calendarRes.ok
+        ? ((await calendarRes.json()) as { events: MasterCalendarEvent[] })
+        : { events: [] as MasterCalendarEvent[] };
       setClients(clientsPayload.clients ?? []);
       setCampaigns(campaignsPayload.campaigns ?? []);
+      setCalendarEvents(calendarPayload.events ?? []);
       if (!campaignsRes.ok) {
         setError(t.campaignsDownError);
+      } else if (!calendarRes.ok) {
+        setError(t.calendarDownError);
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : t.workspaceLoadError);
     } finally {
       setLoading(false);
     }
-  }, [t.campaignsDownError, t.loadClientsError, t.workspaceLoadError]);
+  }, [t.calendarDownError, t.campaignsDownError, t.loadClientsError, t.workspaceLoadError]);
 
   useEffect(() => {
     void loadAll();
@@ -261,24 +313,71 @@ export function ManagerWorkspace({
     setTab(initialTab);
   }, [initialTab]);
 
-  const events = useMemo(() => {
-    const list: Array<{ key: string; title: string; type: "start" | "close" | "created"; client: string }> = [];
-    for (const campaign of campaigns) {
-      const client = campaign.client_name ?? t.noCompany;
-      const rows: Array<{ date?: string | null; type: "start" | "close" | "created"; title: string }> = [
-        { date: campaign.created_at, type: "created", title: `${t.eventCreated}: ${campaign.name}` },
-        { date: campaign.starts_at, type: "start", title: `${t.eventStart}: ${campaign.name}` },
-        { date: campaign.closes_at, type: "close", title: `${t.eventClose}: ${campaign.name}` },
-      ];
-      for (const row of rows) {
-        if (!row.date) continue;
-        const value = new Date(row.date);
-        if (Number.isNaN(value.getTime())) continue;
-        list.push({ key: dayKey(value), title: row.title, type: row.type, client });
+  useEffect(() => {
+    if (clients.length === 0) return;
+    setBlockClientId((previous) => previous || clients[0].id);
+  }, [clients]);
+
+  const createBlockedWindow = useCallback(async () => {
+    if (!blockStartsAt || !blockEndsAt) return;
+    setIsSavingBlock(true);
+    setBlockFeedback("");
+    try {
+      const startsAt = new Date(blockStartsAt).toISOString();
+      const endsAt = new Date(blockEndsAt).toISOString();
+      const response = await fetch("/api/admin/calendar", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          eventType: "blocked",
+          clientId: blockClientId || null,
+          title: blockTitle.trim() || "Bloqueio de agenda",
+          startsAt,
+          endsAt,
+        }),
+      });
+      const body = (await response.json().catch(() => ({}))) as { error?: string };
+      if (!response.ok) {
+        throw new Error(body.error ?? t.blockWindowError);
       }
+      setBlockFeedback(t.blockWindowSaved);
+      await loadAll();
+    } catch (saveError) {
+      setBlockFeedback(saveError instanceof Error ? saveError.message : t.blockWindowError);
+    } finally {
+      setIsSavingBlock(false);
+    }
+  }, [blockClientId, blockEndsAt, blockStartsAt, blockTitle, loadAll, t.blockWindowError, t.blockWindowSaved]);
+
+  const events = useMemo(() => {
+    const list: Array<{
+      key: string;
+      title: string;
+      type: "start" | "close" | "meeting" | "blocked";
+      label: string;
+    }> = [];
+    for (const event of calendarEvents) {
+      const value = new Date(event.startsAt);
+      if (Number.isNaN(value.getTime())) continue;
+      const client = event.clientName ?? t.noCompany;
+      const type =
+        event.eventType === "drps_start"
+          ? "start"
+          : event.eventType === "drps_close"
+            ? "close"
+            : event.eventType === "continuous_meeting"
+              ? "meeting"
+              : "blocked";
+      const label =
+        type === "meeting"
+          ? `${client} reuniao`
+          : type === "blocked"
+            ? `${client} bloqueio`
+            : `${client} DRPS`;
+      list.push({ key: dayKey(value), title: event.title, type, label });
     }
     return list;
-  }, [campaigns, t.eventClose, t.eventCreated, t.eventStart, t.noCompany]);
+  }, [calendarEvents, t.noCompany]);
 
   const byDay = useMemo(() => {
     const map = new Map<string, typeof events>();
@@ -592,11 +691,13 @@ export function ManagerWorkspace({
                             ? "bg-[#e2f4ea] text-[#1f5b38]"
                             : e.type === "close"
                               ? "bg-[#fff3df] text-[#7a4b00]"
-                              : "bg-[#e8f3f8] text-[#0f5b73]"
+                              : e.type === "meeting"
+                                ? "bg-[#e8f3f8] text-[#0f5b73]"
+                                : "bg-[#fce6f1] text-[#7a2755]"
                         }`}
                         title={e.title}
                       >
-                        {e.client}
+                        {e.label}
                       </p>
                     ))}
                     {d.events.length > 3 ? <p className="text-[10px] text-[#527083]">+{d.events.length - 3}</p> : null}
@@ -607,7 +708,65 @@ export function ManagerWorkspace({
           </article>
 
           <article className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
-            <h4 className="text-base font-semibold text-[#123447]">{t.liveDrps}</h4>
+            <section className="rounded-lg border border-[#e2edf3] bg-white p-3">
+              <h4 className="text-base font-semibold text-[#123447]">{t.blockWindowTitle}</h4>
+              <div className="mt-2 space-y-2">
+                <label className="block">
+                  <span className="text-xs text-[#4d6a79]">{t.blockWindowClient}</span>
+                  <select
+                    value={blockClientId}
+                    onChange={(event) => setBlockClientId(event.target.value)}
+                    className="mt-1 w-full rounded border border-[#c8c8c8] px-2 py-1 text-xs"
+                  >
+                    <option value="">{t.blockWindowGeneral}</option>
+                    {clients.map((client) => (
+                      <option key={client.id} value={client.id}>
+                        {client.companyName}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="block">
+                  <span className="text-xs text-[#4d6a79]">{t.blockWindowLabel}</span>
+                  <input
+                    value={blockTitle}
+                    onChange={(event) => setBlockTitle(event.target.value)}
+                    className="mt-1 w-full rounded border border-[#c8c8c8] px-2 py-1 text-xs"
+                  />
+                </label>
+                <div className="grid gap-2 md:grid-cols-2">
+                  <label className="block">
+                    <span className="text-xs text-[#4d6a79]">{t.blockWindowStart}</span>
+                    <input
+                      type="datetime-local"
+                      value={blockStartsAt}
+                      onChange={(event) => setBlockStartsAt(event.target.value)}
+                      className="mt-1 w-full rounded border border-[#c8c8c8] px-2 py-1 text-xs"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="text-xs text-[#4d6a79]">{t.blockWindowEnd}</span>
+                    <input
+                      type="datetime-local"
+                      value={blockEndsAt}
+                      onChange={(event) => setBlockEndsAt(event.target.value)}
+                      className="mt-1 w-full rounded border border-[#c8c8c8] px-2 py-1 text-xs"
+                    />
+                  </label>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void createBlockedWindow()}
+                  disabled={isSavingBlock}
+                  className="rounded-full border border-[#c8c8c8] bg-white px-3 py-1 text-xs font-semibold text-[#123447] disabled:opacity-50"
+                >
+                  {isSavingBlock ? t.blockWindowSaving : t.blockWindowSave}
+                </button>
+                {blockFeedback ? <p className="text-xs text-[#4d6a79]">{blockFeedback}</p> : null}
+              </div>
+            </section>
+
+            <h4 className="mt-4 text-base font-semibold text-[#123447]">{t.liveDrps}</h4>
             <div className="mt-3 space-y-2">
               {liveCampaigns.length === 0 ? (
                 <p className="text-sm text-[#5a7383]">{t.noActiveCampaigns}</p>

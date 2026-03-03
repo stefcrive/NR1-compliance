@@ -1,5 +1,3 @@
-import { randomUUID } from "node:crypto";
-
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
@@ -52,12 +50,17 @@ type ClientSectorRow = {
   remote_workers: number;
   onsite_workers: number;
   hybrid_workers: number;
-  functions: string | null;
-  workers_in_role: number;
-  possible_mental_health_harms: string | null;
-  existing_control_measures: string | null;
-  elaboration_date: string | null;
-  risk_parameter: number | string;
+  functions?: string | null;
+  workers_in_role?: number | null;
+  shifts?: string | null;
+  vulnerable_groups?: string | null;
+  main_contact_name?: string | null;
+  main_contact_email?: string | null;
+  main_contact_phone?: string | null;
+  possible_mental_health_harms?: string | null;
+  existing_control_measures?: string | null;
+  elaboration_date?: string | null;
+  risk_parameter: number | string | null;
 };
 
 type SurveyRow = {
@@ -85,6 +88,11 @@ const sectorSchema = z.object({
   hybridWorkers: z.number().int().min(0).optional(),
   functions: z.string().trim().max(255).optional(),
   workersInRole: z.number().int().min(0).optional(),
+  shifts: z.string().trim().max(255).optional(),
+  vulnerableGroups: z.string().trim().max(1200).optional(),
+  mainContactName: z.string().trim().max(120).optional().or(z.literal("")),
+  mainContactEmail: z.string().trim().email().max(160).optional().or(z.literal("")),
+  mainContactPhone: z.string().trim().max(40).optional().or(z.literal("")),
   possibleMentalHealthHarms: z.string().trim().max(1200).optional(),
   existingControlMeasures: z.string().trim().max(1200).optional(),
   elaborationDate: z.string().trim().optional(),
@@ -112,7 +120,98 @@ const updateClientSchema = z
     message: "At least one field must be provided.",
   });
 
+const CLIENT_SECTOR_SELECT_FULL =
+  "id,client_id,key,name,remote_workers,onsite_workers,hybrid_workers,functions,workers_in_role,shifts,vulnerable_groups,main_contact_name,main_contact_email,main_contact_phone,possible_mental_health_harms,existing_control_measures,elaboration_date,risk_parameter";
+const CLIENT_SECTOR_SELECT_BASE =
+  "id,client_id,key,name,remote_workers,onsite_workers,hybrid_workers,risk_parameter";
+const CLIENT_SECTOR_MIGRATION_WARNING =
+  "Client updated, but extended sector fields need migrations 20260302110000_client_sector_onboarding_fields.sql, 20260302113000_client_onboarding_company_indicators.sql and 20260302200000_client_sector_main_contacts.sql.";
+
+function isClientSectorsColumnMissing(error: { code?: string | null; message?: string | null } | null | undefined) {
+  return (
+    isMissingColumnError(error, "functions") ||
+    isMissingColumnError(error, "workers_in_role") ||
+    isMissingColumnError(error, "shifts") ||
+    isMissingColumnError(error, "vulnerable_groups") ||
+    isMissingColumnError(error, "main_contact_name") ||
+    isMissingColumnError(error, "main_contact_email") ||
+    isMissingColumnError(error, "main_contact_phone") ||
+    isMissingColumnError(error, "possible_mental_health_harms") ||
+    isMissingColumnError(error, "existing_control_measures") ||
+    isMissingColumnError(error, "elaboration_date")
+  );
+}
+
+async function loadClientSectorsWithFallback(
+  supabase: ReturnType<typeof getSupabaseAdminClient>,
+  clientId: string,
+): Promise<{ data: ClientSectorRow[]; hasCompatibilityWarning: boolean; error: string | null }> {
+  const fullResult = await supabase
+    .from("client_sectors")
+    .select(CLIENT_SECTOR_SELECT_FULL)
+    .eq("client_id", clientId)
+    .order("created_at", { ascending: true })
+    .returns<ClientSectorRow[]>();
+
+  if (!fullResult.error) {
+    return {
+      data: fullResult.data ?? [],
+      hasCompatibilityWarning: false,
+      error: null,
+    };
+  }
+
+  if (isMissingTableError(fullResult.error, "client_sectors")) {
+    return {
+      data: [],
+      hasCompatibilityWarning: false,
+      error: null,
+    };
+  }
+
+  if (!isClientSectorsColumnMissing(fullResult.error)) {
+    return {
+      data: [],
+      hasCompatibilityWarning: false,
+      error: fullResult.error.message,
+    };
+  }
+
+  const baseResult = await supabase
+    .from("client_sectors")
+    .select(CLIENT_SECTOR_SELECT_BASE)
+    .eq("client_id", clientId)
+    .order("created_at", { ascending: true })
+    .returns<ClientSectorRow[]>();
+
+  if (baseResult.error) {
+    if (isMissingTableError(baseResult.error, "client_sectors")) {
+      return {
+        data: [],
+        hasCompatibilityWarning: true,
+        error: null,
+      };
+    }
+    return {
+      data: [],
+      hasCompatibilityWarning: true,
+      error: baseResult.error.message,
+    };
+  }
+
+  return {
+    data: baseResult.data ?? [],
+    hasCompatibilityWarning: true,
+    error: null,
+  };
+}
+
 function mapSector(item: ClientSectorRow) {
+  const workersInRole =
+    item.workers_in_role ??
+    Math.max(0, item.remote_workers) +
+      Math.max(0, item.onsite_workers) +
+      Math.max(0, item.hybrid_workers);
   return {
     id: item.id,
     key: item.key,
@@ -120,12 +219,17 @@ function mapSector(item: ClientSectorRow) {
     remoteWorkers: item.remote_workers,
     onsiteWorkers: item.onsite_workers,
     hybridWorkers: item.hybrid_workers,
-    functions: item.functions,
-    workersInRole: item.workers_in_role,
-    possibleMentalHealthHarms: item.possible_mental_health_harms,
-    existingControlMeasures: item.existing_control_measures,
-    elaborationDate: item.elaboration_date,
-    riskParameter: toRiskParameter(item.risk_parameter),
+    functions: item.functions ?? null,
+    workersInRole,
+    shifts: item.shifts ?? null,
+    vulnerableGroups: item.vulnerable_groups ?? null,
+    mainContactName: item.main_contact_name ?? null,
+    mainContactEmail: item.main_contact_email ?? null,
+    mainContactPhone: item.main_contact_phone ?? null,
+    possibleMentalHealthHarms: item.possible_mental_health_harms ?? null,
+    existingControlMeasures: item.existing_control_measures ?? null,
+    elaborationDate: item.elaboration_date ?? null,
+    riskParameter: toRiskParameter(item.risk_parameter ?? 1),
   };
 }
 
@@ -216,14 +320,7 @@ export async function GET(
 
   const supabase = getSupabaseAdminClient();
   const [sectorsResult, campaignsResult] = await Promise.all([
-    supabase
-      .from("client_sectors")
-      .select(
-        "id,client_id,key,name,remote_workers,onsite_workers,hybrid_workers,functions,workers_in_role,possible_mental_health_harms,existing_control_measures,elaboration_date,risk_parameter",
-      )
-      .eq("client_id", clientId)
-      .order("created_at", { ascending: true })
-      .returns<ClientSectorRow[]>(),
+    loadClientSectorsWithFallback(supabase, clientId),
     supabase
       .from("surveys")
       .select("id,name,public_slug,status,starts_at,closes_at,created_at")
@@ -235,13 +332,7 @@ export async function GET(
   if (sectorsResult.error || campaignsResult.error) {
     if (
       isMissingColumnError(campaignsResult.error, "client_id") ||
-      isMissingTableError(campaignsResult.error, "surveys") ||
-      isMissingTableError(sectorsResult.error, "client_sectors") ||
-      isMissingColumnError(sectorsResult.error, "functions") ||
-      isMissingColumnError(sectorsResult.error, "workers_in_role") ||
-      isMissingColumnError(sectorsResult.error, "possible_mental_health_harms") ||
-      isMissingColumnError(sectorsResult.error, "existing_control_measures") ||
-      isMissingColumnError(sectorsResult.error, "elaboration_date")
+      isMissingTableError(campaignsResult.error, "surveys")
     ) {
       let fallbackCampaigns: SurveyRow[] = campaignsResult.data ?? [];
       if (
@@ -286,7 +377,7 @@ export async function GET(
           contractStartDate: client.contract_start_date,
           contractEndDate: client.contract_end_date,
           updatedAt: client.updated_at,
-          sectors: [],
+          sectors: sectorsResult.data.map(mapSector),
           campaigns: fallbackCampaigns,
         },
       });
@@ -312,7 +403,7 @@ export async function GET(
       contractStartDate: client.contract_start_date,
       contractEndDate: client.contract_end_date,
       updatedAt: client.updated_at,
-      sectors: (sectorsResult.data ?? []).map(mapSector),
+      sectors: sectorsResult.data.map(mapSector),
       campaigns: campaignsResult.data ?? [],
     },
   });
@@ -460,8 +551,7 @@ export async function PATCH(
   }
 
   if (parsed.sectors) {
-    const sectorsPayload = parsed.sectors.map((sector) => ({
-      id: randomUUID(),
+    const preparedSectors = parsed.sectors.map((sector) => ({
       client_id: clientId,
       key: slugify(sector.name),
       name: sector.name,
@@ -475,6 +565,11 @@ export async function PATCH(
             normalizeHeadcount(sector.onsiteWorkers) +
             normalizeHeadcount(sector.hybridWorkers),
       ),
+      shifts: sector.shifts?.trim() || null,
+      vulnerable_groups: sector.vulnerableGroups?.trim() || null,
+      main_contact_name: sector.mainContactName?.trim() || null,
+      main_contact_email: sector.mainContactEmail?.trim() || null,
+      main_contact_phone: sector.mainContactPhone?.trim() || null,
       possible_mental_health_harms: sector.possibleMentalHealthHarms?.trim() || null,
       existing_control_measures: sector.existingControlMeasures?.trim() || null,
       elaboration_date: coerceNullableDate(sector.elaborationDate),
@@ -482,78 +577,146 @@ export async function PATCH(
       updated_at: new Date().toISOString(),
     }));
 
-    if (sectorsPayload.some((sector) => !sector.key)) {
+    if (preparedSectors.some((sector) => !sector.key)) {
       return NextResponse.json({ error: "At least one sector name is invalid." }, { status: 400 });
     }
+    const keySet = new Set<string>();
+    for (const sector of preparedSectors) {
+      if (keySet.has(sector.key)) {
+        return NextResponse.json(
+          { error: "Two or more sectors resolve to the same key. Rename duplicated sector names." },
+          { status: 400 },
+        );
+      }
+      keySet.add(sector.key);
+    }
 
-    const { error: deleteSectorsError } = await supabase
+    const { error: sectorsSchemaProbeError } = await supabase
       .from("client_sectors")
-      .delete()
-      .eq("client_id", clientId);
+      .select(
+        "functions,workers_in_role,shifts,vulnerable_groups,main_contact_name,main_contact_email,main_contact_phone,possible_mental_health_harms,existing_control_measures,elaboration_date",
+      )
+      .limit(1);
 
-    if (deleteSectorsError) {
+    const sectorsTableMissing = isMissingTableError(sectorsSchemaProbeError, "client_sectors");
+    const hasSectorFunctions = !isMissingColumnError(sectorsSchemaProbeError, "functions");
+    const hasSectorWorkersInRole = !isMissingColumnError(sectorsSchemaProbeError, "workers_in_role");
+    const hasSectorShifts = !isMissingColumnError(sectorsSchemaProbeError, "shifts");
+    const hasSectorVulnerableGroups = !isMissingColumnError(sectorsSchemaProbeError, "vulnerable_groups");
+    const hasMainContactName = !isMissingColumnError(sectorsSchemaProbeError, "main_contact_name");
+    const hasMainContactEmail = !isMissingColumnError(sectorsSchemaProbeError, "main_contact_email");
+    const hasMainContactPhone = !isMissingColumnError(sectorsSchemaProbeError, "main_contact_phone");
+    const hasSectorHarms = !isMissingColumnError(sectorsSchemaProbeError, "possible_mental_health_harms");
+    const hasSectorControls = !isMissingColumnError(sectorsSchemaProbeError, "existing_control_measures");
+    const hasSectorElaborationDate = !isMissingColumnError(sectorsSchemaProbeError, "elaboration_date");
+
+    if (
+      sectorsSchemaProbeError &&
+      !sectorsTableMissing &&
+      !isMissingColumnError(sectorsSchemaProbeError, "functions") &&
+      !isMissingColumnError(sectorsSchemaProbeError, "workers_in_role") &&
+      !isMissingColumnError(sectorsSchemaProbeError, "shifts") &&
+      !isMissingColumnError(sectorsSchemaProbeError, "vulnerable_groups") &&
+      !isMissingColumnError(sectorsSchemaProbeError, "main_contact_name") &&
+      !isMissingColumnError(sectorsSchemaProbeError, "main_contact_email") &&
+      !isMissingColumnError(sectorsSchemaProbeError, "main_contact_phone") &&
+      !isMissingColumnError(sectorsSchemaProbeError, "possible_mental_health_harms") &&
+      !isMissingColumnError(sectorsSchemaProbeError, "existing_control_measures") &&
+      !isMissingColumnError(sectorsSchemaProbeError, "elaboration_date")
+    ) {
+      return NextResponse.json({ error: "Could not validate sector schema." }, { status: 500 });
+    }
+
+    const sectorsPayload = preparedSectors.map((sector) => {
+      const payload: Record<string, unknown> = {
+        client_id: sector.client_id,
+        key: sector.key,
+        name: sector.name,
+        remote_workers: sector.remote_workers,
+        onsite_workers: sector.onsite_workers,
+        hybrid_workers: sector.hybrid_workers,
+        risk_parameter: sector.risk_parameter,
+        updated_at: sector.updated_at,
+      };
+      if (hasSectorFunctions) payload.functions = sector.functions;
+      if (hasSectorWorkersInRole) payload.workers_in_role = sector.workers_in_role;
+      if (hasSectorShifts) payload.shifts = sector.shifts;
+      if (hasSectorVulnerableGroups) payload.vulnerable_groups = sector.vulnerable_groups;
+      if (hasMainContactName) payload.main_contact_name = sector.main_contact_name;
+      if (hasMainContactEmail) payload.main_contact_email = sector.main_contact_email;
+      if (hasMainContactPhone) payload.main_contact_phone = sector.main_contact_phone;
+      if (hasSectorHarms) payload.possible_mental_health_harms = sector.possible_mental_health_harms;
+      if (hasSectorControls) payload.existing_control_measures = sector.existing_control_measures;
+      if (hasSectorElaborationDate) payload.elaboration_date = sector.elaboration_date;
+      return payload;
+    });
+
+    if (sectorsPayload.length > 0) {
+      const { error: upsertSectorsError } = await supabase
+        .from("client_sectors")
+        .upsert(sectorsPayload, { onConflict: "client_id,key" });
+      if (upsertSectorsError) {
+        return NextResponse.json({ error: "Could not save sector profile." }, { status: 500 });
+      }
+    }
+
+    const { data: existingSectors, error: existingSectorsError } = await supabase
+      .from("client_sectors")
+      .select("id,key")
+      .eq("client_id", clientId)
+      .returns<Array<{ id: string; key: string }>>();
+
+    if (existingSectorsError) {
       return NextResponse.json({ error: "Could not refresh sector profile." }, { status: 500 });
     }
 
-    if (sectorsPayload.length > 0) {
-      const { error: insertSectorsError } = await supabase
-        .from("client_sectors")
-        .insert(sectorsPayload);
+    const staleIds = (existingSectors ?? [])
+      .filter((row) => !keySet.has(row.key))
+      .map((row) => row.id);
 
-      if (insertSectorsError) {
-        return NextResponse.json({ error: "Could not save sector profile." }, { status: 500 });
+    if (staleIds.length > 0) {
+      const { error: deleteStaleSectorsError } = await supabase
+        .from("client_sectors")
+        .delete()
+        .in("id", staleIds);
+
+      if (deleteStaleSectorsError) {
+        return NextResponse.json({ error: "Could not refresh sector profile." }, { status: 500 });
       }
     }
   }
 
-  const { data: sectors, error: sectorsError } = await supabase
-    .from("client_sectors")
-    .select(
-      "id,client_id,key,name,remote_workers,onsite_workers,hybrid_workers,functions,workers_in_role,possible_mental_health_harms,existing_control_measures,elaboration_date,risk_parameter",
-    )
-    .eq("client_id", clientId)
-    .order("created_at", { ascending: true })
-    .returns<ClientSectorRow[]>();
+  const sectorsResult = await loadClientSectorsWithFallback(supabase, clientId);
 
-  if (sectorsError) {
-    if (
-      isMissingColumnError(sectorsError, "functions") ||
-      isMissingColumnError(sectorsError, "workers_in_role") ||
-      isMissingColumnError(sectorsError, "possible_mental_health_harms") ||
-      isMissingColumnError(sectorsError, "existing_control_measures") ||
-      isMissingColumnError(sectorsError, "elaboration_date")
-    ) {
-      return NextResponse.json({
-        client: {
-          id: updatedClient.client_id,
-          companyName: updatedClient.company_name,
-          cnpj: updatedClient.cnpj,
-          totalEmployees: updatedClient.total_employees,
-          remoteEmployees: updatedClient.remote_employees,
-          onsiteEmployees: updatedClient.onsite_employees,
-          hybridEmployees: updatedClient.hybrid_employees,
-          status: updatedClient.status,
-          billingStatus: updatedClient.billing_status,
-          portalSlug: updatedClient.portal_slug,
-          contactName: updatedClient.contact_name,
-          contactEmail: updatedClient.contact_email,
-          contactPhone: updatedClient.contact_phone,
-          contractStartDate: updatedClient.contract_start_date,
-          contractEndDate: updatedClient.contract_end_date,
-          updatedAt: updatedClient.updated_at,
-          sectors: [],
-        },
-        warning:
-          "Client updated, but extended sector onboarding fields need migration 20260302110000_client_sector_onboarding_fields.sql.",
-      });
-    }
+  if (sectorsResult.error) {
     return NextResponse.json(
       { error: "Client updated, but failed to load sectors." },
       { status: 207 },
     );
   }
 
-  return NextResponse.json({
+  const responsePayload: {
+    client: {
+      id: string;
+      companyName: string;
+      cnpj: string;
+      totalEmployees: number;
+      remoteEmployees: number;
+      onsiteEmployees: number;
+      hybridEmployees: number;
+      status: ClientStatus;
+      billingStatus: BillingStatus;
+      portalSlug: string;
+      contactName: string | null;
+      contactEmail: string | null;
+      contactPhone: string | null;
+      contractStartDate: string | null;
+      contractEndDate: string | null;
+      updatedAt: string;
+      sectors: ReturnType<typeof mapSector>[];
+    };
+    warning?: string;
+  } = {
     client: {
       id: updatedClient.client_id,
       companyName: updatedClient.company_name,
@@ -571,7 +734,12 @@ export async function PATCH(
       contractStartDate: updatedClient.contract_start_date,
       contractEndDate: updatedClient.contract_end_date,
       updatedAt: updatedClient.updated_at,
-      sectors: (sectors ?? []).map(mapSector),
+      sectors: sectorsResult.data.map(mapSector),
     },
-  });
+  };
+  if (sectorsResult.hasCompatibilityWarning) {
+    responsePayload.warning = CLIENT_SECTOR_MIGRATION_WARNING;
+  }
+
+  return NextResponse.json(responsePayload);
 }

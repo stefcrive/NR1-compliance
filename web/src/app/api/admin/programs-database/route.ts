@@ -15,6 +15,10 @@ type SurveyDiagnosticRow = {
   created_at: string;
 };
 
+type QuestionSurveyRow = {
+  survey_id: string;
+};
+
 type LegacyDiagnosticRow = {
   campaign_id: string;
   campaign_name: string;
@@ -59,6 +63,7 @@ export async function GET(request: NextRequest) {
     closesAt: string | null;
     createdAt: string;
     source: "surveys" | "legacy_drps_campaigns";
+    questionCount: number | null;
   }> = [];
 
   const surveysResult = await supabase
@@ -77,6 +82,29 @@ export async function GET(request: NextRequest) {
   }
 
   if (!surveysResult.error) {
+    const surveyIds = (surveysResult.data ?? []).map((item) => item.id);
+    const questionCountBySurveyId = new Map<string, number>();
+
+    if (surveyIds.length > 0) {
+      const questionsResult = await supabase
+        .from("questions")
+        .select("survey_id")
+        .in("survey_id", surveyIds)
+        .eq("is_active", true)
+        .returns<QuestionSurveyRow[]>();
+
+      if (questionsResult.error) {
+        return NextResponse.json({ error: "Could not load DRPS diagnostics." }, { status: 500 });
+      }
+
+      for (const row of questionsResult.data ?? []) {
+        questionCountBySurveyId.set(
+          row.survey_id,
+          (questionCountBySurveyId.get(row.survey_id) ?? 0) + 1,
+        );
+      }
+    }
+
     drpsDiagnostics = (surveysResult.data ?? []).map((item) => ({
       id: item.id,
       name: item.name,
@@ -87,6 +115,7 @@ export async function GET(request: NextRequest) {
       closesAt: item.closes_at,
       createdAt: item.created_at,
       source: "surveys",
+      questionCount: questionCountBySurveyId.get(item.id) ?? 0,
     }));
   } else {
     const legacyResult = await supabase
@@ -110,6 +139,7 @@ export async function GET(request: NextRequest) {
       closesAt: item.end_date ? new Date(item.end_date).toISOString() : null,
       createdAt: item.start_date ? new Date(item.start_date).toISOString() : new Date().toISOString(),
       source: "legacy_drps_campaigns",
+      questionCount: null,
     }));
   }
 

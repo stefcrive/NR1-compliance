@@ -65,6 +65,23 @@ export async function POST(
   }
 
   const supabase = getSupabaseAdminClient();
+  if (parsed.sourceSurveyId) {
+    const { data: sourceQuestion, error: sourceQuestionError } = await supabase
+      .from("questions")
+      .select("id")
+      .eq("survey_id", parsed.sourceSurveyId)
+      .limit(1)
+      .maybeSingle<{ id: string }>();
+
+    if (sourceQuestionError) {
+      return NextResponse.json({ error: "Could not validate source template questions." }, { status: 500 });
+    }
+
+    if (!sourceQuestion) {
+      return NextResponse.json({ error: "Selected template has no base questions." }, { status: 400 });
+    }
+  }
+
   const { data: client, error: clientError } = await supabase
     .from("clients")
     .select("client_id,company_name,portal_slug")

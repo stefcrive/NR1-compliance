@@ -26,6 +26,7 @@ type DiagnosticTemplateOption = {
   status: "draft" | "live" | "closed" | "archived";
   linkedClientId: string | null;
   source: "surveys" | "legacy_drps_campaigns";
+  questionCount?: number | null;
 };
 
 type TemplateQuestion = {
@@ -36,7 +37,9 @@ type TemplateQuestion = {
 
 type SectorAssignment = {
   sectorId: string;
+  sectorKey: string;
   sectorName: string;
+  sectorRiskParameter: number;
   templateId: string;
   promptsText: string;
   loadingQuestions: boolean;
@@ -44,6 +47,7 @@ type SectorAssignment = {
 
 type CampaignSector = {
   id: string;
+  key: string;
   name: string;
   riskParameter: number;
 };
@@ -57,6 +61,21 @@ function mapStatus(status: DiagnosticTemplateOption["status"]) {
 
 function normalize(value: string) {
   return slugify(value);
+}
+
+function normalizePrompts(value: string): string[] {
+  return value
+    .split("\n")
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
+}
+
+function areSamePrompts(left: string[], right: string[]): boolean {
+  if (left.length !== right.length) return false;
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) return false;
+  }
+  return true;
 }
 
 export function ManagerClientAssignDrps({ clientId }: { clientId: string }) {
@@ -75,8 +94,7 @@ export function ManagerClientAssignDrps({ clientId }: { clientId: string }) {
   }, [templates]);
 
   const defaultTemplateId = useMemo(() => {
-    const surveyTemplate = templates.find((item) => item.source === "surveys");
-    return surveyTemplate?.id ?? templates[0]?.id ?? "";
+    return templates[0]?.id ?? "";
   }, [templates]);
 
   const loadTemplateQuestions = useCallback(
@@ -168,11 +186,20 @@ export function ManagerClientAssignDrps({ clientId }: { clientId: string }) {
       };
 
       const nextClient = detailPayload.client;
-      const nextTemplates = databasePayload.drpsDiagnostics ?? [];
-      const sectors =
-        nextClient.sectors && nextClient.sectors.length > 0
-          ? nextClient.sectors
-          : [{ id: "company-wide", key: "company-wide", name: "Empresa geral", riskParameter: 1 }];
+      if (!nextClient.sectors || nextClient.sectors.length === 0) {
+        throw new Error("Cadastre os setores da empresa na ficha do cliente antes de atribuir diagnosticos.");
+      }
+
+      const surveyTemplates = (databasePayload.drpsDiagnostics ?? []).filter(
+        (item) => item.source === "surveys" && (item.questionCount ?? 0) > 0,
+      );
+      const unlinkedSurveyTemplates = surveyTemplates.filter((item) => !item.linkedClientId);
+      const nextTemplates =
+        unlinkedSurveyTemplates.length > 0 ? unlinkedSurveyTemplates : surveyTemplates;
+
+      if (nextTemplates.length === 0) {
+        throw new Error("Nenhum template DRPS com questionario base disponivel.");
+      }
 
       const firstTemplateId =
         nextTemplates.find((item) => item.source === "surveys")?.id ?? nextTemplates[0]?.id ?? "";
@@ -180,9 +207,11 @@ export function ManagerClientAssignDrps({ clientId }: { clientId: string }) {
       setClient(nextClient);
       setTemplates(nextTemplates);
       setAssignments(
-        sectors.map((sector) => ({
+        nextClient.sectors.map((sector) => ({
           sectorId: sector.id,
+          sectorKey: sector.key,
           sectorName: sector.name,
+          sectorRiskParameter: sector.riskParameter,
           templateId: firstTemplateId,
           promptsText: "",
           loadingQuestions: false,
@@ -234,19 +263,24 @@ export function ManagerClientAssignDrps({ clientId }: { clientId: string }) {
     return assignments.every((item) => item.templateId);
   }, [assignments, client, templates.length]);
 
-  async function syncCampaignSectors(campaignId: string, selectedSectorName: string) {
+  async function syncCampaignSectors(
+    campaignId: string,
+    selectedSectorName: string,
+    selectedRiskParameter: number,
+  ) {
     const selectedKey = normalize(selectedSectorName);
     const sectorsRes = await fetch(`/api/admin/campaigns/${campaignId}/sectors`, { cache: "no-store" });
     if (!sectorsRes.ok) {
-      return;
+      const sectorsPayload = (await sectorsRes.json().catch(() => ({}))) as { error?: string };
+      throw new Error(sectorsPayload.error ?? "Falha ao carregar setores do diagnostico criado.");
     }
     const payload = (await sectorsRes.json()) as { sectors: CampaignSector[] };
     const sectors = payload.sectors ?? [];
     let hasSelected = false;
     for (const sector of sectors) {
-      const isSelected = normalize(sector.name) === selectedKey;
+      const isSelected = sector.key === selectedKey || normalize(sector.name) === selectedKey;
       if (isSelected) hasSelected = true;
-      await fetch(`/api/admin/campaigns/${campaignId}/sectors`, {
+      const syncResponse = await fetch(`/api/admin/campaigns/${campaignId}/sectors`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -255,16 +289,27 @@ export function ManagerClientAssignDrps({ clientId }: { clientId: string }) {
           isActive: isSelected,
         }),
       });
+      if (!syncResponse.ok && syncResponse.status !== 207) {
+        const syncPayload = (await syncResponse.json().catch(() => ({}))) as { error?: string };
+        throw new Error(syncPayload.error ?? "Falha ao sincronizar setores do diagnostico criado.");
+      }
     }
     if (!hasSelected && selectedSectorName.trim()) {
-      await fetch(`/api/admin/campaigns/${campaignId}/sectors`, {
+      const createSelectedRes = await fetch(`/api/admin/campaigns/${campaignId}/sectors`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name: selectedSectorName.trim(),
+          riskParameter: selectedRiskParameter,
           isActive: true,
         }),
       });
+      if (!createSelectedRes.ok && createSelectedRes.status !== 207) {
+        const createSelectedPayload = (await createSelectedRes.json().catch(() => ({}))) as {
+          error?: string;
+        };
+        throw new Error(createSelectedPayload.error ?? "Falha ao vincular setor do diagnostico criado.");
+      }
     }
   }
 
@@ -279,6 +324,9 @@ export function ManagerClientAssignDrps({ clientId }: { clientId: string }) {
         if (!template) {
           throw new Error(`Template nao encontrado para o setor ${assignment.sectorName}.`);
         }
+        if (template.source !== "surveys") {
+          throw new Error(`Template invalido para o setor ${assignment.sectorName}. Use um template Survey.`);
+        }
 
         const campaignName = `${template.name} - ${client.companyName} - ${assignment.sectorName}`
           .trim()
@@ -287,19 +335,23 @@ export function ManagerClientAssignDrps({ clientId }: { clientId: string }) {
           throw new Error(`Nome de diagnostico invalido para o setor ${assignment.sectorName}.`);
         }
 
+        const publicSlugSeed = `${client.portalSlug || client.companyName}-${template.slug || template.name}-${assignment.sectorKey || assignment.sectorName}`;
+
         const assignRes = await fetch(`/api/admin/clients/${client.id}/assign-drps`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             campaignName,
+            publicSlug: publicSlugSeed,
             status: campaignStatus,
-            sourceSurveyId: template.source === "surveys" ? template.id : undefined,
+            sourceSurveyId: template.id,
           }),
         });
 
         const assignPayload = (await assignRes.json().catch(() => ({}))) as {
           error?: string;
           details?: string;
+          warning?: string;
           campaign?: { id: string };
         };
 
@@ -311,35 +363,56 @@ export function ManagerClientAssignDrps({ clientId }: { clientId: string }) {
           );
         }
 
+        if (assignRes.status === 207 && assignPayload.error) {
+          throw new Error(
+            assignPayload.error ||
+              assignPayload.details ||
+              `Falha ao atribuir diagnostico para o setor ${assignment.sectorName}.`,
+          );
+        }
+
         const campaignId = assignPayload.campaign?.id;
-        if (campaignId) {
-          if (template.source === "surveys") {
-            const prompts = assignment.promptsText
-              .split("\n")
-              .map((item) => item.trim())
-              .filter((item) => item.length > 0);
-            if (prompts.length > 0) {
-              const updateQuestionsRes = await fetch(
-                `/api/admin/campaigns/${campaignId}/questions`,
-                {
-                  method: "PUT",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ prompts }),
-                },
+        if (!campaignId) {
+          throw new Error(`Resposta invalida ao atribuir diagnostico para o setor ${assignment.sectorName}.`);
+        }
+
+        if (template.source === "surveys") {
+          const templatePrompts =
+            questionsByTemplate[template.id] ?? (await loadTemplateQuestions(template.id));
+          const editedPrompts = normalizePrompts(assignment.promptsText);
+          const effectivePrompts = editedPrompts.length > 0 ? editedPrompts : templatePrompts;
+          const shouldUpdateQuestions = !areSamePrompts(effectivePrompts, templatePrompts);
+
+          if (shouldUpdateQuestions) {
+            if (effectivePrompts.some((item) => item.length < 3)) {
+              throw new Error(
+                `Setor ${assignment.sectorName}: cada pergunta editada precisa ter ao menos 3 caracteres.`,
               );
-              if (!updateQuestionsRes.ok) {
-                const updatePayload = (await updateQuestionsRes.json().catch(() => ({}))) as {
-                  error?: string;
-                };
-                throw new Error(
-                  updatePayload.error ||
-                    `Falha ao atualizar perguntas do diagnostico para o setor ${assignment.sectorName}.`,
-                );
-              }
+            }
+            const updateQuestionsRes = await fetch(
+              `/api/admin/campaigns/${campaignId}/questions`,
+              {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ prompts: effectivePrompts }),
+              },
+            );
+            if (!updateQuestionsRes.ok) {
+              const updatePayload = (await updateQuestionsRes.json().catch(() => ({}))) as {
+                error?: string;
+              };
+              throw new Error(
+                updatePayload.error ||
+                  `Falha ao atualizar perguntas do diagnostico para o setor ${assignment.sectorName}.`,
+              );
             }
           }
-          await syncCampaignSectors(campaignId, assignment.sectorName);
         }
+        await syncCampaignSectors(
+          campaignId,
+          assignment.sectorName,
+          assignment.sectorRiskParameter,
+        );
       }
 
       setSuccess("Diagnosticos DRPS atribuidos com sucesso para os setores selecionados.");
@@ -419,8 +492,7 @@ export function ManagerClientAssignDrps({ clientId }: { clientId: string }) {
                     {templates.length === 0 ? <option value="">Sem templates na base</option> : null}
                     {templates.map((template) => (
                       <option key={template.id} value={template.id}>
-                        {template.name} ({mapStatus(template.status)} |{" "}
-                        {template.source === "surveys" ? "Survey" : "Legado"})
+                        {template.name} ({mapStatus(template.status)})
                       </option>
                     ))}
                   </select>
@@ -458,12 +530,7 @@ export function ManagerClientAssignDrps({ clientId }: { clientId: string }) {
                       }
                     />
                   </label>
-                ) : (
-                  <p className="rounded-xl border border-[#f2d7ac] bg-[#fff9ef] px-3 py-2 text-xs text-[#7a4b00]">
-                    Template legado selecionado: edicao de perguntas disponivel apenas para templates
-                    Survey.
-                  </p>
-                )}
+                ) : null}
               </div>
             </article>
           );
