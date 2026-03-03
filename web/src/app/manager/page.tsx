@@ -1,5 +1,5 @@
-import { ManagerWorkspace } from "@/components/manager-workspace";
+import { ManagerHomeOverview } from "@/components/manager-home-overview";
 
 export default function ManagerPage() {
-  return <ManagerWorkspace initialTab="calendar" showTabSwitch />;
+  return <ManagerHomeOverview />;
 }

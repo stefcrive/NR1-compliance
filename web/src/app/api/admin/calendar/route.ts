@@ -70,14 +70,12 @@ const createBlockedEventSchema = z
     eventType: z.literal("blocked").optional(),
     clientId: z.string().uuid().nullable().optional(),
     title: z.string().trim().min(3).max(160).optional(),
-    startsAt: z.string().datetime(),
-    endsAt: z.string().datetime(),
+    startsAt: z.string().datetime().optional(),
+    endsAt: z.string().datetime().optional(),
+    markedAt: z.string().datetime().optional(),
+    workshopDurationMinutes: z.number().int().min(15).max(24 * 60).optional(),
     content: detailTextSchema.optional(),
     preparationRequired: detailTextSchema.optional(),
-  })
-  .refine((value) => new Date(value.endsAt).getTime() > new Date(value.startsAt).getTime(), {
-    message: "Invalid time range.",
-    path: ["endsAt"],
   });
 
 const updateCalendarEventSchema = z
@@ -86,6 +84,9 @@ const updateCalendarEventSchema = z
     title: z.string().trim().min(3).max(160).optional(),
     startsAt: z.string().datetime().optional(),
     endsAt: z.string().datetime().optional(),
+    markedAt: z.string().datetime().optional(),
+    workshopDurationMinutes: z.number().int().min(15).max(24 * 60).optional(),
+    eventLifecycle: z.enum(["provisory", "committed"]).optional(),
     content: detailTextSchema.nullable().optional(),
     preparationRequired: detailTextSchema.nullable().optional(),
     commitProvisoryReschedule: z.boolean().optional(),
@@ -112,6 +113,37 @@ function availabilityRequestIdFromMetadata(metadata: unknown): string | null {
 
 function overlaps(startA: Date, endA: Date, startB: Date, endB: Date): boolean {
   return startA < endB && endA > startB;
+}
+
+function resolveTimeWindow(params: {
+  startsAt?: string;
+  endsAt?: string;
+  markedAt?: string;
+  workshopDurationMinutes?: number;
+  currentStartsAt?: string;
+  currentEndsAt?: string;
+  requireComplete: boolean;
+}): { startsAt: string; endsAt: string } | null {
+  const startsAt = params.markedAt ?? params.startsAt ?? params.currentStartsAt;
+  if (!startsAt) return null;
+
+  let endsAt = params.endsAt ?? params.currentEndsAt;
+  if (params.workshopDurationMinutes !== undefined) {
+    const startDate = new Date(startsAt);
+    if (Number.isNaN(startDate.getTime())) return null;
+    endsAt = new Date(startDate.getTime() + params.workshopDurationMinutes * 60 * 1000).toISOString();
+  }
+
+  if (!endsAt) {
+    return params.requireComplete ? null : { startsAt, endsAt: startsAt };
+  }
+
+  const startDate = new Date(startsAt);
+  const endDate = new Date(endsAt);
+  if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) return null;
+  if (endDate.getTime() <= startDate.getTime()) return null;
+
+  return { startsAt: startDate.toISOString(), endsAt: endDate.toISOString() };
 }
 
 async function hasMasterCalendarConflict(params: {
@@ -419,6 +451,20 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Invalid payload." }, { status: 400 });
   }
 
+  const timeWindow = resolveTimeWindow({
+    startsAt: parsed.startsAt,
+    endsAt: parsed.endsAt,
+    markedAt: parsed.markedAt,
+    workshopDurationMinutes: parsed.workshopDurationMinutes,
+    requireComplete: true,
+  });
+  if (!timeWindow) {
+    return NextResponse.json(
+      { error: "Provide markedAt + workshopDurationMinutes or startsAt + endsAt." },
+      { status: 400 },
+    );
+  }
+
   const supabase = getSupabaseAdminClient();
   const insertResult = await supabase
     .from("calendar_events")
@@ -428,8 +474,8 @@ export async function POST(request: NextRequest) {
       source_client_program_id: null,
       event_type: "blocked",
       title: parsed.title?.trim() || "Bloqueio de agenda",
-      starts_at: parsed.startsAt,
-      ends_at: parsed.endsAt,
+      starts_at: timeWindow.startsAt,
+      ends_at: timeWindow.endsAt,
       status: "scheduled",
       created_by: "manager",
       metadata: {
@@ -527,15 +573,26 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ error: "Only managed events can be edited." }, { status: 409 });
   }
 
-  const nextStartsAt = parsed.startsAt ?? currentResult.data.starts_at;
-  const nextEndsAt = parsed.endsAt ?? currentResult.data.ends_at;
-  if (new Date(nextEndsAt).getTime() <= new Date(nextStartsAt).getTime()) {
+  const timeWindow = resolveTimeWindow({
+    startsAt: parsed.startsAt,
+    endsAt: parsed.endsAt,
+    markedAt: parsed.markedAt,
+    workshopDurationMinutes: parsed.workshopDurationMinutes,
+    currentStartsAt: currentResult.data.starts_at,
+    currentEndsAt: currentResult.data.ends_at,
+    requireComplete: true,
+  });
+  if (!timeWindow) {
     return NextResponse.json({ error: "Invalid time range." }, { status: 400 });
   }
+  const nextStartsAt = timeWindow.startsAt;
+  const nextEndsAt = timeWindow.endsAt;
 
   if (
     parsed.startsAt !== undefined ||
-    parsed.endsAt !== undefined
+    parsed.endsAt !== undefined ||
+    parsed.markedAt !== undefined ||
+    parsed.workshopDurationMinutes !== undefined
   ) {
     const hasConflict = await hasMasterCalendarConflict({
       eventId: currentResult.data.event_id,
@@ -558,13 +615,31 @@ export async function PATCH(request: NextRequest) {
     mergedMetadata.preparationRequired = parsed.preparationRequired?.trim() || null;
     delete mergedMetadata.preparation_required;
   }
+  if (parsed.eventLifecycle !== undefined) {
+    mergedMetadata.eventLifecycle = parsed.eventLifecycle;
+    if (
+      parsed.eventLifecycle === "provisory" &&
+      currentResult.data.event_type === "continuous_meeting" &&
+      currentResult.data.source_client_program_id &&
+      mergedMetadata.proposalKind !== "assignment" &&
+      mergedMetadata.proposalKind !== "reschedule"
+    ) {
+      mergedMetadata.proposalKind = "assignment";
+    }
+  }
 
   const updatePayload = {
     ...(parsed.title !== undefined ? { title: parsed.title } : {}),
-    ...(parsed.startsAt !== undefined ? { starts_at: parsed.startsAt } : {}),
-    ...(parsed.endsAt !== undefined ? { ends_at: parsed.endsAt } : {}),
+    ...(parsed.startsAt !== undefined ||
+    parsed.endsAt !== undefined ||
+    parsed.markedAt !== undefined ||
+    parsed.workshopDurationMinutes !== undefined
+      ? { starts_at: nextStartsAt, ends_at: nextEndsAt }
+      : {}),
     ...(
-      parsed.content !== undefined || parsed.preparationRequired !== undefined
+      parsed.content !== undefined ||
+      parsed.preparationRequired !== undefined ||
+      parsed.eventLifecycle !== undefined
         ? { metadata: mergedMetadata }
         : {}
     ),

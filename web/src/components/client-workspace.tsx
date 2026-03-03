@@ -165,6 +165,19 @@ function fmtTime(value: string) {
   );
 }
 
+function durationMinutesFromRange(
+  startsAt: string,
+  endsAt: string,
+  fallbackMinutes = 60,
+) {
+  const start = new Date(startsAt).getTime();
+  const end = new Date(endsAt).getTime();
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return fallbackMinutes;
+  const diff = Math.round((end - start) / 60000);
+  if (!Number.isFinite(diff) || diff <= 0) return fallbackMinutes;
+  return diff;
+}
+
 function dayKey(value: Date) {
   return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
 }
@@ -1114,6 +1127,15 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
             Eventos de reunioes/bloqueios indisponiveis no momento. Exibindo somente marcos DRPS.
           </p>
         ) : null}
+        <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-[#4f6977]">
+          <span className="font-semibold">Legenda:</span>
+          <span className="rounded-full bg-[#e6f3f8] px-2 py-0.5 text-[#1f5f79]">
+            Reuniao provisoria
+          </span>
+          <span className="rounded-full bg-[#2f6f8d] px-2 py-0.5 text-white">
+            Reuniao commitada
+          </span>
+        </div>
         <div className="mt-4 grid grid-cols-7 gap-2">
           {WEEK.map((label) => (
             <p key={label} className="text-center text-xs font-semibold text-[#5e7d8d]">
@@ -1143,7 +1165,9 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
                         : event.type === "close"
                           ? "bg-[#fff3df] text-[#7a4b00]"
                           : event.type === "meeting"
-                            ? "bg-[#e8f3f8] text-[#0f5b73]"
+                            ? event.details.eventLifecycle === "committed"
+                              ? "bg-[#2f6f8d] text-white"
+                              : "bg-[#e6f3f8] text-[#1f5f79]"
                             : "bg-[#fce6f1] text-[#7a2755]"
                     } block w-full truncate text-left`}
                   >
@@ -1215,9 +1239,13 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
                 </p>
               </div>
               <div className="rounded-lg border border-[#e0e9ee] bg-[#f7fbfd] p-3 md:col-span-2">
-                <p className="text-xs text-[#4d6a79]">Quando</p>
+                <p className="text-xs text-[#4d6a79]">Data/hora marcada</p>
+                <p className="text-sm font-semibold text-[#123447]">{fmt(selectedCalendarEvent.startsAt)}</p>
+              </div>
+              <div className="rounded-lg border border-[#e0e9ee] bg-[#f7fbfd] p-3 md:col-span-2">
+                <p className="text-xs text-[#4d6a79]">Duracao do workshop</p>
                 <p className="text-sm font-semibold text-[#123447]">
-                  {fmt(selectedCalendarEvent.startsAt)} - {fmt(selectedCalendarEvent.endsAt)}
+                  {durationMinutesFromRange(selectedCalendarEvent.startsAt, selectedCalendarEvent.endsAt)} min
                 </p>
               </div>
               <div className="rounded-lg border border-[#e0e9ee] bg-[#f7fbfd] p-3 md:col-span-2">

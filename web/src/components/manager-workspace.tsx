@@ -105,6 +105,9 @@ const COPY = {
     billingBlocked: "Blocked",
     calendarTitle: "DRPS diagnostics calendar",
     calendarHint: "Click events to see details. Drag managed events to move the day.",
+    calendarLegendLabel: "Legend",
+    calendarLegendProvisory: "Provisory meeting",
+    calendarLegendCommitted: "Committed meeting",
     prevMonth: "Previous month",
     nextMonth: "Next month",
     liveDrps: "Active DRPS diagnostics",
@@ -125,8 +128,8 @@ const COPY = {
     blockWindowClient: "Company",
     blockWindowGeneral: "General (all companies)",
     blockWindowLabel: "Label",
-    blockWindowStart: "Start",
-    blockWindowEnd: "End",
+    blockWindowStart: "Marked date/time",
+    blockWindowEnd: "Workshop duration (minutes)",
     blockWindowSave: "Save block",
     blockWindowSaving: "Saving...",
     blockWindowSaved: "Block saved.",
@@ -147,7 +150,8 @@ const COPY = {
     eventDetailsTitle: "Event details",
     eventDetailsType: "Type",
     eventDetailsCompany: "Company",
-    eventDetailsWhen: "When",
+    eventDetailsWhen: "Marked date/time",
+    eventDetailsDuration: "Workshop duration",
     eventDetailsLifecycle: "Lifecycle",
     eventDetailsContent: "Content",
     eventDetailsPreparation: "Preparation required",
@@ -159,8 +163,11 @@ const COPY = {
     eventTypeBlocked: "Blocked time",
     eventReadOnly: "This event is read-only.",
     eventEditTitleLabel: "Title",
-    eventEditStartLabel: "Start",
-    eventEditEndLabel: "End",
+    eventEditStartLabel: "Marked date/time",
+    eventEditEndLabel: "Workshop duration (minutes)",
+    eventEditLifecycleLabel: "Lifecycle",
+    eventLifecycleProfileHint:
+      "When lifecycle is provisory, date/time can be updated in continuous program profile.",
     eventEditSave: "Save changes",
     eventEditSaving: "Saving...",
     eventEditSuccess: "Event updated.",
@@ -208,6 +215,9 @@ const COPY = {
     billingBlocked: "Bloqueado",
     calendarTitle: "Calendario de diagnosticos DRPS",
     calendarHint: "Clique para ver detalhes. Arraste eventos gerenciados para mover o dia.",
+    calendarLegendLabel: "Legenda",
+    calendarLegendProvisory: "Reuniao provisoria",
+    calendarLegendCommitted: "Reuniao commitada",
     prevMonth: "Mes anterior",
     nextMonth: "Proximo",
     liveDrps: "Diagnosticos DRPS ativos",
@@ -228,8 +238,8 @@ const COPY = {
     blockWindowClient: "Empresa",
     blockWindowGeneral: "Geral (todas empresas)",
     blockWindowLabel: "Descricao",
-    blockWindowStart: "Inicio",
-    blockWindowEnd: "Fim",
+    blockWindowStart: "Data/hora marcada",
+    blockWindowEnd: "Duracao do workshop (minutos)",
     blockWindowSave: "Salvar bloqueio",
     blockWindowSaving: "Salvando...",
     blockWindowSaved: "Bloqueio salvo.",
@@ -250,7 +260,8 @@ const COPY = {
     eventDetailsTitle: "Detalhes do evento",
     eventDetailsType: "Tipo",
     eventDetailsCompany: "Empresa",
-    eventDetailsWhen: "Quando",
+    eventDetailsWhen: "Data/hora marcada",
+    eventDetailsDuration: "Duracao do workshop",
     eventDetailsLifecycle: "Ciclo",
     eventDetailsContent: "Conteudo",
     eventDetailsPreparation: "Preparacao necessaria",
@@ -262,8 +273,11 @@ const COPY = {
     eventTypeBlocked: "Bloqueio",
     eventReadOnly: "Este evento e somente leitura.",
     eventEditTitleLabel: "Titulo",
-    eventEditStartLabel: "Inicio",
-    eventEditEndLabel: "Fim",
+    eventEditStartLabel: "Data/hora marcada",
+    eventEditEndLabel: "Duracao do workshop (minutos)",
+    eventEditLifecycleLabel: "Ciclo",
+    eventLifecycleProfileHint:
+      "Quando o ciclo e provisorio, a data/hora pode ser ajustada no perfil do programa continuo.",
     eventEditSave: "Salvar alteracoes",
     eventEditSaving: "Salvando...",
     eventEditSuccess: "Evento atualizado.",
@@ -300,6 +314,19 @@ function toDatetimeLocalFromIso(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "";
   return toDatetimeLocal(date);
+}
+
+function durationMinutesFromRange(
+  startsAt: string,
+  endsAt: string,
+  fallbackMinutes = 60,
+) {
+  const start = new Date(startsAt).getTime();
+  const end = new Date(endsAt).getTime();
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return fallbackMinutes;
+  const diff = Math.round((end - start) / 60000);
+  if (!Number.isFinite(diff) || diff <= 0) return fallbackMinutes;
+  return diff;
 }
 
 function dayKey(date: Date) {
@@ -393,13 +420,14 @@ export function ManagerWorkspace({
   const [blockClientId, setBlockClientId] = useState("");
   const [blockTitle, setBlockTitle] = useState("Bloqueio operacional");
   const [blockStartsAt, setBlockStartsAt] = useState(() => toDatetimeLocal(new Date(Date.now() + 24 * 60 * 60 * 1000)));
-  const [blockEndsAt, setBlockEndsAt] = useState(() => toDatetimeLocal(new Date(Date.now() + 25 * 60 * 60 * 1000)));
+  const [blockDurationMinutes, setBlockDurationMinutes] = useState("60");
   const [isSavingBlock, setIsSavingBlock] = useState(false);
   const [blockFeedback, setBlockFeedback] = useState("");
   const [selectedCalendarEventId, setSelectedCalendarEventId] = useState<string | null>(null);
   const [eventEditTitle, setEventEditTitle] = useState("");
   const [eventEditStartsAt, setEventEditStartsAt] = useState("");
-  const [eventEditEndsAt, setEventEditEndsAt] = useState("");
+  const [eventEditDurationMinutes, setEventEditDurationMinutes] = useState("60");
+  const [eventEditLifecycle, setEventEditLifecycle] = useState<"provisory" | "committed">("committed");
   const [eventEditContent, setEventEditContent] = useState("");
   const [eventEditPreparation, setEventEditPreparation] = useState("");
   const [isSavingEventEdit, setIsSavingEventEdit] = useState(false);
@@ -461,12 +489,16 @@ export function ManagerWorkspace({
   }, [clients]);
 
   const createBlockedWindow = useCallback(async () => {
-    if (!blockStartsAt || !blockEndsAt) return;
+    if (!blockStartsAt) return;
+    const duration = Number.parseInt(blockDurationMinutes, 10);
+    if (!Number.isFinite(duration) || duration < 15 || duration > 24 * 60) {
+      setBlockFeedback(t.invalidTimeRange);
+      return;
+    }
     setIsSavingBlock(true);
     setBlockFeedback("");
     try {
-      const startsAt = new Date(blockStartsAt).toISOString();
-      const endsAt = new Date(blockEndsAt).toISOString();
+      const markedAt = new Date(blockStartsAt).toISOString();
       const response = await fetch("/api/admin/calendar", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -474,8 +506,8 @@ export function ManagerWorkspace({
           eventType: "blocked",
           clientId: blockClientId || null,
           title: blockTitle.trim() || "Bloqueio de agenda",
-          startsAt,
-          endsAt,
+          markedAt,
+          workshopDurationMinutes: duration,
         }),
       });
       const body = (await response.json().catch(() => ({}))) as { error?: string };
@@ -489,7 +521,16 @@ export function ManagerWorkspace({
     } finally {
       setIsSavingBlock(false);
     }
-  }, [blockClientId, blockEndsAt, blockStartsAt, blockTitle, loadAll, t.blockWindowError, t.blockWindowSaved]);
+  }, [
+    blockClientId,
+    blockDurationMinutes,
+    blockStartsAt,
+    blockTitle,
+    loadAll,
+    t.blockWindowError,
+    t.blockWindowSaved,
+    t.invalidTimeRange,
+  ]);
 
   const liveCampaigns = useMemo(() => campaigns.filter((campaign) => campaign.status === "live"), [campaigns]);
   const liveContinuousPrograms = useMemo(
@@ -560,7 +601,8 @@ export function ManagerWorkspace({
     if (!selectedCalendarEvent) {
       setEventEditTitle("");
       setEventEditStartsAt("");
-      setEventEditEndsAt("");
+      setEventEditDurationMinutes("60");
+      setEventEditLifecycle("committed");
       setEventEditContent("");
       setEventEditPreparation("");
       setEventEditFeedback("");
@@ -568,7 +610,10 @@ export function ManagerWorkspace({
     }
     setEventEditTitle(selectedCalendarEvent.title);
     setEventEditStartsAt(toDatetimeLocalFromIso(selectedCalendarEvent.startsAt));
-    setEventEditEndsAt(toDatetimeLocalFromIso(selectedCalendarEvent.endsAt));
+    setEventEditDurationMinutes(
+      String(durationMinutesFromRange(selectedCalendarEvent.startsAt, selectedCalendarEvent.endsAt, 60)),
+    );
+    setEventEditLifecycle(selectedCalendarEvent.details.eventLifecycle);
     setEventEditContent(selectedCalendarEvent.details?.content ?? "");
     setEventEditPreparation(selectedCalendarEvent.details?.preparationRequired ?? "");
     setEventEditFeedback("");
@@ -580,6 +625,9 @@ export function ManagerWorkspace({
       title?: string;
       startsAt?: string;
       endsAt?: string;
+      markedAt?: string;
+      workshopDurationMinutes?: number;
+      eventLifecycle?: "provisory" | "committed";
       content?: string | null;
       preparationRequired?: string | null;
       commitProvisoryReschedule?: boolean;
@@ -616,13 +664,9 @@ export function ManagerWorkspace({
   const saveSelectedCalendarEvent = useCallback(async () => {
     if (!selectedCalendarEvent || !isEditableCalendarEvent(selectedCalendarEvent)) return;
 
-    const nextStart = new Date(eventEditStartsAt);
-    const nextEnd = new Date(eventEditEndsAt);
-    if (
-      Number.isNaN(nextStart.getTime()) ||
-      Number.isNaN(nextEnd.getTime()) ||
-      nextEnd.getTime() <= nextStart.getTime()
-    ) {
+    const nextMarkedAt = new Date(eventEditStartsAt);
+    const durationMinutes = Number.parseInt(eventEditDurationMinutes, 10);
+    if (Number.isNaN(nextMarkedAt.getTime()) || !Number.isFinite(durationMinutes) || durationMinutes < 15) {
       setEventEditFeedback(t.invalidTimeRange);
       return;
     }
@@ -633,8 +677,9 @@ export function ManagerWorkspace({
       await updateCalendarEvent({
         eventId: selectedCalendarEvent.id,
         title: eventEditTitle.trim(),
-        startsAt: nextStart.toISOString(),
-        endsAt: nextEnd.toISOString(),
+        markedAt: nextMarkedAt.toISOString(),
+        workshopDurationMinutes: durationMinutes,
+        eventLifecycle: eventEditLifecycle,
         content: eventEditContent.trim() || null,
         preparationRequired: eventEditPreparation.trim() || null,
       });
@@ -648,7 +693,8 @@ export function ManagerWorkspace({
     }
   }, [
     eventEditContent,
-    eventEditEndsAt,
+    eventEditDurationMinutes,
+    eventEditLifecycle,
     eventEditPreparation,
     eventEditStartsAt,
     eventEditTitle,
@@ -707,17 +753,18 @@ export function ManagerWorkspace({
       if (dayKey(movedStart) === dayKey(start)) return;
 
       const durationMs = end.getTime() - start.getTime();
-      const movedEnd = new Date(movedStart.getTime() + durationMs);
 
       try {
         const updatedEvent = await updateCalendarEvent({
           eventId: event.id,
-          startsAt: movedStart.toISOString(),
-          endsAt: movedEnd.toISOString(),
+          markedAt: movedStart.toISOString(),
+          workshopDurationMinutes: Math.max(15, Math.round(durationMs / 60000)),
         });
         if (selectedCalendarEventId === updatedEvent.id) {
           setEventEditStartsAt(toDatetimeLocalFromIso(updatedEvent.startsAt));
-          setEventEditEndsAt(toDatetimeLocalFromIso(updatedEvent.endsAt));
+          setEventEditDurationMinutes(
+            String(durationMinutesFromRange(updatedEvent.startsAt, updatedEvent.endsAt, 60)),
+          );
           setEventEditFeedback(t.eventEditSuccess);
         }
       } catch (eventUpdateError) {
@@ -778,6 +825,18 @@ export function ManagerWorkspace({
           selectedCalendarEvent.eventType === "continuous_meeting" &&
           selectedCalendarEvent.details.eventLifecycle === "provisory" &&
           selectedCalendarEvent.details.proposalKind === "reschedule",
+      ),
+    [selectedCalendarEvent],
+  );
+
+  const canEditSelectedLifecycle = useMemo(
+    () =>
+      Boolean(
+        selectedCalendarEvent &&
+          !(
+            selectedCalendarEvent.eventType === "continuous_meeting" &&
+            selectedCalendarEvent.details.proposalKind === "reschedule"
+          ),
       ),
     [selectedCalendarEvent],
   );
@@ -1165,6 +1224,15 @@ export function ManagerWorkspace({
             </div>
             <p className="mt-2 text-sm text-[#465864]">{monthLabel(month, locale)}</p>
             <p className="mt-1 text-xs text-[#58717f]">{t.calendarHint}</p>
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-[#4f6977]">
+              <span className="font-semibold">{t.calendarLegendLabel}:</span>
+              <span className="rounded-full bg-[#e6f3f8] px-2 py-0.5 text-[#1f5f79]">
+                {t.calendarLegendProvisory}
+              </span>
+              <span className="rounded-full bg-[#2f6f8d] px-2 py-0.5 text-white">
+                {t.calendarLegendCommitted}
+              </span>
+            </div>
             {calendarIsolation.kind !== "none" ? (
               <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-[#3e5a68]">
                 <span>
@@ -1224,7 +1292,9 @@ export function ManagerWorkspace({
                             : e.type === "close"
                               ? "bg-[#fff3df] text-[#7a4b00]"
                               : e.type === "meeting"
-                                ? "bg-[#e8f3f8] text-[#0f5b73]"
+                                ? e.source.details.eventLifecycle === "committed"
+                                  ? "bg-[#2f6f8d] text-white"
+                                  : "bg-[#e6f3f8] text-[#1f5f79]"
                                 : "bg-[#fce6f1] text-[#7a2755]"
                         } w-full truncate text-left ${
                           isEditableCalendarEvent(e.source) ? "cursor-move" : "cursor-pointer"
@@ -1383,9 +1453,12 @@ export function ManagerWorkspace({
                   <label className="block">
                     <span className="text-xs text-[#4d6a79]">{t.blockWindowEnd}</span>
                     <input
-                      type="datetime-local"
-                      value={blockEndsAt}
-                      onChange={(event) => setBlockEndsAt(event.target.value)}
+                      type="number"
+                      min={15}
+                      max={24 * 60}
+                      step={5}
+                      value={blockDurationMinutes}
+                      onChange={(event) => setBlockDurationMinutes(event.target.value)}
                       className="mt-1 w-full rounded border border-[#c8c8c8] px-2 py-1 text-xs"
                     />
                   </label>
@@ -1438,9 +1511,12 @@ export function ManagerWorkspace({
               </div>
               <div className="rounded-lg border border-[#e0e9ee] bg-[#f7fbfd] p-3 md:col-span-2">
                 <p className="text-xs text-[#4d6a79]">{t.eventDetailsWhen}</p>
+                <p className="text-sm font-semibold text-[#123447]">{toDate(selectedCalendarEvent.startsAt, locale)}</p>
+              </div>
+              <div className="rounded-lg border border-[#e0e9ee] bg-[#f7fbfd] p-3 md:col-span-2">
+                <p className="text-xs text-[#4d6a79]">{t.eventDetailsDuration}</p>
                 <p className="text-sm font-semibold text-[#123447]">
-                  {toDate(selectedCalendarEvent.startsAt, locale)} -{" "}
-                  {toDate(selectedCalendarEvent.endsAt, locale)}
+                  {durationMinutesFromRange(selectedCalendarEvent.startsAt, selectedCalendarEvent.endsAt, 60)} min
                 </p>
               </div>
               <div className="rounded-lg border border-[#e0e9ee] bg-[#f7fbfd] p-3 md:col-span-2">
@@ -1498,13 +1574,34 @@ export function ManagerWorkspace({
                   <label className="block">
                     <span className="text-xs text-[#4d6a79]">{t.eventEditEndLabel}</span>
                     <input
-                      type="datetime-local"
-                      value={eventEditEndsAt}
-                      onChange={(event) => setEventEditEndsAt(event.target.value)}
+                      type="number"
+                      min={15}
+                      max={24 * 60}
+                      step={5}
+                      value={eventEditDurationMinutes}
+                      onChange={(event) => setEventEditDurationMinutes(event.target.value)}
                       className="mt-1 w-full rounded border border-[#c8d7e1] px-2 py-1.5 text-sm"
                     />
                   </label>
                 </div>
+                <label className="block">
+                  <span className="text-xs text-[#4d6a79]">{t.eventEditLifecycleLabel}</span>
+                  <select
+                    value={eventEditLifecycle}
+                    onChange={(event) =>
+                      setEventEditLifecycle(event.target.value as "provisory" | "committed")
+                    }
+                    disabled={!canEditSelectedLifecycle}
+                    className="mt-1 w-full rounded border border-[#c8d7e1] px-2 py-1.5 text-sm disabled:opacity-60"
+                  >
+                    <option value="provisory">{t.eventLifecycleProvisory}</option>
+                    <option value="committed">{t.eventLifecycleCommitted}</option>
+                  </select>
+                </label>
+                {selectedCalendarEvent.eventType === "continuous_meeting" &&
+                selectedCalendarEvent.details.proposalKind === "assignment" ? (
+                  <p className="text-[11px] text-[#4f6977]">{t.eventLifecycleProfileHint}</p>
+                ) : null}
                 <label className="block">
                   <span className="text-xs text-[#4d6a79]">{t.eventDetailsContent}</span>
                   <textarea

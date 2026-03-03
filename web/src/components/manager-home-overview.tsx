@@ -1,0 +1,321 @@
+"use client";
+
+import Link from "next/link";
+import { useEffect, useMemo, useState } from "react";
+import { type ManagerLocale, useManagerLocale } from "@/components/manager-locale";
+
+type Campaign = {
+  id: string;
+  name: string;
+  status: "draft" | "live" | "closed" | "archived";
+  client_name?: string | null;
+  starts_at?: string | null;
+  closes_at?: string | null;
+};
+
+type MasterCalendarEvent = {
+  id: string;
+  clientName: string | null;
+  eventType: "drps_start" | "drps_close" | "continuous_meeting" | "blocked";
+  title: string;
+  startsAt: string;
+  status: "scheduled" | "completed" | "cancelled";
+  sourceClientProgramId: string | null;
+};
+
+type ActiveContinuousProgram = {
+  id: string;
+  clientId: string;
+  clientName: string | null;
+  programTitle: string;
+  deployedAt: string | null;
+  status: "Recommended" | "Active" | "Completed";
+};
+
+type ActiveRow = {
+  id: string;
+  kind: "drps" | "continuous";
+  title: string;
+  company: string;
+  startsAt: string | null;
+  endsAt: string | null;
+  href: string;
+};
+
+const COPY = {
+  en: {
+    pageTitle: "Home",
+    loading: "Loading...",
+    workspaceLoadError: "Failed to load manager home.",
+    campaignsLoadError: "Could not load active DRPS diagnostics.",
+    calendarLoadError: "Could not load calendar data.",
+    noCompany: "No company",
+    upcomingEventsTitle: "Upcoming calendar events",
+    noUpcomingEvents: "No upcoming calendar events.",
+    eventTypeDrpsStart: "DRPS start",
+    eventTypeDrpsClose: "DRPS close",
+    eventTypeMeeting: "Continuous meeting",
+    eventTypeBlocked: "Blocked time",
+    activeTableTitle: "Active DRPS and continuous programs",
+    tableType: "Type",
+    tableName: "Name",
+    tableCompany: "Company",
+    tableStart: "Start",
+    tableEnd: "Close / Since",
+    typeDrps: "DRPS",
+    typeContinuous: "Continuous",
+    noActiveRows: "No active DRPS diagnostics or continuous programs.",
+    openItem: "Open",
+    notPlanned: "not planned",
+  },
+  pt: {
+    pageTitle: "Inicio",
+    loading: "Carregando...",
+    workspaceLoadError: "Erro ao carregar a home do gestor.",
+    campaignsLoadError: "Nao foi possivel carregar os DRPS ativos.",
+    calendarLoadError: "Nao foi possivel carregar os dados do calendario.",
+    noCompany: "Sem empresa",
+    upcomingEventsTitle: "Proximos eventos do calendario",
+    noUpcomingEvents: "Nenhum proximo evento no calendario.",
+    eventTypeDrpsStart: "Inicio DRPS",
+    eventTypeDrpsClose: "Fechamento DRPS",
+    eventTypeMeeting: "Reuniao continua",
+    eventTypeBlocked: "Bloqueio",
+    activeTableTitle: "DRPS e programas continuos ativos",
+    tableType: "Tipo",
+    tableName: "Nome",
+    tableCompany: "Empresa",
+    tableStart: "Inicio",
+    tableEnd: "Fechamento / Ativo desde",
+    typeDrps: "DRPS",
+    typeContinuous: "Continuo",
+    noActiveRows: "Nenhum DRPS ativo ou programa continuo ativo.",
+    openItem: "Abrir",
+    notPlanned: "nao planejado",
+  },
+} as const;
+
+function uiLocale(locale: ManagerLocale) {
+  return locale === "pt" ? "pt-BR" : "en-US";
+}
+
+function toDate(value: string, locale: ManagerLocale) {
+  return new Intl.DateTimeFormat(uiLocale(locale), { dateStyle: "short", timeStyle: "short" }).format(
+    new Date(value),
+  );
+}
+
+function extractCampaignIdFromCalendarEvent(event: MasterCalendarEvent) {
+  if (event.eventType !== "drps_start" && event.eventType !== "drps_close") return null;
+  if (event.id.startsWith("drps-start-")) return event.id.slice("drps-start-".length);
+  if (event.id.startsWith("drps-close-")) return event.id.slice("drps-close-".length);
+  return null;
+}
+
+export function ManagerHomeOverview() {
+  const { locale } = useManagerLocale();
+  const t = COPY[locale];
+
+  const [campaigns, setCampaigns] = useState<Campaign[]>([]);
+  const [calendarEvents, setCalendarEvents] = useState<MasterCalendarEvent[]>([]);
+  const [activeContinuousPrograms, setActiveContinuousPrograms] = useState<ActiveContinuousProgram[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let active = true;
+
+    async function loadHome() {
+      setLoading(true);
+      setError("");
+      try {
+        const [campaignsRes, calendarRes] = await Promise.all([
+          fetch("/api/admin/campaigns", { cache: "no-store" }),
+          fetch("/api/admin/calendar", { cache: "no-store" }),
+        ]);
+
+        const campaignsPayload = campaignsRes.ok
+          ? ((await campaignsRes.json()) as { campaigns: Campaign[] })
+          : { campaigns: [] as Campaign[] };
+        const calendarPayload = calendarRes.ok
+          ? ((await calendarRes.json()) as {
+              events: MasterCalendarEvent[];
+              activeContinuousPrograms?: ActiveContinuousProgram[];
+            })
+          : { events: [] as MasterCalendarEvent[], activeContinuousPrograms: [] as ActiveContinuousProgram[] };
+
+        if (!active) return;
+
+        setCampaigns(campaignsPayload.campaigns ?? []);
+        setCalendarEvents(calendarPayload.events ?? []);
+        setActiveContinuousPrograms(calendarPayload.activeContinuousPrograms ?? []);
+
+        if (!campaignsRes.ok) {
+          setError(t.campaignsLoadError);
+        } else if (!calendarRes.ok) {
+          setError(t.calendarLoadError);
+        }
+      } catch (loadError) {
+        if (!active) return;
+        setError(loadError instanceof Error ? loadError.message : t.workspaceLoadError);
+      } finally {
+        if (active) setLoading(false);
+      }
+    }
+
+    void loadHome();
+
+    return () => {
+      active = false;
+    };
+  }, [t.calendarLoadError, t.campaignsLoadError, t.workspaceLoadError]);
+
+  const upcomingEvents = useMemo(
+    () =>
+      calendarEvents
+        .filter((event) => event.status !== "cancelled")
+        .filter((event) => new Date(event.startsAt).getTime() >= Date.now())
+        .slice()
+        .sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime()),
+    [calendarEvents],
+  );
+
+  const activeRows = useMemo(() => {
+    const liveCampaignRows: ActiveRow[] = campaigns
+      .filter((campaign) => campaign.status === "live")
+      .map((campaign) => ({
+        id: campaign.id,
+        kind: "drps",
+        title: campaign.name,
+        company: campaign.client_name ?? t.noCompany,
+        startsAt: campaign.starts_at ?? null,
+        endsAt: campaign.closes_at ?? null,
+        href: `/manager/programs/drps/${campaign.id}`,
+      }));
+
+    const liveContinuousRows: ActiveRow[] = activeContinuousPrograms
+      .filter((program) => program.status === "Active")
+      .map((program) => ({
+        id: program.id,
+        kind: "continuous",
+        title: program.programTitle,
+        company: program.clientName ?? t.noCompany,
+        startsAt: program.deployedAt ?? null,
+        endsAt: null,
+        href: `/manager/clients/${program.clientId}/assigned-continuous/${program.id}`,
+      }));
+
+    return [...liveCampaignRows, ...liveContinuousRows].sort((a, b) => {
+      const left = a.startsAt ? new Date(a.startsAt).getTime() : Number.MAX_SAFE_INTEGER;
+      const right = b.startsAt ? new Date(b.startsAt).getTime() : Number.MAX_SAFE_INTEGER;
+      return left - right;
+    });
+  }, [activeContinuousPrograms, campaigns, t.noCompany]);
+
+  function eventTypeLabel(event: MasterCalendarEvent) {
+    if (event.eventType === "drps_start") return t.eventTypeDrpsStart;
+    if (event.eventType === "drps_close") return t.eventTypeDrpsClose;
+    if (event.eventType === "continuous_meeting") return t.eventTypeMeeting;
+    return t.eventTypeBlocked;
+  }
+
+  function eventHref(event: MasterCalendarEvent) {
+    if (event.eventType === "drps_start" || event.eventType === "drps_close") {
+      const campaignId = extractCampaignIdFromCalendarEvent(event);
+      return campaignId ? `/manager/programs/drps/${campaignId}` : null;
+    }
+    if (event.eventType === "continuous_meeting" && event.sourceClientProgramId) {
+      const assignment =
+        activeContinuousPrograms.find((item) => item.id === event.sourceClientProgramId) ?? null;
+      if (!assignment) return null;
+      return `/manager/clients/${assignment.clientId}/assigned-continuous/${assignment.id}`;
+    }
+    return null;
+  }
+
+  return (
+    <div className="space-y-6">
+      <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm md:p-6">
+        <h3 className="text-2xl font-semibold text-[#121b22] md:text-3xl">{t.pageTitle}</h3>
+        {loading ? <p className="mt-3 text-sm text-[#4f5f6a]">{t.loading}</p> : null}
+        {error ? <p className="mt-3 text-sm text-red-600">{error}</p> : null}
+      </section>
+
+      <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm md:p-6">
+        <h4 className="text-lg font-semibold text-[#123447]">{t.upcomingEventsTitle}</h4>
+        {upcomingEvents.length === 0 ? (
+          <p className="mt-3 text-sm text-[#5a7383]">{t.noUpcomingEvents}</p>
+        ) : (
+          <ol className="mt-3 space-y-2">
+            {upcomingEvents.map((event) => {
+              const href = eventHref(event);
+              return (
+                <li key={event.id} className="rounded-lg border border-[#d8e4ee] bg-white px-3 py-2 text-sm">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-semibold text-[#123447]">{toDate(event.startsAt, locale)}</span>
+                    <span className="rounded-full bg-[#eef4f8] px-2 py-0.5 text-xs font-semibold text-[#365d72]">
+                      {eventTypeLabel(event)}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-[#1e3644]">{event.title}</p>
+                  <p className="text-xs text-[#5a7383]">{event.clientName ?? t.noCompany}</p>
+                  {href ? (
+                    <Link href={href} className="mt-1 inline-flex text-xs font-semibold text-[#0f5b73] hover:underline">
+                      {t.openItem}
+                    </Link>
+                  ) : null}
+                </li>
+              );
+            })}
+          </ol>
+        )}
+      </section>
+
+      <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm md:p-6">
+        <h4 className="text-lg font-semibold text-[#123447]">{t.activeTableTitle}</h4>
+        <div className="mt-3 overflow-x-auto rounded-lg border border-[#d8e4ee] bg-white">
+          <table className="min-w-full text-sm">
+            <thead>
+              <tr className="border-b bg-[#f5f8fb]">
+                <th className="px-2 py-2 text-left">{t.tableType}</th>
+                <th className="px-2 py-2 text-left">{t.tableName}</th>
+                <th className="px-2 py-2 text-left">{t.tableCompany}</th>
+                <th className="px-2 py-2 text-left">{t.tableStart}</th>
+                <th className="px-2 py-2 text-left">{t.tableEnd}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {activeRows.length === 0 ? (
+                <tr>
+                  <td colSpan={5} className="px-2 py-3 text-xs text-[#5a7383]">
+                    {t.noActiveRows}
+                  </td>
+                </tr>
+              ) : (
+                activeRows.map((row) => (
+                  <tr key={`${row.kind}-${row.id}`} className="border-b last:border-b-0">
+                    <td className="px-2 py-2 text-[#3e5a68]">
+                      {row.kind === "drps" ? t.typeDrps : t.typeContinuous}
+                    </td>
+                    <td className="px-2 py-2">
+                      <Link href={row.href} className="font-semibold text-[#123447] hover:text-[#0f5b73] hover:underline">
+                        {row.title}
+                      </Link>
+                    </td>
+                    <td className="px-2 py-2 text-[#3e5a68]">{row.company}</td>
+                    <td className="px-2 py-2 text-[#3e5a68]">
+                      {row.startsAt ? toDate(row.startsAt, locale) : t.notPlanned}
+                    </td>
+                    <td className="px-2 py-2 text-[#3e5a68]">
+                      {row.endsAt ? toDate(row.endsAt, locale) : t.notPlanned}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  );
+}

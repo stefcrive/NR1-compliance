@@ -410,7 +410,14 @@ export async function PATCH(
         { status: 412 },
       );
     }
-    return NextResponse.json({ error: "Could not update assignment." }, { status: 500 });
+    return NextResponse.json(
+      {
+        error: updateResult.error.message
+          ? `Could not update assignment. ${updateResult.error.message}`
+          : "Could not update assignment.",
+      },
+      { status: 500 },
+    );
   }
 
   if (!updateResult.data) {

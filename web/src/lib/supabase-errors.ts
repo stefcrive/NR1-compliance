@@ -35,11 +35,14 @@ export function isMissingColumnError(
   if (!error) {
     return false;
   }
-  if (error.code === "42703") {
+  if (error.code === "42703" || error.code === "PGRST204") {
     return true;
   }
+  const message = error.message ?? "";
+  const mentionsMissingColumn =
+    includes(message, "column") && (includes(message, "does not exist") || includes(message, "could not find"));
   if (columnName) {
-    return includes(error.message, columnName) && includes(error.message, "does not exist");
+    return includes(message, columnName) && mentionsMissingColumn;
   }
-  return includes(error.message, "column") && includes(error.message, "does not exist");
+  return mentionsMissingColumn;
 }

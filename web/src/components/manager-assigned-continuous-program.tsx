@@ -154,6 +154,15 @@ function normalizeSlots(slots: AvailabilitySlot[]) {
   );
 }
 
+function durationMinutesFromRange(startsAt: string, endsAt: string, fallback = 60) {
+  const start = new Date(startsAt);
+  const end = new Date(endsAt);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return fallback;
+  const duration = Math.round((end.getTime() - start.getTime()) / (60 * 1000));
+  if (!Number.isFinite(duration) || duration <= 0) return fallback;
+  return duration;
+}
+
 function normalizeQuestions(questions: string[]) {
   return questions
     .map((item) => item.trim())
@@ -337,18 +346,36 @@ export function ManagerAssignedContinuousProgram({
     setProvisorySlots((previous) => [...previous, { startsAt: start, endsAt: end }]);
   }
 
-  function updateProvisorySlot(index: number, field: "startsAt" | "endsAt", value: string) {
-    const iso = fromDatetimeLocal(value);
-    if (!iso) return;
+  function updateProvisoryMarkedAt(index: number, value: string) {
+    const startsAt = fromDatetimeLocal(value);
+    if (!startsAt) return;
     setProvisorySlots((previous) =>
-      previous.map((slot, slotIndex) =>
-        slotIndex === index
-          ? {
-              ...slot,
-              [field]: iso,
-            }
-          : slot,
-      ),
+      previous.map((slot, slotIndex) => {
+        if (slotIndex !== index) return slot;
+        const durationMinutes = durationMinutesFromRange(slot.startsAt, slot.endsAt, 60);
+        const startDate = new Date(startsAt);
+        return {
+          startsAt,
+          endsAt: new Date(startDate.getTime() + durationMinutes * 60 * 1000).toISOString(),
+        };
+      }),
+    );
+  }
+
+  function updateProvisoryDurationMinutes(index: number, value: string) {
+    const parsed = Number.parseInt(value, 10);
+    if (!Number.isFinite(parsed)) return;
+    const nextDurationMinutes = Math.max(15, parsed);
+    setProvisorySlots((previous) =>
+      previous.map((slot, slotIndex) => {
+        if (slotIndex !== index) return slot;
+        const startDate = new Date(slot.startsAt);
+        if (Number.isNaN(startDate.getTime())) return slot;
+        return {
+          startsAt: slot.startsAt,
+          endsAt: new Date(startDate.getTime() + nextDurationMinutes * 60 * 1000).toISOString(),
+        };
+      }),
     );
   }
 
@@ -485,16 +512,29 @@ export function ManagerAssignedContinuousProgram({
       let nextTemplate = template;
 
       if (changeState.assignmentChanged) {
+        const assignmentPayload: {
+          status: AssignmentStatus;
+          deployedAt: string;
+          provisorySlots: AvailabilitySlot[];
+          scheduleFrequency?: ContinuousProgramScheduleFrequency;
+          scheduleAnchorDate?: string;
+        } = {
+          status,
+          deployedAt: deployedAtIso,
+          provisorySlots: normalizedProvisorySlots,
+        };
+
+        if (!baseline || baseline.scheduleFrequency !== scheduleFrequency) {
+          assignmentPayload.scheduleFrequency = scheduleFrequency;
+        }
+        if (!baseline || baseline.scheduleAnchorDate !== scheduleAnchorDate) {
+          assignmentPayload.scheduleAnchorDate = scheduleAnchorDate || "";
+        }
+
         const response = await fetch(`/api/admin/clients/${clientId}/programs/${assignment.id}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            status,
-            deployedAt: deployedAtIso,
-            scheduleFrequency,
-            scheduleAnchorDate: scheduleAnchorDate || "",
-            provisorySlots: normalizedProvisorySlots,
-          }),
+          body: JSON.stringify(assignmentPayload),
         });
         const payload = (await response.json().catch(() => ({}))) as AssignmentPatchPayload;
         if (!response.ok) {
@@ -667,12 +707,23 @@ export function ManagerAssignedContinuousProgram({
             </p>
             <div className="mt-2 flex flex-wrap gap-2">
               {sortedCommittedSlots.map((slot) => (
-                <span
+                <div
                   key={`committed-${slot.startsAt}`}
-                  className="rounded-full border border-[#c6dbe8] bg-[#eef7fb] px-2 py-1 text-[11px] text-[#244f63]"
+                  className="flex items-center gap-2 rounded-full border border-[#c6dbe8] bg-[#eef7fb] px-2 py-1 text-[11px] text-[#244f63]"
                 >
-                  {fmtDateTime(slot.startsAt)}
-                </span>
+                  <span>
+                    {fmtDateTime(slot.startsAt)} | {durationMinutesFromRange(slot.startsAt, slot.endsAt, 60)} min
+                  </span>
+                  <Link
+                    href={{
+                      pathname: "/manager/calendar",
+                      query: { assignmentId, markedAt: slot.startsAt },
+                    }}
+                    className="rounded-full border border-[#9ec8db] bg-white px-2 py-0.5 text-[10px] font-semibold text-[#0f5b73]"
+                  >
+                    Ver no calendario
+                  </Link>
+                </div>
               ))}
             </div>
           </div>
@@ -684,20 +735,31 @@ export function ManagerAssignedContinuousProgram({
             provisorySlots.map((slot, index) => (
               <div
                 key={`slot-${slot.startsAt}-${index}`}
-                className="grid gap-2 rounded-lg border border-[#d7e6ee] bg-[#f8fbfd] p-2 md:grid-cols-[1fr_1fr_auto]"
+                className="grid gap-2 rounded-lg border border-[#d7e6ee] bg-[#f8fbfd] p-2 md:grid-cols-[1fr_180px_auto_auto]"
               >
                 <input
                   type="datetime-local"
                   className="rounded border border-[#c9dce8] px-3 py-2 text-xs"
                   value={toDatetimeLocal(slot.startsAt)}
-                  onChange={(event) => updateProvisorySlot(index, "startsAt", event.target.value)}
+                  onChange={(event) => updateProvisoryMarkedAt(index, event.target.value)}
                 />
                 <input
-                  type="datetime-local"
+                  type="number"
+                  min={15}
+                  step={15}
                   className="rounded border border-[#c9dce8] px-3 py-2 text-xs"
-                  value={toDatetimeLocal(slot.endsAt)}
-                  onChange={(event) => updateProvisorySlot(index, "endsAt", event.target.value)}
+                  value={String(durationMinutesFromRange(slot.startsAt, slot.endsAt, 60))}
+                  onChange={(event) => updateProvisoryDurationMinutes(index, event.target.value)}
                 />
+                <Link
+                  href={{
+                    pathname: "/manager/calendar",
+                    query: { assignmentId, markedAt: slot.startsAt },
+                  }}
+                  className="inline-flex items-center justify-center rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
+                >
+                  Ver no calendario
+                </Link>
                 <button
                   type="button"
                   onClick={() => removeProvisorySlot(index)}
