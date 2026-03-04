@@ -90,6 +90,7 @@ type AssignedContinuousProgram = {
   cadenceSuggestedSlots?: AvailabilitySlot[];
   calendarProvisorySlots?: AvailabilitySlot[];
   calendarCommittedSlots?: AvailabilitySlot[];
+  annualPlanMonths?: string[];
   status: ContinuousProgramStatus;
   deployedAt: string | null;
 };
@@ -158,6 +159,8 @@ const TAB_ITEMS: Array<{ id: ClientTab; label: string }> = [
   { id: "assigned-continuous", label: "Assigned processo continuos" },
   { id: "contracts-invoicing", label: "contracts & invoicing" },
 ];
+const ANNUAL_PLAN_COLUMNS = 12;
+const annualPlanMonthRegex = /^\d{4}-(0[1-9]|1[0-2])$/;
 
 function fmt(value: string | null) {
   if (!value) return "-";
@@ -167,6 +170,57 @@ function fmt(value: string | null) {
 function fmtDate(value: string | null) {
   if (!value) return "-";
   return new Intl.DateTimeFormat("pt-BR", { dateStyle: "short" }).format(new Date(value));
+}
+
+function toMonthKey(value: Date): string {
+  const year = value.getUTCFullYear();
+  const month = String(value.getUTCMonth() + 1).padStart(2, "0");
+  return `${year}-${month}`;
+}
+
+function buildAnnualPlanColumns(start: Date, count = ANNUAL_PLAN_COLUMNS): Array<{ key: string; label: string }> {
+  const columns: Array<{ key: string; label: string }> = [];
+  const cursor = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), 1));
+  const formatter = new Intl.DateTimeFormat("pt-BR", { month: "short", year: "numeric", timeZone: "UTC" });
+  for (let index = 0; index < count; index += 1) {
+    const date = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth() + index, 1));
+    columns.push({
+      key: toMonthKey(date),
+      label: formatter.format(date).replace(".", ""),
+    });
+  }
+  return columns;
+}
+
+function normalizeAnnualPlanMonths(value: string[] | null | undefined): string[] {
+  if (!Array.isArray(value)) return [];
+  const unique = new Set<string>();
+  for (const raw of value) {
+    const normalized = typeof raw === "string" ? raw.trim() : "";
+    if (!annualPlanMonthRegex.test(normalized)) continue;
+    unique.add(normalized);
+  }
+  return Array.from(unique.values()).sort();
+}
+
+function extractAnnualPlanMonths(assignment: AssignedContinuousProgram): string[] {
+  const explicitMonths = normalizeAnnualPlanMonths(assignment.annualPlanMonths);
+  if (explicitMonths.length > 0) return explicitMonths;
+
+  const slots = assignment.calendarProvisorySlots ?? assignment.cadenceSuggestedSlots ?? [];
+  const fallback = new Set<string>();
+  for (const slot of slots) {
+    const start = new Date(slot.startsAt);
+    if (Number.isNaN(start.getTime())) continue;
+    fallback.add(toMonthKey(start));
+  }
+  return Array.from(fallback.values()).sort();
+}
+
+function sameMonthsSelection(left: string[] | null | undefined, right: string[] | null | undefined): boolean {
+  const leftNormalized = normalizeAnnualPlanMonths(left ?? []);
+  const rightNormalized = normalizeAnnualPlanMonths(right ?? []);
+  return leftNormalized.join("|") === rightNormalized.join("|");
 }
 
 function toDatetimeLocal(value: string | null): string {
@@ -187,21 +241,6 @@ function fromDatetimeLocal(value: string): string | "" {
 function toDateInput(value: string | null): string {
   if (!value) return "";
   return value.slice(0, 10);
-}
-
-function fmtTime(value: string | null): string {
-  if (!value) return "-";
-  return new Intl.DateTimeFormat("pt-BR", {
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(new Date(value));
-}
-
-function dayKey(value: Date) {
-  return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(
-    value.getDate(),
-  ).padStart(2, "0")}`;
 }
 
 function toNonNegativeInt(value: string, fallback: number): number {
@@ -346,7 +385,11 @@ export function ManagerClientFicha({
   const [availablePrograms, setAvailablePrograms] = useState<ContinuousProgramOption[]>([]);
   const [assignedPrograms, setAssignedPrograms] = useState<AssignedContinuousProgram[]>([]);
   const [continuousError, setContinuousError] = useState("");
+  const [continuousNotice, setContinuousNotice] = useState("");
   const [isSavingProgram, setIsSavingProgram] = useState(false);
+  const [isSavingAnnualPlan, setIsSavingAnnualPlan] = useState(false);
+  const [annualPlanBaseByAssignment, setAnnualPlanBaseByAssignment] = useState<Record<string, string[]>>({});
+  const [annualPlanDraftByAssignment, setAnnualPlanDraftByAssignment] = useState<Record<string, string[]>>({});
   const [isProgramModalOpen, setIsProgramModalOpen] = useState(false);
   const [assignProgramForm, setAssignProgramForm] = useState<{
     programId: string;
@@ -358,22 +401,6 @@ export function ManagerClientFicha({
     status: "Active",
     deployedAt: "",
     scheduleFrequency: "biweekly",
-  });
-  const [editingAssignedProgramId, setEditingAssignedProgramId] = useState<string | null>(null);
-  const [editAssignedProgramForm, setEditAssignedProgramForm] = useState<{
-    status: ContinuousProgramStatus;
-    deployedAt: string;
-    scheduleFrequency: string;
-    provisorySlots: AvailabilitySlot[];
-  }>({
-    status: "Active",
-    deployedAt: "",
-    scheduleFrequency: "biweekly",
-    provisorySlots: [],
-  });
-  const [editCalendarMonth, setEditCalendarMonth] = useState(() => {
-    const now = new Date();
-    return new Date(now.getFullYear(), now.getMonth(), 1);
   });
 
   const selectedCampaign = useMemo(
@@ -395,49 +422,17 @@ export function ManagerClientFicha({
     [unassignedProgramOptions, assignProgramForm.programId],
   );
   const primaryContinuousProgram = assignedPrograms[0] ?? null;
-  const editingAssignedProgram = useMemo(
-    () =>
-      editingAssignedProgramId
-        ? assignedPrograms.find((assignment) => assignment.id === editingAssignedProgramId) ?? null
-        : null,
-    [assignedPrograms, editingAssignedProgramId],
+  const annualPlanColumns = useMemo(
+    () => buildAnnualPlanColumns(new Date(), ANNUAL_PLAN_COLUMNS),
+    [],
   );
-  const editingCadenceSlots = editingAssignedProgram?.cadenceSuggestedSlots ?? [];
-  const editingProvisorySlots = editingAssignedProgram?.calendarProvisorySlots ?? [];
-  const editingCommittedSlots = editingAssignedProgram?.calendarCommittedSlots ?? [];
-  const editingCalendarSlots = useMemo(
-    () =>
-      editAssignedProgramForm.provisorySlots
-        .slice()
-        .sort((left, right) => new Date(left.startsAt).getTime() - new Date(right.startsAt).getTime()),
-    [editAssignedProgramForm.provisorySlots],
-  );
-  const editingSlotsByDay = useMemo(() => {
-    const map = new Map<string, AvailabilitySlot[]>();
-    for (const slot of editingCalendarSlots) {
-      const date = new Date(slot.startsAt);
-      if (Number.isNaN(date.getTime())) continue;
-      const key = dayKey(date);
-      map.set(key, [...(map.get(key) ?? []), slot]);
-    }
-    return map;
-  }, [editingCalendarSlots]);
-  const editingCalendarDays = useMemo(() => {
-    const start = new Date(editCalendarMonth.getFullYear(), editCalendarMonth.getMonth(), 1);
-    const gridStart = new Date(start);
-    gridStart.setDate(1 - start.getDay());
-    return Array.from({ length: 42 }, (_, index) => {
-      const value = new Date(gridStart);
-      value.setDate(gridStart.getDate() + index);
-      const key = dayKey(value);
-      return {
-        key,
-        value,
-        inMonth: value.getMonth() === editCalendarMonth.getMonth(),
-        slots: editingSlotsByDay.get(key) ?? [],
-      };
-    });
-  }, [editCalendarMonth, editingSlotsByDay]);
+  const annualPlanPendingCount = useMemo(() => {
+    return assignedPrograms.reduce((count, assignment) => {
+      const base = annualPlanBaseByAssignment[assignment.id] ?? extractAnnualPlanMonths(assignment);
+      const draft = annualPlanDraftByAssignment[assignment.id] ?? base;
+      return sameMonthsSelection(base, draft) ? count : count + 1;
+    }, 0);
+  }, [annualPlanBaseByAssignment, annualPlanDraftByAssignment, assignedPrograms]);
 
   const loadContinuousPrograms = useCallback(async (targetClientId: string) => {
     const response = await fetch(`/api/admin/clients/${targetClientId}/programs`, { cache: "no-store" });
@@ -454,6 +449,22 @@ export function ManagerClientFicha({
 
     setAvailablePrograms(nextAvailable);
     setAssignedPrograms(nextAssigned);
+    const nextAnnualPlanState: Record<string, string[]> = {};
+    for (const assignment of nextAssigned) {
+      nextAnnualPlanState[assignment.id] = extractAnnualPlanMonths(assignment);
+    }
+    setAnnualPlanBaseByAssignment(nextAnnualPlanState);
+    setAnnualPlanDraftByAssignment((previous) => {
+      const preserved: Record<string, string[]> = {};
+      for (const assignment of nextAssigned) {
+        if (previous[assignment.id] && !sameMonthsSelection(previous[assignment.id], nextAnnualPlanState[assignment.id])) {
+          preserved[assignment.id] = normalizeAnnualPlanMonths(previous[assignment.id]);
+        } else {
+          preserved[assignment.id] = nextAnnualPlanState[assignment.id];
+        }
+      }
+      return preserved;
+    });
     setAssignProgramForm((previous) => {
       const nextAssignedIds = new Set(nextAssigned.map((assignment) => assignment.programId));
       const nextProgramId =
@@ -475,6 +486,7 @@ export function ManagerClientFicha({
     setIsLoading(true);
     setError("");
     setContinuousError("");
+    setContinuousNotice("");
     try {
       const [detailRes, reportsRes] = await Promise.all([
         fetch(`/api/admin/clients/${clientId}`, { cache: "no-store" }),
@@ -775,60 +787,8 @@ export function ManagerClientFicha({
       scheduleFrequency: "biweekly",
     });
     setContinuousError("");
+    setContinuousNotice("");
     setIsProgramModalOpen(true);
-  }
-
-  function startEditingAssignedProgram(assignment: AssignedContinuousProgram) {
-    const suggested = assignment.calendarProvisorySlots ?? assignment.cadenceSuggestedSlots ?? [];
-    const sortedSlots = suggested
-      .slice()
-      .sort((left, right) => new Date(left.startsAt).getTime() - new Date(right.startsAt).getTime());
-    const firstSlot = sortedSlots[0] ? new Date(sortedSlots[0].startsAt) : null;
-    setEditingAssignedProgramId(assignment.id);
-    setEditAssignedProgramForm({
-      status: assignment.status,
-      deployedAt: toDatetimeLocal(assignment.deployedAt),
-      scheduleFrequency: assignment.scheduleFrequency ?? "biweekly",
-      provisorySlots: sortedSlots,
-    });
-    if (firstSlot && !Number.isNaN(firstSlot.getTime())) {
-      setEditCalendarMonth(new Date(firstSlot.getFullYear(), firstSlot.getMonth(), 1));
-    }
-    setContinuousError("");
-  }
-
-  function updateEditProvisorySlot(index: number, field: "startsAt" | "endsAt", value: string) {
-    const iso = fromDatetimeLocal(value);
-    setEditAssignedProgramForm((previous) => ({
-      ...previous,
-      provisorySlots: previous.provisorySlots.map((slot, slotIndex) =>
-        slotIndex === index && iso
-          ? {
-              ...slot,
-              [field]: iso,
-            }
-          : slot,
-      ),
-    }));
-  }
-
-  function removeEditProvisorySlot(index: number) {
-    setEditAssignedProgramForm((previous) => ({
-      ...previous,
-      provisorySlots: previous.provisorySlots.filter((_, slotIndex) => slotIndex !== index),
-    }));
-  }
-
-  function addEditProvisorySlot() {
-    const base = new Date(editCalendarMonth);
-    base.setDate(Math.max(base.getDate(), 1));
-    base.setHours(10, 0, 0, 0);
-    const startsAt = base.toISOString();
-    const endsAt = new Date(base.getTime() + 60 * 60 * 1000).toISOString();
-    setEditAssignedProgramForm((previous) => ({
-      ...previous,
-      provisorySlots: [...previous.provisorySlots, { startsAt, endsAt }],
-    }));
   }
 
   async function assignContinuousProgram() {
@@ -840,6 +800,7 @@ export function ManagerClientFicha({
 
     setIsSavingProgram(true);
     setContinuousError("");
+    setContinuousNotice("");
     const deployedAtIso = fromDatetimeLocal(assignProgramForm.deployedAt);
     const response = await fetch(`/api/admin/clients/${client.id}/programs`, {
       method: "POST",
@@ -860,51 +821,83 @@ export function ManagerClientFicha({
 
     setIsProgramModalOpen(false);
     await loadContinuousPrograms(client.id);
+    setContinuousNotice("Programa atribuido com sucesso.");
     setIsSavingProgram(false);
   }
 
-  async function saveAssignedProgram() {
-    if (!client || !editingAssignedProgramId) return;
-    if (!editAssignedProgramForm.deployedAt) {
-      setContinuousError("Data de aplicacao e obrigatoria.");
+  function toggleAnnualPlanMonthDraft(assignment: AssignedContinuousProgram, monthKey: string) {
+    if (assignment.status !== "Active") {
+      setContinuousError("Ative o programa antes de definir o cronograma anual.");
       return;
     }
 
-    setIsSavingProgram(true);
+    const validMonthKeys = new Set(annualPlanColumns.map((column) => column.key));
+    const currentMonths =
+      annualPlanDraftByAssignment[assignment.id] ??
+      annualPlanBaseByAssignment[assignment.id] ??
+      extractAnnualPlanMonths(assignment);
+    const nextMonthsSet = new Set(normalizeAnnualPlanMonths(currentMonths));
+    for (const key of Array.from(nextMonthsSet.values())) {
+      if (!validMonthKeys.has(key)) nextMonthsSet.delete(key);
+    }
+    if (nextMonthsSet.has(monthKey)) {
+      nextMonthsSet.delete(monthKey);
+    } else {
+      nextMonthsSet.add(monthKey);
+    }
+    const nextMonths = normalizeAnnualPlanMonths(Array.from(nextMonthsSet.values()));
+    setAnnualPlanDraftByAssignment((previous) => ({
+      ...previous,
+      [assignment.id]: nextMonths,
+    }));
     setContinuousError("");
-    const deployedAtIso = fromDatetimeLocal(editAssignedProgramForm.deployedAt);
-    const response = await fetch(
-      `/api/admin/clients/${client.id}/programs/${editingAssignedProgramId}`,
-      {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          status: editAssignedProgramForm.status,
-          ...(deployedAtIso ? { deployedAt: deployedAtIso } : {}),
-          scheduleFrequency: editAssignedProgramForm.scheduleFrequency,
-        }),
-      },
-    );
-    const data = (await response.json().catch(() => ({}))) as {
-      error?: string;
-      provisorySlots?: AvailabilitySlot[];
-    };
-    if (!response.ok) {
-      const provisorySlots = Array.isArray(data.provisorySlots) ? data.provisorySlots : [];
-      if (response.status === 409 && provisorySlots.length > 0) {
-        setEditAssignedProgramForm((previous) => ({
-          ...previous,
-          provisorySlots,
-        }));
-      }
-      setContinuousError(data.error ?? "Falha ao atualizar programa atribuido.");
-      setIsSavingProgram(false);
+    setContinuousNotice("");
+  }
+
+  async function saveAnnualPlan() {
+    if (!client) return;
+
+    const pendingAssignments = assignedPrograms
+      .map((assignment) => {
+        const base = annualPlanBaseByAssignment[assignment.id] ?? extractAnnualPlanMonths(assignment);
+        const draft = annualPlanDraftByAssignment[assignment.id] ?? base;
+        return { assignment, base, draft: normalizeAnnualPlanMonths(draft) };
+      })
+      .filter((item) => !sameMonthsSelection(item.base, item.draft));
+
+    if (pendingAssignments.length === 0) {
+      setContinuousNotice("Nenhuma alteracao pendente no cronograma anual.");
+      setContinuousError("");
       return;
     }
 
-    setEditingAssignedProgramId(null);
-    await loadContinuousPrograms(client.id);
-    setIsSavingProgram(false);
+    setIsSavingAnnualPlan(true);
+    setContinuousError("");
+    setContinuousNotice("");
+    try {
+      for (const item of pendingAssignments) {
+        const response = await fetch(`/api/admin/clients/${client.id}/programs/${item.assignment.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ annualPlanMonths: item.draft }),
+        });
+        const data = (await response.json().catch(() => ({}))) as { error?: string };
+        if (!response.ok) {
+          throw new Error(
+            data.error ??
+              `Falha ao salvar cronograma anual para ${item.assignment.programTitle}.`,
+          );
+        }
+      }
+      await loadContinuousPrograms(client.id);
+      setContinuousNotice("Cronograma anual salvo.");
+    } catch (saveError) {
+      setContinuousError(
+        saveError instanceof Error ? saveError.message : "Falha ao salvar cronograma anual.",
+      );
+    } finally {
+      setIsSavingAnnualPlan(false);
+    }
   }
 
   async function removeAssignedProgram(assignmentId: string) {
@@ -915,6 +908,7 @@ export function ManagerClientFicha({
 
     setIsSavingProgram(true);
     setContinuousError("");
+    setContinuousNotice("");
     const response = await fetch(`/api/admin/clients/${client.id}/programs/${assignmentId}`, {
       method: "DELETE",
     });
@@ -924,11 +918,8 @@ export function ManagerClientFicha({
       setIsSavingProgram(false);
       return;
     }
-
-    if (editingAssignedProgramId === assignmentId) {
-      setEditingAssignedProgramId(null);
-    }
     await loadContinuousPrograms(client.id);
+    setContinuousNotice("Programa removido.");
     setIsSavingProgram(false);
   }
 
@@ -1821,7 +1812,117 @@ export function ManagerClientFicha({
             </button>
           </div>
           {continuousError ? <p className="mt-3 text-sm text-red-600">{continuousError}</p> : null}
-          <div className="mt-3 overflow-x-auto">
+          {continuousNotice ? <p className="mt-3 text-sm text-[#1f6b3d]">{continuousNotice}</p> : null}
+          <div className="mt-3 rounded-xl border border-[#d8e4ee] bg-[#f8fbfd]">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#d8e4ee] px-3 py-2">
+              <div>
+                <p className="text-sm font-semibold text-[#123447]">Plano anual de implementacao</p>
+                <p className="text-xs text-[#5a7383]">
+                  Selecione os meses e salve para gerar os eventos provisorios no calendario.
+                </p>
+              </div>
+              <div className="flex items-center gap-3">
+                <span className="text-xs text-[#55707f]">
+                  {annualPlanPendingCount > 0
+                    ? `${annualPlanPendingCount} atribuicao(oes) com alteracoes.`
+                    : "Sem alteracoes pendentes."}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => void saveAnnualPlan()}
+                  disabled={isSavingAnnualPlan || isSavingProgram || annualPlanPendingCount === 0}
+                  className="rounded-full bg-[#0f5b73] px-4 py-2 text-xs font-semibold text-white disabled:opacity-50"
+                >
+                  {isSavingAnnualPlan ? "Salvando..." : "Salvar cronograma"}
+                </button>
+              </div>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="min-w-[1050px] text-xs">
+                <thead>
+                  <tr className="border-b border-[#d8e4ee] bg-white">
+                    <th className="px-2 py-2 text-left font-semibold text-[#244354]">
+                      Acao de prevencao e controle
+                    </th>
+                    {annualPlanColumns.map((column) => (
+                      <th
+                        key={`annual-col-${column.key}`}
+                        className="px-1 py-2 text-center font-semibold text-[#244354]"
+                      >
+                        {column.label}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {assignedPrograms.length === 0 ? (
+                    <tr>
+                      <td
+                        colSpan={annualPlanColumns.length + 1}
+                        className="px-2 py-3 text-xs text-[#5a7383]"
+                      >
+                        Nenhum processo continuo atribuido.
+                      </td>
+                    </tr>
+                  ) : (
+                    assignedPrograms.map((assignment) => {
+                      const baseMonths =
+                        annualPlanBaseByAssignment[assignment.id] ?? extractAnnualPlanMonths(assignment);
+                      const selectedMonths = new Set(
+                        annualPlanDraftByAssignment[assignment.id] ?? baseMonths,
+                      );
+                      const isDirty = !sameMonthsSelection(baseMonths, Array.from(selectedMonths.values()));
+                      return (
+                        <tr key={`annual-plan-${assignment.id}`} className="border-b border-[#dbe7ef]">
+                          <td className="px-2 py-2">
+                            <Link
+                              href={`/manager/clients/${client.id}/assigned-continuous/${assignment.id}`}
+                              className="font-medium text-[#0f5b73] hover:underline"
+                            >
+                              {assignment.programTitle}
+                            </Link>
+                            <p className="text-[11px] text-[#5a7383]">
+                              Status {assignment.status}
+                              {isDirty ? " | alteracao pendente" : ""}
+                            </p>
+                          </td>
+                          {annualPlanColumns.map((column) => {
+                            const isSelected = selectedMonths.has(column.key);
+                            const isDisabled =
+                              assignment.status !== "Active" || isSavingAnnualPlan || isSavingProgram;
+                            return (
+                              <td key={`${assignment.id}-${column.key}`} className="px-1 py-2 text-center">
+                                <button
+                                  type="button"
+                                  onClick={() => toggleAnnualPlanMonthDraft(assignment, column.key)}
+                                  disabled={isDisabled}
+                                  className={`h-7 w-9 rounded border text-[10px] font-semibold transition ${
+                                    isSelected
+                                      ? "border-[#87b493] bg-[#d9f0df] text-[#1f5f2c]"
+                                      : "border-[#c5d8e4] bg-white text-[#4f6977]"
+                                  } disabled:cursor-not-allowed disabled:opacity-50`}
+                                  title={
+                                    assignment.status !== "Active"
+                                      ? "Disponivel apenas para programas ativos."
+                                      : isSelected
+                                        ? "Remover mes do plano anual."
+                                        : "Adicionar mes ao plano anual."
+                                  }
+                                >
+                                  {isSelected ? "OK" : "-"}
+                                </button>
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <div className="mt-5 overflow-x-auto">
             <table className="min-w-full text-sm">
               <thead>
                 <tr className="border-b">
@@ -1842,8 +1943,7 @@ export function ManagerClientFicha({
                   </tr>
                 ) : (
                   assignedPrograms.map((assignment) => (
-                    <Fragment key={assignment.id}>
-                      <tr className="border-b">
+                    <tr key={assignment.id} className="border-b">
                         <td className="px-2 py-2">
                           <p className="font-medium text-[#123447]">{assignment.programTitle}</p>
                           <p className="text-xs text-[#5a7383]">{assignment.programDescription ?? assignment.programId}</p>
@@ -1881,10 +1981,9 @@ export function ManagerClientFicha({
                                   type="button"
                                   onClick={() => {
                                     setOpenAssignedProgramActionsFor(null);
-                                    startEditingAssignedProgram(assignment);
+                                    openAssignedProgramDetails(assignment);
                                   }}
-                                  disabled={isSavingProgram}
-                                  className="block w-full px-3 py-2 text-left text-xs font-semibold text-[#2d5f23] hover:bg-[#f4f9fc] disabled:cursor-not-allowed disabled:text-[#a8b7c0]"
+                                  className="block w-full px-3 py-2 text-left text-xs font-semibold text-[#2d5f23] hover:bg-[#f4f9fc]"
                                 >
                                   Editar
                                 </button>
@@ -1904,212 +2003,6 @@ export function ManagerClientFicha({
                           </div>
                         </td>
                       </tr>
-                      {editingAssignedProgramId === assignment.id ? (
-                        <tr className="border-b bg-[#f8fbfd]">
-                          <td colSpan={6} className="px-2 py-3">
-                            <div className="grid gap-2 md:grid-cols-4">
-                              <select
-                                className="rounded border border-[#c9dce8] px-3 py-2 text-sm"
-                                value={editAssignedProgramForm.status}
-                                onChange={(event) =>
-                                  setEditAssignedProgramForm((previous) => ({
-                                    ...previous,
-                                    status: event.target.value as ContinuousProgramStatus,
-                                  }))
-                                }
-                              >
-                                <option value="Recommended">Recommended</option>
-                                <option value="Active">Active</option>
-                                <option value="Completed">Completed</option>
-                              </select>
-                              <input
-                                type="datetime-local"
-                                className="rounded border border-[#c9dce8] px-3 py-2 text-sm"
-                                value={editAssignedProgramForm.deployedAt}
-                                onChange={(event) =>
-                                  setEditAssignedProgramForm((previous) => ({
-                                    ...previous,
-                                    deployedAt: event.target.value,
-                                  }))
-                                }
-                              />
-                              <select
-                                className="rounded border border-[#c9dce8] px-3 py-2 text-sm"
-                                value={editAssignedProgramForm.scheduleFrequency}
-                                onChange={(event) =>
-                                  setEditAssignedProgramForm((previous) => ({
-                                    ...previous,
-                                    scheduleFrequency: event.target.value,
-                                  }))
-                                }
-                              >
-                                <option value="weekly">weekly</option>
-                                <option value="biweekly">biweekly</option>
-                                <option value="monthly">monthly</option>
-                                <option value="quarterly">quarterly</option>
-                                <option value="semiannual">semiannual</option>
-                                <option value="annual">annual</option>
-                                <option value="custom">custom</option>
-                              </select>
-                            </div>
-                            {editingCommittedSlots.length > 0 ? (
-                              <div className="mt-3 rounded-xl border border-[#d8e4ee] bg-white p-3">
-                                <p className="text-xs font-semibold uppercase tracking-[0.08em] text-[#365668]">
-                                  Eventos atualmente no calendario
-                                </p>
-                                <div className="mt-2 flex flex-wrap gap-2">
-                                  {editingCommittedSlots.map((slot) => (
-                                    <span
-                                      key={`committed-${assignment.id}-${slot.startsAt}`}
-                                      className="rounded-full border border-[#c6dbe8] bg-[#eef7fb] px-2 py-1 text-[11px] text-[#244f63]"
-                                    >
-                                      {fmt(slot.startsAt)}
-                                    </span>
-                                  ))}
-                                </div>
-                              </div>
-                            ) : null}
-                            <div className="mt-3 rounded-xl border border-[#d8e4ee] bg-white p-3">
-                              <div className="flex items-center justify-between gap-2">
-                                <p className="text-xs font-semibold uppercase tracking-[0.08em] text-[#365668]">
-                                  Calendario sugerido pela cadencia ({editingCalendarSlots.length})
-                                </p>
-                                <div className="flex gap-2">
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      setEditCalendarMonth(
-                                        (previous) =>
-                                          new Date(previous.getFullYear(), previous.getMonth() - 1, 1),
-                                      )
-                                    }
-                                    className="rounded-full border border-[#c9dce8] px-2 py-0.5 text-[11px] font-semibold text-[#35515f]"
-                                  >
-                                    Mes anterior
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      setEditCalendarMonth(
-                                        (previous) =>
-                                          new Date(previous.getFullYear(), previous.getMonth() + 1, 1),
-                                      )
-                                    }
-                                    className="rounded-full border border-[#c9dce8] px-2 py-0.5 text-[11px] font-semibold text-[#35515f]"
-                                  >
-                                    Proximo
-                                  </button>
-                                </div>
-                              </div>
-                              <p className="mt-1 text-xs text-[#5a7383]">
-                                {new Intl.DateTimeFormat("pt-BR", { month: "long", year: "numeric" }).format(
-                                  editCalendarMonth,
-                                )}
-                              </p>
-                              {editingCalendarSlots.length === 0 ? (
-                                <p className="mt-2 text-xs text-[#5a7383]">
-                                  Sem eventos provisorios. Adicione manualmente ou salve para recalcular.
-                                </p>
-                              ) : null}
-                              <div className="mt-3 grid grid-cols-7 gap-1">
-                                {["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sab"].map((label) => (
-                                  <p key={`weekday-${label}`} className="text-center text-[10px] font-semibold text-[#5e7d8d]">
-                                    {label}
-                                  </p>
-                                ))}
-                                {editingCalendarDays.map((day) => (
-                                  <div
-                                    key={day.key}
-                                    className={`min-h-[80px] rounded border p-1 ${
-                                      day.inMonth ? "border-[#d7e6ee] bg-white" : "border-[#edf3f7] bg-[#f8fbfd]"
-                                    }`}
-                                  >
-                                    <p className={`text-[10px] font-semibold ${day.inMonth ? "text-[#163748]" : "text-[#86a0ac]"}`}>
-                                      {day.value.getDate()}
-                                    </p>
-                                    <div className="mt-1 space-y-1">
-                                      {day.slots.slice(0, 2).map((slot) => (
-                                        <p
-                                          key={`slot-pill-${assignment.id}-${slot.startsAt}`}
-                                          className="truncate rounded bg-[#e8f3f8] px-1 py-0.5 text-[10px] text-[#0f5b73]"
-                                          title={`${fmt(slot.startsAt)} - ${fmt(slot.endsAt)}`}
-                                        >
-                                          {fmtTime(slot.startsAt)}
-                                        </p>
-                                      ))}
-                                      {day.slots.length > 2 ? (
-                                        <p className="text-[10px] text-[#527083]">+{day.slots.length - 2}</p>
-                                      ) : null}
-                                    </div>
-                                  </div>
-                                ))}
-                              </div>
-                              <div className="mt-3 space-y-2">
-                                {editingCalendarSlots.map((slot, slotIndex) => (
-                                  <div
-                                    key={`editable-slot-${assignment.id}-${slot.startsAt}-${slotIndex}`}
-                                    className="grid gap-2 rounded-lg border border-[#d7e6ee] bg-[#f8fbfd] p-2 md:grid-cols-[1fr_1fr_auto]"
-                                  >
-                                    <input
-                                      type="datetime-local"
-                                      className="rounded border border-[#c9dce8] px-3 py-2 text-xs"
-                                      value={toDatetimeLocal(slot.startsAt)}
-                                      onChange={(event) =>
-                                        updateEditProvisorySlot(slotIndex, "startsAt", event.target.value)
-                                      }
-                                    />
-                                    <input
-                                      type="datetime-local"
-                                      className="rounded border border-[#c9dce8] px-3 py-2 text-xs"
-                                      value={toDatetimeLocal(slot.endsAt)}
-                                      onChange={(event) =>
-                                        updateEditProvisorySlot(slotIndex, "endsAt", event.target.value)
-                                      }
-                                    />
-                                    <button
-                                      type="button"
-                                      onClick={() => removeEditProvisorySlot(slotIndex)}
-                                      className="rounded-full border border-[#f0b6b6] px-3 py-1 text-xs font-semibold text-[#8a2d2d]"
-                                    >
-                                      Remover
-                                    </button>
-                                  </div>
-                                ))}
-                              </div>
-                              <button
-                                type="button"
-                                onClick={addEditProvisorySlot}
-                                className="mt-2 rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
-                              >
-                                Adicionar evento provisorio
-                              </button>
-                              {editingProvisorySlots.length > 0 && editingCadenceSlots.length > 0 ? (
-                                <p className="mt-2 text-[11px] text-[#4f6977]">
-                                  Ultimo calculo automatico: {editingCadenceSlots.length} sugestoes.
-                                </p>
-                              ) : null}
-                            </div>
-                            <div className="mt-3 flex gap-2">
-                              <button
-                                type="button"
-                                disabled={isSavingProgram}
-                                onClick={() => void saveAssignedProgram()}
-                                className="rounded-full bg-[#0f5b73] px-4 py-2 text-xs font-semibold text-white disabled:opacity-50"
-                              >
-                                Salvar
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setEditingAssignedProgramId(null)}
-                                className="rounded-full border border-[#9ec8db] px-4 py-2 text-xs font-semibold text-[#0f5b73]"
-                              >
-                                Cancelar
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      ) : null}
-                    </Fragment>
                   ))
                 )}
               </tbody>

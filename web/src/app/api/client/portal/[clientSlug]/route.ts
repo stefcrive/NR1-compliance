@@ -119,6 +119,7 @@ type ClientProgramRow = {
   deployed_at?: string | null;
   schedule_frequency_override?: string | null;
   schedule_anchor_date_override?: string | null;
+  annual_plan_months?: unknown;
 };
 
 type ProgramRow = {
@@ -148,6 +149,419 @@ type AvailabilitySlot = {
   startsAt: string;
   endsAt: string;
 };
+const annualPlanMonthRegex = /^\d{4}-(0[1-9]|1[0-2])$/;
+
+type ResponseRawRow = {
+  id: string;
+  survey_id: string;
+  submitted_at: string;
+  group_values: Record<string, unknown> | null;
+};
+
+type QuestionTopicRow = {
+  id: string;
+  topic_id: number;
+};
+
+type AnswerScoreRow = {
+  response_id: string;
+  question_id: string;
+  corrected_value: number | string;
+};
+
+type RiskExposureLevel = "low" | "moderate" | "high" | "critical";
+type ProbabilityBand = "rare" | "occasional" | "frequent" | "very_frequent";
+type RiskMatrixClass = "low" | "moderate" | "high" | "critical";
+
+type ScoreDistribution = {
+  1: number;
+  2: number;
+  3: number;
+  4: number;
+  5: number;
+};
+
+type ResponseRiskDatasetRow = {
+  employeeId: string;
+  sector: string;
+  topicId: number;
+  riskFactor: string;
+  score: number;
+  scoreBucket: 1 | 2 | 3 | 4 | 5;
+  timestamp: string;
+};
+
+type RiskFactorMetric = {
+  topicId: number;
+  riskFactor: string;
+  severity: number;
+  responses: number;
+  affectedEmployees: number;
+  meanExposure: number | null;
+  exposureLevel: RiskExposureLevel | null;
+  prevalence: number | null;
+  severityIndex: number | null;
+  probability: number | null;
+  probabilityBand: ProbabilityBand | null;
+  riskScore: number | null;
+  riskCategory: RiskMatrixClass | null;
+  concentration: number | null;
+  distribution: ScoreDistribution;
+};
+
+type CriticalExposureStats = {
+  rate: number | null;
+  employees: number;
+  criticalEmployees: number;
+};
+
+type SectorMetricSnapshot = {
+  sector: string;
+  nResponses: number;
+  suppressed: boolean;
+  sectorRiskIndex: number | null;
+  sectorRiskCategory: RiskMatrixClass | null;
+  psychosocialLoadIndex: number | null;
+  riskConcentration: number | null;
+  criticalExposure: number | null;
+  criticalEmployees: number;
+  employeeCount: number;
+  riskFactors: RiskFactorMetric[];
+};
+
+const TOPIC_PROFILES: Record<number, { label: string; severity: number }> = {
+  1: { label: "Assedio", severity: 5 },
+  2: { label: "Falta de suporte", severity: 4 },
+  3: { label: "Gestao de mudancas", severity: 3 },
+  4: { label: "Clareza de papel", severity: 3 },
+  5: { label: "Reconhecimento", severity: 3 },
+  6: { label: "Autonomia", severity: 3 },
+  7: { label: "Justica organizacional", severity: 4 },
+  8: { label: "Eventos traumaticos", severity: 5 },
+  9: { label: "Subcarga", severity: 2 },
+  10: { label: "Sobrecarga", severity: 4 },
+  11: { label: "Relacionamentos", severity: 4 },
+  12: { label: "Comunicacao", severity: 3 },
+  13: { label: "Trabalho remoto/isolado", severity: 3 },
+};
+
+function round(value: number, decimals = 4): number {
+  const factor = 10 ** decimals;
+  return Math.round(value * factor) / factor;
+}
+
+function toNumber(value: number | string): number | null {
+  const numeric = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function safeMean(values: number[]): number | null {
+  if (values.length === 0) return null;
+  return values.reduce((acc, value) => acc + value, 0) / values.length;
+}
+
+function safeStdDev(values: number[]): number | null {
+  if (values.length === 0) return null;
+  const mean = safeMean(values);
+  if (mean === null) return null;
+  const variance = values.reduce((acc, value) => acc + (value - mean) ** 2, 0) / values.length;
+  return Math.sqrt(Math.max(variance, 0));
+}
+
+function exposureLevelFromMean(meanExposure: number | null): RiskExposureLevel | null {
+  if (meanExposure === null) return null;
+  if (meanExposure <= 2) return "low";
+  if (meanExposure <= 3) return "moderate";
+  if (meanExposure <= 4) return "high";
+  return "critical";
+}
+
+function probabilityBandFromValue(probability: number | null): ProbabilityBand | null {
+  if (probability === null) return null;
+  if (probability < 0.25) return "rare";
+  if (probability < 0.5) return "occasional";
+  if (probability < 0.75) return "frequent";
+  return "very_frequent";
+}
+
+function matrixClassFromRiskScore(score: number | null): RiskMatrixClass | null {
+  if (score === null) return null;
+  if (score < 1.5) return "low";
+  if (score < 2.5) return "moderate";
+  if (score < 3.5) return "high";
+  return "critical";
+}
+
+function emptyDistribution(): ScoreDistribution {
+  return { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+}
+
+function toTopicLabel(topicId: number): string {
+  return TOPIC_PROFILES[topicId]?.label ?? `Topico ${topicId}`;
+}
+
+function toTopicSeverity(topicId: number): number {
+  return TOPIC_PROFILES[topicId]?.severity ?? 3;
+}
+
+function toScoreBucket(score: number): 1 | 2 | 3 | 4 | 5 {
+  const normalized = Math.round(clamp(score, 1, 5));
+  if (normalized <= 1) return 1;
+  if (normalized === 2) return 2;
+  if (normalized === 3) return 3;
+  if (normalized === 4) return 4;
+  return 5;
+}
+
+function resolveSector(groupValues: Record<string, unknown> | null): string {
+  if (!groupValues) return "Sem setor";
+  const sector = typeof groupValues.sector === "string" ? groupValues.sector.trim() : "";
+  return sector.length > 0 ? sector : "Sem setor";
+}
+
+function toMonthlyPeriod(isoDatetime: string): string {
+  const parsed = new Date(isoDatetime);
+  if (Number.isNaN(parsed.getTime())) {
+    return "n/a";
+  }
+  const month = parsed.getUTCMonth() + 1;
+  return `${parsed.getUTCFullYear()}-${String(month).padStart(2, "0")}`;
+}
+
+function computeCriticalExposure(rows: ResponseRiskDatasetRow[]): CriticalExposureStats {
+  if (rows.length === 0) {
+    return {
+      rate: null,
+      employees: 0,
+      criticalEmployees: 0,
+    };
+  }
+
+  const criticalCountByEmployee = new Map<string, number>();
+  const allEmployees = new Set<string>();
+
+  for (const row of rows) {
+    allEmployees.add(row.employeeId);
+    if (row.score >= 4) {
+      criticalCountByEmployee.set(row.employeeId, (criticalCountByEmployee.get(row.employeeId) ?? 0) + 1);
+    }
+  }
+
+  const employees = allEmployees.size;
+  if (employees === 0) {
+    return {
+      rate: null,
+      employees: 0,
+      criticalEmployees: 0,
+    };
+  }
+
+  let criticalEmployees = 0;
+  for (const employeeId of allEmployees) {
+    if ((criticalCountByEmployee.get(employeeId) ?? 0) >= 3) {
+      criticalEmployees += 1;
+    }
+  }
+
+  return {
+    rate: round(criticalEmployees / employees),
+    employees,
+    criticalEmployees,
+  };
+}
+
+function computeCompositeIndex(
+  metrics: RiskFactorMetric[],
+  selector: (metric: RiskFactorMetric) => number | null,
+): number | null {
+  if (metrics.length === 0) return null;
+  const sum = metrics.reduce((acc, metric) => acc + (selector(metric) ?? 0), 0);
+  return round(sum / metrics.length);
+}
+
+function buildResponseRiskDataset(params: {
+  responses: ResponseRawRow[];
+  answers: AnswerScoreRow[];
+  questionTopicById: Map<string, number>;
+}): ResponseRiskDatasetRow[] {
+  const responseContextById = new Map<
+    string,
+    {
+      employeeId: string;
+      sector: string;
+      timestamp: string;
+    }
+  >();
+
+  for (const response of params.responses) {
+    responseContextById.set(response.id, {
+      employeeId: response.id,
+      sector: resolveSector(response.group_values),
+      timestamp: toMonthlyPeriod(response.submitted_at),
+    });
+  }
+
+  const aggregateByEmployeeTopic = new Map<
+    string,
+    {
+      employeeId: string;
+      sector: string;
+      topicId: number;
+      timestamp: string;
+      sum: number;
+      count: number;
+    }
+  >();
+
+  for (const answer of params.answers) {
+    const context = responseContextById.get(answer.response_id);
+    if (!context) continue;
+
+    const topicId = params.questionTopicById.get(answer.question_id);
+    if (!topicId) continue;
+
+    const numericScore = toNumber(answer.corrected_value);
+    if (numericScore === null) continue;
+
+    const key = `${context.employeeId}:${topicId}`;
+    const entry = aggregateByEmployeeTopic.get(key);
+    if (!entry) {
+      aggregateByEmployeeTopic.set(key, {
+        employeeId: context.employeeId,
+        sector: context.sector,
+        topicId,
+        timestamp: context.timestamp,
+        sum: numericScore,
+        count: 1,
+      });
+      continue;
+    }
+
+    entry.sum += numericScore;
+    entry.count += 1;
+  }
+
+  const rows: ResponseRiskDatasetRow[] = [];
+  for (const entry of aggregateByEmployeeTopic.values()) {
+    const meanScore = entry.count > 0 ? entry.sum / entry.count : 0;
+    const normalizedScore = round(clamp(meanScore, 1, 5));
+    rows.push({
+      employeeId: entry.employeeId,
+      sector: entry.sector,
+      topicId: entry.topicId,
+      riskFactor: toTopicLabel(entry.topicId),
+      score: normalizedScore,
+      scoreBucket: toScoreBucket(normalizedScore),
+      timestamp: entry.timestamp,
+    });
+  }
+
+  return rows;
+}
+
+function buildRiskFactorMetrics(rows: ResponseRiskDatasetRow[], topicIds: number[]): RiskFactorMetric[] {
+  const rowsByTopic = new Map<number, ResponseRiskDatasetRow[]>();
+  for (const row of rows) {
+    const list = rowsByTopic.get(row.topicId) ?? [];
+    list.push(row);
+    rowsByTopic.set(row.topicId, list);
+  }
+
+  return topicIds.map((topicId) => {
+    const topicRows = rowsByTopic.get(topicId) ?? [];
+    const distribution = emptyDistribution();
+    let affectedEmployees = 0;
+    const scores: number[] = [];
+
+    for (const row of topicRows) {
+      distribution[row.scoreBucket] += 1;
+      scores.push(row.score);
+      if (row.score >= 4) {
+        affectedEmployees += 1;
+      }
+    }
+
+    const responses = topicRows.length;
+    const meanExposureRaw = safeMean(scores);
+    const meanExposure = meanExposureRaw === null ? null : round(meanExposureRaw);
+    const prevalence = responses > 0 ? round(affectedEmployees / responses) : null;
+    const severityIndex =
+      responses > 0
+        ? round(
+            (distribution[1] + distribution[2] * 2 + distribution[3] * 3 + distribution[4] * 4 + distribution[5] * 5) /
+              (5 * responses),
+          )
+        : null;
+    const probability =
+      meanExposure === null ? null : round(clamp((meanExposure - 1) / 4, 0, 1));
+    const severity = toTopicSeverity(topicId);
+    const riskScore = probability === null ? null : round(probability * severity);
+    const concentrationRaw = safeStdDev(scores);
+    const concentration = concentrationRaw === null ? null : round(concentrationRaw);
+
+    return {
+      topicId,
+      riskFactor: toTopicLabel(topicId),
+      severity,
+      responses,
+      affectedEmployees,
+      meanExposure,
+      exposureLevel: exposureLevelFromMean(meanExposure),
+      prevalence,
+      severityIndex,
+      probability,
+      probabilityBand: probabilityBandFromValue(probability),
+      riskScore,
+      riskCategory: matrixClassFromRiskScore(riskScore),
+      concentration,
+      distribution,
+    };
+  });
+}
+
+function buildTrendSeries(rows: ResponseRiskDatasetRow[], topicIds: number[]) {
+  const aggregateByTopicAndPeriod = new Map<string, { topicId: number; period: string; sum: number; count: number }>();
+
+  for (const row of rows) {
+    const key = `${row.topicId}:${row.timestamp}`;
+    const entry = aggregateByTopicAndPeriod.get(key);
+    if (!entry) {
+      aggregateByTopicAndPeriod.set(key, {
+        topicId: row.topicId,
+        period: row.timestamp,
+        sum: row.score,
+        count: 1,
+      });
+      continue;
+    }
+    entry.sum += row.score;
+    entry.count += 1;
+  }
+
+  const byTopic = new Map<number, Array<{ period: string; meanExposure: number; probability: number; riskScore: number; responses: number }>>();
+  for (const entry of aggregateByTopicAndPeriod.values()) {
+    const meanExposure = entry.count > 0 ? entry.sum / entry.count : 0;
+    const probability = clamp((meanExposure - 1) / 4, 0, 1);
+    const riskScore = probability * toTopicSeverity(entry.topicId);
+    const list = byTopic.get(entry.topicId) ?? [];
+    list.push({
+      period: entry.period,
+      meanExposure: round(meanExposure),
+      probability: round(probability),
+      riskScore: round(riskScore),
+      responses: entry.count,
+    });
+    byTopic.set(entry.topicId, list);
+  }
+
+  return topicIds.map((topicId) => ({
+    topicId,
+    riskFactor: toTopicLabel(topicId),
+    points: (byTopic.get(topicId) ?? [])
+      .slice()
+      .sort((a, b) => a.period.localeCompare(b.period)),
+  }));
+}
 
 function parseScheduleFrequency(value: unknown): string {
   if (typeof value !== "string") return DEFAULT_CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCY;
@@ -160,6 +574,18 @@ function parseIsoDate(value: unknown): string | null {
   const normalized = value.trim();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(normalized)) return null;
   return normalized;
+}
+
+function parseAnnualPlanMonths(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const unique = new Set<string>();
+  for (const item of value) {
+    if (typeof item !== "string") continue;
+    const normalized = item.trim();
+    if (!annualPlanMonthRegex.test(normalized)) continue;
+    unique.add(normalized);
+  }
+  return Array.from(unique.values()).sort();
 }
 
 function parseEvaluationQuestions(value: unknown): string[] {
@@ -280,6 +706,7 @@ function mapAssignedProgram(
     triggerThreshold: program ? Number(program.trigger_threshold) : null,
     scheduleFrequency,
     scheduleAnchorDate,
+    annualPlanMonths: parseAnnualPlanMonths(assignment.annual_plan_months),
     evaluationQuestions: parseEvaluationQuestions(program?.evaluation_questions),
     materials: parseMaterials(program?.materials),
   };
@@ -392,7 +819,7 @@ export async function GET(
     supabase
       .from("client_programs")
       .select(
-        "client_program_id,program_id,status,deployed_at,schedule_frequency_override,schedule_anchor_date_override",
+        "client_program_id,program_id,status,deployed_at,schedule_frequency_override,schedule_anchor_date_override,annual_plan_months",
       )
       .eq("client_id", client.client_id)
       .order("deployed_at", { ascending: false })
@@ -407,16 +834,29 @@ export async function GET(
       .returns<AvailabilityRequestRow[]>(),
   ]);
 
-  const assignmentsResult =
+  const assignmentsWithoutAnnualResult =
     assignmentsWithOverridesResult.error &&
-    isMissingColumnError(assignmentsWithOverridesResult.error, "schedule_frequency_override")
+    isMissingColumnError(assignmentsWithOverridesResult.error, "annual_plan_months")
+      ? await supabase
+          .from("client_programs")
+          .select(
+            "client_program_id,program_id,status,deployed_at,schedule_frequency_override,schedule_anchor_date_override",
+          )
+          .eq("client_id", client.client_id)
+          .order("deployed_at", { ascending: false })
+          .returns<ClientProgramRow[]>()
+      : assignmentsWithOverridesResult;
+
+  const assignmentsResult =
+    assignmentsWithoutAnnualResult.error &&
+    isMissingColumnError(assignmentsWithoutAnnualResult.error, "schedule_frequency_override")
       ? await supabase
           .from("client_programs")
           .select("client_program_id,program_id,status,deployed_at")
           .eq("client_id", client.client_id)
           .order("deployed_at", { ascending: false })
           .returns<ClientProgramRow[]>()
-      : assignmentsWithOverridesResult;
+      : assignmentsWithoutAnnualResult;
 
   const reportsMissing = isMissingTableError(reportsResult.error, "client_reports");
   const invoicesMissing = isMissingTableError(invoicesResult.error, "invoices");
@@ -591,56 +1031,131 @@ export async function GET(
     });
   }
 
-  const [globalResult, sectorCountsResult, timeseriesResult, latestDrpsResult, sectorConfigResult] =
-    await Promise.all([
-      supabase
-        .rpc("get_topic_aggregates", {
-          p_survey_id: selectedCampaign.id,
-          p_group_key: null,
-          p_group_value: null,
-        })
-        .returns<TopicAggregateRow[]>(),
-      supabase
-        .rpc("get_group_counts", {
-          p_survey_id: selectedCampaign.id,
-          p_group_key: "sector",
-        })
-        .returns<GroupCountRow[]>(),
-      supabase
-        .rpc("get_response_timeseries", {
-          p_survey_id: selectedCampaign.id,
-          p_days: 30,
-        })
-        .returns<TimeseriesRow[]>(),
-      supabase
-        .from("drps_assessments")
-        .select(
-          "id,sector,reference_period,part1_probability_score,part1_probability_class,recommended_programs,governance_actions,created_at",
-        )
-        .eq("survey_id", selectedCampaign.id)
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .returns<DrpsSnapshotRow[]>(),
-      supabase
-        .from("survey_sectors")
-        .select("id,key,name,risk_parameter,access_token,is_active,submission_count,last_submitted_at")
-        .eq("survey_id", selectedCampaign.id)
-        .eq("is_active", true)
-        .returns<SectorConfigRow[]>(),
-    ]);
+  const [
+    globalResult,
+    sectorCountsResult,
+    timeseriesResult,
+    latestDrpsResult,
+    sectorConfigResult,
+    responseRowsResult,
+    questionTopicsResult,
+  ] = await Promise.all([
+    supabase
+      .rpc("get_topic_aggregates", {
+        p_survey_id: selectedCampaign.id,
+        p_group_key: null,
+        p_group_value: null,
+      })
+      .returns<TopicAggregateRow[]>(),
+    supabase
+      .rpc("get_group_counts", {
+        p_survey_id: selectedCampaign.id,
+        p_group_key: "sector",
+      })
+      .returns<GroupCountRow[]>(),
+    supabase
+      .rpc("get_response_timeseries", {
+        p_survey_id: selectedCampaign.id,
+        p_days: 30,
+      })
+      .returns<TimeseriesRow[]>(),
+    supabase
+      .from("drps_assessments")
+      .select(
+        "id,sector,reference_period,part1_probability_score,part1_probability_class,recommended_programs,governance_actions,created_at",
+      )
+      .eq("survey_id", selectedCampaign.id)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .returns<DrpsSnapshotRow[]>(),
+    supabase
+      .from("survey_sectors")
+      .select("id,key,name,risk_parameter,access_token,is_active,submission_count,last_submitted_at")
+      .eq("survey_id", selectedCampaign.id)
+      .eq("is_active", true)
+      .returns<SectorConfigRow[]>(),
+    supabase
+      .from("responses")
+      .select("id,survey_id,submitted_at,group_values")
+      .eq("survey_id", selectedCampaign.id)
+      .returns<ResponseRawRow[]>(),
+    supabase
+      .from("questions")
+      .select("id,topic_id")
+      .eq("survey_id", selectedCampaign.id)
+      .returns<QuestionTopicRow[]>(),
+  ]);
 
   if (
     globalResult.error ||
     sectorCountsResult.error ||
     timeseriesResult.error ||
     latestDrpsResult.error ||
-    sectorConfigResult.error
+    sectorConfigResult.error ||
+    responseRowsResult.error ||
+    questionTopicsResult.error
   ) {
     return NextResponse.json({ error: "Could not load campaign dashboard." }, { status: 500 });
   }
 
   const globalRows = Array.isArray(globalResult.data) ? globalResult.data : [];
   const normalizedGlobal = globalRows.map(normalizeTopic);
+  const normalizedGlobalWithLabels = normalizedGlobal.map((topic) => ({
+    ...topic,
+    riskFactor: toTopicLabel(topic.topicId),
+    severity: toTopicSeverity(topic.topicId),
+  }));
+
+  const sectorCounts = Array.isArray(sectorCountsResult.data) ? sectorCountsResult.data : [];
+  const countBySectorName = new Map<string, number>();
+  for (const row of sectorCounts) {
+    countBySectorName.set(row.group_value, row.n_responses);
+  }
+
+  const responseRows = Array.isArray(responseRowsResult.data) ? responseRowsResult.data : [];
+  const responseCountBySectorName = new Map<string, number>();
+  for (const response of responseRows) {
+    const sectorName = resolveSector(response.group_values);
+    responseCountBySectorName.set(sectorName, (responseCountBySectorName.get(sectorName) ?? 0) + 1);
+  }
+
+  const questionTopicRows = Array.isArray(questionTopicsResult.data) ? questionTopicsResult.data : [];
+  const questionTopicById = new Map(questionTopicRows.map((row) => [row.id, row.topic_id]));
+  const questionIds = Array.from(questionTopicById.keys());
+
+  let answerRows: AnswerScoreRow[] = [];
+  if (questionIds.length > 0) {
+    const answersResult = await supabase
+      .from("answers")
+      .select("response_id,question_id,corrected_value")
+      .in("question_id", questionIds)
+      .returns<AnswerScoreRow[]>();
+
+    if (answersResult.error) {
+      return NextResponse.json({ error: "Could not load campaign dashboard." }, { status: 500 });
+    }
+
+    answerRows = Array.isArray(answersResult.data) ? answersResult.data : [];
+  }
+
+  const responseRiskDataset = buildResponseRiskDataset({
+    responses: responseRows,
+    answers: answerRows,
+    questionTopicById,
+  });
+
+  const topicIds = Array.from(
+    new Set([
+      ...normalizedGlobal.map((topic) => topic.topicId),
+      ...questionTopicRows.map((question) => question.topic_id),
+    ]),
+  ).sort((a, b) => a - b);
+
+  const globalRiskFactors = buildRiskFactorMetrics(responseRiskDataset, topicIds);
+  const rankedRiskFactors = globalRiskFactors
+    .filter((metric) => metric.riskScore !== null)
+    .slice()
+    .sort((a, b) => (b.riskScore ?? 0) - (a.riskScore ?? 0));
 
   const riskDistribution = {
     low: normalizedGlobal.filter((item) => item.risk === "low").length,
@@ -649,20 +1164,67 @@ export async function GET(
     critical: normalizedGlobal.filter((item) => item.risk === "critical").length,
   };
 
-  const sectorCounts = Array.isArray(sectorCountsResult.data) ? sectorCountsResult.data : [];
-  const countBySectorName = new Map<string, number>();
-  for (const row of sectorCounts) {
-    countBySectorName.set(row.group_value, row.n_responses);
-  }
-
   const sectorConfigs = Array.isArray(sectorConfigResult.data) ? sectorConfigResult.data : [];
   const configByName = new Map(sectorConfigs.map((item) => [item.name, item]));
   const allSectorNames = Array.from(
     new Set([
       ...sectorConfigs.map((item) => item.name),
       ...sectorCounts.map((item) => item.group_value),
+      ...Array.from(responseCountBySectorName.keys()),
     ]),
   );
+
+  const datasetRowsBySectorName = new Map<string, ResponseRiskDatasetRow[]>();
+  for (const row of responseRiskDataset) {
+    const list = datasetRowsBySectorName.get(row.sector) ?? [];
+    list.push(row);
+    datasetRowsBySectorName.set(row.sector, list);
+  }
+
+  const sectorMetricByName = new Map<string, SectorMetricSnapshot>();
+  for (const sectorName of allSectorNames) {
+    const nResponses = countBySectorName.get(sectorName) ?? responseCountBySectorName.get(sectorName) ?? 0;
+    const suppressed = nResponses > 0 && nResponses < selectedCampaign.k_anonymity_min;
+    const sectorRows = datasetRowsBySectorName.get(sectorName) ?? [];
+
+    if (suppressed || nResponses === 0) {
+      sectorMetricByName.set(sectorName, {
+        sector: sectorName,
+        nResponses,
+        suppressed,
+        sectorRiskIndex: null,
+        sectorRiskCategory: null,
+        psychosocialLoadIndex: null,
+        riskConcentration: null,
+        criticalExposure: null,
+        criticalEmployees: 0,
+        employeeCount: 0,
+        riskFactors: [],
+      });
+      continue;
+    }
+
+    const riskFactors = buildRiskFactorMetrics(sectorRows, topicIds);
+    const criticalExposure = computeCriticalExposure(sectorRows);
+    const sectorRiskIndex = computeCompositeIndex(riskFactors, (metric) => metric.riskScore);
+    const psychosocialLoadIndex = computeCompositeIndex(riskFactors, (metric) => metric.meanExposure);
+    const concentrationRaw = safeStdDev(sectorRows.map((row) => row.score));
+    const riskConcentration = concentrationRaw === null ? null : round(concentrationRaw);
+
+    sectorMetricByName.set(sectorName, {
+      sector: sectorName,
+      nResponses,
+      suppressed: false,
+      sectorRiskIndex,
+      sectorRiskCategory: matrixClassFromRiskScore(sectorRiskIndex),
+      psychosocialLoadIndex,
+      riskConcentration,
+      criticalExposure: criticalExposure.rate,
+      criticalEmployees: criticalExposure.criticalEmployees,
+      employeeCount: criticalExposure.employees,
+      riskFactors,
+    });
+  }
 
   const sectors = [] as Array<{
     sector: string;
@@ -678,15 +1240,24 @@ export async function GET(
     adjustedRiskIndex: number | null;
     adjustedRiskClass: "low" | "medium" | "high" | null;
     topics: Array<ReturnType<typeof normalizeTopic>>;
+    sectorRiskIndex: number | null;
+    sectorRiskCategory: RiskMatrixClass | null;
+    psychosocialLoadIndex: number | null;
+    riskConcentration: number | null;
+    criticalExposure: number | null;
+    criticalEmployees: number;
+    employeeCount: number;
+    riskFactors: RiskFactorMetric[];
   }>;
 
   for (const sectorName of allSectorNames) {
     const config = configByName.get(sectorName);
-    const nResponses = countBySectorName.get(sectorName) ?? 0;
-    const suppressed = nResponses > 0 && nResponses < selectedCampaign.k_anonymity_min;
     const riskParameter = config ? toRiskParameter(config.risk_parameter) : 1;
+    const snapshot = sectorMetricByName.get(sectorName);
+    const nResponses = snapshot?.nResponses ?? 0;
+    const suppressed = snapshot?.suppressed ?? false;
 
-    if (suppressed || nResponses === 0) {
+    if (!snapshot || suppressed || nResponses === 0) {
       sectors.push({
         sector: sectorName,
         sectorId: config?.id ?? null,
@@ -703,24 +1274,31 @@ export async function GET(
         adjustedRiskIndex: null,
         adjustedRiskClass: null,
         topics: [],
+        sectorRiskIndex: null,
+        sectorRiskCategory: null,
+        psychosocialLoadIndex: null,
+        riskConcentration: null,
+        criticalExposure: null,
+        criticalEmployees: 0,
+        employeeCount: 0,
+        riskFactors: [],
       });
       continue;
     }
 
-    const groupedResult = await supabase
-      .rpc("get_topic_aggregates", {
-        p_survey_id: selectedCampaign.id,
-        p_group_key: "sector",
-        p_group_value: sectorName,
-      })
-      .returns<TopicAggregateRow[]>();
-
-    if (groupedResult.error) {
-      return NextResponse.json({ error: "Could not load sector breakdown." }, { status: 500 });
-    }
-
-    const groupedRows = Array.isArray(groupedResult.data) ? groupedResult.data : [];
-    const normalizedTopics = groupedRows.map(normalizeTopic);
+    const normalizedTopics: Array<ReturnType<typeof normalizeTopic>> = snapshot.riskFactors.map((riskFactor) => {
+      const severityClass = classifyScore(riskFactor.meanExposure);
+      const probabilityClass = classifyScore(riskFactor.meanExposure);
+      return {
+        topicId: riskFactor.topicId,
+        nResponses: snapshot.nResponses,
+        meanSeverity: riskFactor.meanExposure,
+        meanProbability: riskFactor.meanExposure,
+        severityClass,
+        probabilityClass,
+        risk: resolveRisk(severityClass, probabilityClass),
+      };
+    });
     const adjustedRisk = computeAdjustedSectorRisk(normalizedTopics, riskParameter);
 
     sectors.push({
@@ -734,29 +1312,133 @@ export async function GET(
         : null,
       submissionCount: config?.submission_count ?? 0,
       lastSubmittedAt: config?.last_submitted_at ?? null,
-      nResponses,
+      nResponses: snapshot.nResponses,
       suppressed: false,
       adjustedRiskIndex: adjustedRisk.adjustedRiskIndex,
       adjustedRiskClass: adjustedRisk.adjustedRiskClass,
       topics: normalizedTopics,
+      sectorRiskIndex: snapshot.sectorRiskIndex,
+      sectorRiskCategory: snapshot.sectorRiskCategory,
+      psychosocialLoadIndex: snapshot.psychosocialLoadIndex,
+      riskConcentration: snapshot.riskConcentration,
+      criticalExposure: snapshot.criticalExposure,
+      criticalEmployees: snapshot.criticalEmployees,
+      employeeCount: snapshot.employeeCount,
+      riskFactors: snapshot.riskFactors,
     });
   }
 
   sectors.sort((a, b) => b.nResponses - a.nResponses);
 
+  const globalCriticalExposure = computeCriticalExposure(responseRiskDataset);
+  const globalRiskConcentrationRaw = safeStdDev(responseRiskDataset.map((row) => row.score));
+  const globalRiskConcentration = globalRiskConcentrationRaw === null ? null : round(globalRiskConcentrationRaw);
+  const globalRiskIndex = computeCompositeIndex(globalRiskFactors, (metric) => metric.riskScore);
+  const psychosocialLoadIndex = computeCompositeIndex(globalRiskFactors, (metric) => metric.meanExposure);
+
+  const topRankedTopicIds = rankedRiskFactors.slice(0, 5).map((metric) => metric.topicId);
+  const trendSeries = buildTrendSeries(responseRiskDataset, topRankedTopicIds);
+
+  const suppressedSectorSet = new Set(
+    allSectorNames.filter((sectorName) => {
+      const nResponses = countBySectorName.get(sectorName) ?? responseCountBySectorName.get(sectorName) ?? 0;
+      return nResponses > 0 && nResponses < selectedCampaign.k_anonymity_min;
+    }),
+  );
+  const visibleDatasetRows = responseRiskDataset
+    .filter((row) => !suppressedSectorSet.has(row.sector))
+    .slice()
+    .sort((a, b) => {
+      const byTimestamp = b.timestamp.localeCompare(a.timestamp);
+      if (byTimestamp !== 0) return byTimestamp;
+      const bySector = a.sector.localeCompare(b.sector);
+      if (bySector !== 0) return bySector;
+      return a.employeeId.localeCompare(b.employeeId);
+    });
+
+  const heatmapRows = sectors.map((sector) => {
+    const metricByTopicId = new Map(sector.riskFactors.map((riskFactor) => [riskFactor.topicId, riskFactor]));
+    return {
+      sector: sector.sector,
+      nResponses: sector.nResponses,
+      suppressed: sector.suppressed,
+      sectorRiskIndex: sector.sectorRiskIndex,
+      cells: topicIds.map((topicId) => {
+        const metric = metricByTopicId.get(topicId);
+        return {
+          topicId,
+          riskFactor: toTopicLabel(topicId),
+          meanExposure: metric?.meanExposure ?? null,
+          exposureLevel: metric?.exposureLevel ?? null,
+        };
+      }),
+    };
+  });
+
   return NextResponse.json({
     ...basePayload,
     dashboard: {
       totals: {
-        responses: globalRows[0]?.n_responses ?? 0,
-        topics: normalizedGlobal.length,
+        responses: globalRows[0]?.n_responses ?? responseRows.length,
+        topics: topicIds.length,
         activeSectors: sectorConfigs.length,
       },
       riskDistribution,
-      topics: normalizedGlobal,
+      topics: normalizedGlobalWithLabels,
       responseTimeseries: Array.isArray(timeseriesResult.data) ? timeseriesResult.data : [],
       sectors,
       latestDrps: Array.isArray(latestDrpsResult.data) ? latestDrpsResult.data[0] ?? null : null,
+      metrics: {
+        dataset: {
+          totalRows: responseRiskDataset.length,
+          visibleRows: visibleDatasetRows.length,
+          sample: visibleDatasetRows.slice(0, 120).map((row) => ({
+            employee_id: row.employeeId,
+            sector: row.sector,
+            risk_factor: row.riskFactor,
+            topic_id: row.topicId,
+            score: row.score,
+            timestamp: row.timestamp,
+          })),
+        },
+        global: {
+          riskIndex: globalRiskIndex,
+          psychosocialLoadIndex,
+          riskConcentration: globalRiskConcentration,
+          criticalExposure: globalCriticalExposure.rate,
+          criticalExposureEmployees: globalCriticalExposure.criticalEmployees,
+          employeesEvaluated: globalCriticalExposure.employees,
+        },
+        riskFactors: globalRiskFactors,
+        ranking: rankedRiskFactors,
+        riskMatrix: globalRiskFactors.map((metric) => ({
+          topicId: metric.topicId,
+          riskFactor: metric.riskFactor,
+          probability: metric.probability,
+          severity: metric.severity,
+          riskScore: metric.riskScore,
+          affectedEmployees: metric.affectedEmployees,
+          category: metric.riskCategory,
+        })),
+        heatmap: {
+          columns: topicIds.map((topicId) => ({
+            topicId,
+            riskFactor: toTopicLabel(topicId),
+          })),
+          rows: heatmapRows,
+        },
+        trends: trendSeries,
+        sectorRanking: sectors
+          .filter((sector) => !sector.suppressed && sector.sectorRiskIndex !== null)
+          .slice()
+          .sort((a, b) => (b.sectorRiskIndex ?? 0) - (a.sectorRiskIndex ?? 0))
+          .map((sector) => ({
+            sector: sector.sector,
+            sectorRiskIndex: sector.sectorRiskIndex,
+            category: sector.sectorRiskCategory,
+            responses: sector.nResponses,
+          })),
+      },
     },
     reports: reportsMissing ? [] : reportsResult.data ?? [],
   });

@@ -11,6 +11,7 @@ Refere-se à responsabilidade da empresa na proteção da saúde emocional de co
 Manual Técnico da CIPA e Riscos Psicossociais
 Publicação do MTE sobre a integração entre saúde mental e a atuação da CIPA (2024)
 Instrumentos e Testes Psicológicos (SATEPSI – CFP)
+
 Todos os instrumentos mencionados no programa são validados e aprovados pelo Sistema de Avaliação de Testes
 Psicológicos do CFP (SATEPSI), e incluem:
 BDI-II / BAI – Inventários de Depressão e Ansiedade de Beck

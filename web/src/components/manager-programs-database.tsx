@@ -45,6 +45,8 @@ const COPY = {
     diagWindow: "Window",
     diagSource: "Source",
     openDetails: "Open details",
+    openTable: "Open table",
+    closeTable: "Close table",
     diagNone: "No DRPS templates available.",
     sourceSurvey: "Survey base",
     sourceLegacy: "Legacy DRPS",
@@ -76,6 +78,8 @@ const COPY = {
     diagWindow: "Janela",
     diagSource: "Origem",
     openDetails: "Abrir detalhes",
+    openTable: "Abrir tabela",
+    closeTable: "Fechar tabela",
     diagNone: "Nenhum template DRPS disponivel.",
     sourceSurvey: "Base surveys",
     sourceLegacy: "DRPS legado",
@@ -111,6 +115,8 @@ export function ManagerProgramsDatabase() {
   const [continuousPrograms, setContinuousPrograms] = useState<ContinuousProgram[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
+  const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState(true);
+  const [isContinuousOpen, setIsContinuousOpen] = useState(true);
 
   const sortedDiagnostics = useMemo(
     () =>
@@ -163,11 +169,23 @@ export function ManagerProgramsDatabase() {
       </section>
 
       <section className="rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
-        <h3 className="text-lg font-semibold text-[#123447]">{t.diagnosticsTitle}</h3>
-        <p className="mt-1 text-sm text-[#35515f]">{t.diagnosticsSubtitle}</p>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h3 className="text-lg font-semibold text-[#123447]">{t.diagnosticsTitle}</h3>
+            <p className="mt-1 text-sm text-[#35515f]">{t.diagnosticsSubtitle}</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setIsDiagnosticsOpen((current) => !current)}
+            aria-expanded={isDiagnosticsOpen}
+            className="rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
+          >
+            {isDiagnosticsOpen ? t.closeTable : t.openTable}
+          </button>
+        </div>
         {isLoading ? <p className="mt-3 text-sm text-[#49697a]">{t.loading}</p> : null}
         {error ? <p className="mt-3 text-sm text-red-600">{error}</p> : null}
-        {!isLoading && !error ? (
+        {isDiagnosticsOpen && !isLoading && !error ? (
           <div className="mt-3 overflow-x-auto">
             <table className="min-w-full text-sm">
               <thead>
@@ -231,9 +249,21 @@ export function ManagerProgramsDatabase() {
       </section>
 
       <section className="rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
-        <h3 className="text-lg font-semibold text-[#123447]">{t.continuousTitle}</h3>
-        <p className="mt-1 text-sm text-[#35515f]">{t.continuousSubtitle}</p>
-        {!isLoading && !error ? (
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h3 className="text-lg font-semibold text-[#123447]">{t.continuousTitle}</h3>
+            <p className="mt-1 text-sm text-[#35515f]">{t.continuousSubtitle}</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setIsContinuousOpen((current) => !current)}
+            aria-expanded={isContinuousOpen}
+            className="rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
+          >
+            {isContinuousOpen ? t.closeTable : t.openTable}
+          </button>
+        </div>
+        {isContinuousOpen && !isLoading && !error ? (
           <div className="mt-3 overflow-x-auto">
             <table className="min-w-full text-sm">
               <thead>

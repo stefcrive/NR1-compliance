@@ -15,12 +15,21 @@ type Campaign = {
 
 type MasterCalendarEvent = {
   id: string;
+  clientId: string | null;
   clientName: string | null;
   eventType: "drps_start" | "drps_close" | "continuous_meeting" | "blocked";
   title: string;
   startsAt: string;
+  endsAt: string;
   status: "scheduled" | "completed" | "cancelled";
   sourceClientProgramId: string | null;
+  details: {
+    eventLifecycle: "provisory" | "committed";
+    proposalKind: "assignment" | "reschedule" | null;
+    content: string | null;
+    preparationRequired: string | null;
+    availabilityRequestId: string | null;
+  };
 };
 
 type ActiveContinuousProgram = {
@@ -40,8 +49,8 @@ const COPY = {
     campaignsLoadError: "Could not load active DRPS diagnostics.",
     calendarLoadError: "Could not load calendar data.",
     noCompany: "No company",
-    upcomingEventsTitle: "Upcoming calendar events",
-    noUpcomingEvents: "No upcoming calendar events.",
+    upcomingEventsTitle: "Upcoming confirmed calendar events",
+    noUpcomingEvents: "No upcoming confirmed calendar events.",
     eventTypeDrpsStart: "DRPS start",
     eventTypeDrpsClose: "DRPS close",
     eventTypeMeeting: "Continuous meeting",
@@ -66,8 +75,8 @@ const COPY = {
     campaignsLoadError: "Nao foi possivel carregar os DRPS ativos.",
     calendarLoadError: "Nao foi possivel carregar os dados do calendario.",
     noCompany: "Sem empresa",
-    upcomingEventsTitle: "Proximos eventos do calendario",
-    noUpcomingEvents: "Nenhum proximo evento no calendario.",
+    upcomingEventsTitle: "Proximos eventos confirmados do calendario",
+    noUpcomingEvents: "Nenhum proximo evento confirmado no calendario.",
     eventTypeDrpsStart: "Inicio DRPS",
     eventTypeDrpsClose: "Fechamento DRPS",
     eventTypeMeeting: "Reuniao continua",
@@ -163,12 +172,15 @@ export function ManagerHomeOverview() {
   }, [t.calendarLoadError, t.campaignsLoadError, t.workspaceLoadError]);
 
   const upcomingEvents = useMemo(
-    () =>
-      calendarEvents
-        .filter((event) => event.status !== "cancelled")
-        .filter((event) => new Date(event.startsAt).getTime() >= Date.now())
+    () => {
+      const now = Date.now();
+      return calendarEvents
+        .filter((event) => event.status === "scheduled")
+        .filter((event) => event.details.eventLifecycle === "committed")
+        .filter((event) => new Date(event.startsAt).getTime() >= now)
         .slice()
-        .sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime()),
+        .sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime());
+    },
     [calendarEvents],
   );
 
@@ -236,20 +248,22 @@ export function ManagerHomeOverview() {
             {upcomingEvents.map((event) => {
               const href = eventHref(event);
               return (
-                <li key={event.id} className="rounded-lg border border-[#d8e4ee] bg-white px-3 py-2 text-sm">
-                  <div className="flex flex-wrap items-center gap-2">
+                <li key={event.id} className="rounded-md border border-[#d8e4ee] bg-white px-2.5 py-2 text-xs">
+                  <div className="flex flex-wrap items-center gap-1.5">
                     <span className="font-semibold text-[#123447]">{toDate(event.startsAt, locale)}</span>
-                    <span className="rounded-full bg-[#eef4f8] px-2 py-0.5 text-xs font-semibold text-[#365d72]">
+                    <span className="rounded-full bg-[#eef4f8] px-1.5 py-0.5 text-[11px] font-semibold text-[#365d72]">
                       {eventTypeLabel(event)}
                     </span>
+                    {href ? (
+                      <Link href={href} className="ml-auto inline-flex font-semibold text-[#0f5b73] hover:underline">
+                        {t.openItem}
+                      </Link>
+                    ) : null}
                   </div>
-                  <p className="mt-1 text-[#1e3644]">{event.title}</p>
-                  <p className="text-xs text-[#5a7383]">{event.clientName ?? t.noCompany}</p>
-                  {href ? (
-                    <Link href={href} className="mt-1 inline-flex text-xs font-semibold text-[#0f5b73] hover:underline">
-                      {t.openItem}
-                    </Link>
-                  ) : null}
+                  <p className="mt-1 truncate text-sm text-[#1e3644]">
+                    <span className="font-medium">{event.title}</span>
+                    <span className="text-xs text-[#5a7383]"> - {event.clientName ?? t.noCompany}</span>
+                  </p>
                 </li>
               );
             })}

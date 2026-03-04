@@ -16,6 +16,7 @@ import {
   extractCalendarEventDetails,
   loadStoredCalendarEvents,
   mergeAndSortMasterCalendarEvents,
+  type MasterCalendarEvent,
 } from "@/lib/master-calendar";
 import { isMissingColumnError, isMissingTableError } from "@/lib/supabase-errors";
 import { getSupabaseAdminClient } from "@/lib/supabase-admin";
@@ -27,6 +28,7 @@ type ClientProgramRow = {
   deployed_at: string | null;
   schedule_frequency_override?: string | null;
   schedule_anchor_date_override?: string | null;
+  annual_plan_months?: unknown;
 };
 
 type ProgramRow = {
@@ -60,6 +62,8 @@ const cadenceFrequencyValues = [
   "annual",
   "custom",
 ] as const;
+const annualPlanMonthRegex = /^\d{4}-(0[1-9]|1[0-2])$/;
+const annualPlanCandidateHoursUtc = [13, 17, 19] as const;
 
 function todayIsoDate(): string {
   return new Date().toISOString().slice(0, 10);
@@ -86,6 +90,7 @@ const updateAssignmentSchema = z
       .optional()
       .or(z.literal("")),
     provisorySlots: z.array(slotSchema).max(24).optional(),
+    annualPlanMonths: z.array(z.string().regex(annualPlanMonthRegex)).max(12).optional(),
   })
   .refine((value) => Object.keys(value).length > 0, {
     message: "At least one field must be provided.",
@@ -164,6 +169,104 @@ function normalizeSlots(slots: AvailabilitySlot[]): AvailabilitySlot[] {
   return sortSlots(Array.from(unique.values()));
 }
 
+function normalizeAnnualPlanMonths(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const unique = new Set<string>();
+  for (const item of value) {
+    if (typeof item !== "string") continue;
+    const normalized = item.trim();
+    if (!annualPlanMonthRegex.test(normalized)) continue;
+    unique.add(normalized);
+  }
+  return Array.from(unique.values()).sort();
+}
+
+function parseAnnualPlanMonthKey(value: string): { year: number; monthIndex: number } | null {
+  if (!annualPlanMonthRegex.test(value)) return null;
+  const [yearText, monthText] = value.split("-");
+  const year = Number(yearText);
+  const monthIndex = Number(monthText) - 1;
+  if (!Number.isFinite(year) || !Number.isFinite(monthIndex)) return null;
+  return { year, monthIndex };
+}
+
+function daysInUtcMonth(year: number, monthIndex: number): number {
+  return new Date(Date.UTC(year, monthIndex + 1, 0)).getUTCDate();
+}
+
+function isWeekendUtc(date: Date): boolean {
+  const day = date.getUTCDay();
+  return day === 0 || day === 6;
+}
+
+function filterCurrentAssignmentProvisoryEvents(
+  events: MasterCalendarEvent[],
+  assignmentId: string,
+): MasterCalendarEvent[] {
+  return events.filter((event) => {
+    if (event.sourceClientProgramId !== assignmentId) return true;
+    if (event.eventType !== "continuous_meeting") return true;
+    return !(
+      event.details.eventLifecycle === "provisory" && event.details.proposalKind === "assignment"
+    );
+  });
+}
+
+function buildAnnualPlanProvisorySlots(params: {
+  annualPlanMonths: string[];
+  deployedAt: string | null;
+  existingEvents: MasterCalendarEvent[];
+  durationMinutes?: number;
+}): AvailabilitySlot[] {
+  if (params.annualPlanMonths.length === 0) return [];
+
+  const deployedDate = params.deployedAt ? new Date(params.deployedAt) : null;
+  const hasDeployedDate = deployedDate && !Number.isNaN(deployedDate.getTime());
+  const preferredDay = hasDeployedDate ? Math.min(28, Math.max(1, deployedDate.getUTCDate())) : 1;
+  const preferredHour = hasDeployedDate ? deployedDate.getUTCHours() : annualPlanCandidateHoursUtc[0];
+  const preferredMinute = hasDeployedDate ? deployedDate.getUTCMinutes() : 0;
+  const candidateHours = [preferredHour, ...annualPlanCandidateHoursUtc.filter((hour) => hour !== preferredHour)];
+  const durationMinutes = params.durationMinutes ?? 60;
+  const slotDurationMs = durationMinutes * 60 * 1000;
+  const minStart = new Date();
+  minStart.setUTCDate(minStart.getUTCDate() + 1);
+
+  const generated: AvailabilitySlot[] = [];
+  for (const monthKey of params.annualPlanMonths) {
+    const parsed = parseAnnualPlanMonthKey(monthKey);
+    if (!parsed) continue;
+
+    const daysInMonth = daysInUtcMonth(parsed.year, parsed.monthIndex);
+    let chosen: AvailabilitySlot | null = null;
+
+    for (let dayOffset = 0; dayOffset < daysInMonth && !chosen; dayOffset += 1) {
+      const day = ((preferredDay - 1 + dayOffset) % daysInMonth) + 1;
+      for (const hour of candidateHours) {
+        const start = new Date(
+          Date.UTC(parsed.year, parsed.monthIndex, day, hour, preferredMinute, 0, 0),
+        );
+        if (start.getUTCMonth() !== parsed.monthIndex) continue;
+        if (isWeekendUtc(start) || start <= minStart) continue;
+        const end = new Date(start.getTime() + slotDurationMs);
+        const candidate = { startsAt: start.toISOString(), endsAt: end.toISOString() };
+        if (slotOverlapsMasterCalendar(candidate, params.existingEvents)) continue;
+        const hasGeneratedOverlap = generated.some((slot) =>
+          overlaps(new Date(slot.startsAt), new Date(slot.endsAt), start, end),
+        );
+        if (hasGeneratedOverlap) continue;
+        chosen = candidate;
+        break;
+      }
+    }
+
+    if (chosen) {
+      generated.push(chosen);
+    }
+  }
+
+  return sortSlots(generated);
+}
+
 async function loadProvisoryAssignmentSlots(params: {
   clientId: string;
   assignmentId: string;
@@ -210,13 +313,10 @@ async function replaceAssignmentProvisoryEvents(params: {
   const normalizedSlots = normalizeSlots(params.slots);
 
   const masterEvents = await loadManagerMasterCalendarEvents();
-  const eventsWithoutCurrentProvisory = masterEvents.filter((event) => {
-    if (event.sourceClientProgramId !== params.assignmentId) return true;
-    if (event.eventType !== "continuous_meeting") return true;
-    return !(
-      event.details.eventLifecycle === "provisory" && event.details.proposalKind === "assignment"
-    );
-  });
+  const eventsWithoutCurrentProvisory = filterCurrentAssignmentProvisoryEvents(
+    masterEvents,
+    params.assignmentId,
+  );
 
   const hasMasterConflict = normalizedSlots.some((slot) =>
     slotOverlapsMasterCalendar(slot, eventsWithoutCurrentProvisory),
@@ -331,70 +431,137 @@ export async function PATCH(
     return NextResponse.json({ error: "Invalid payload." }, { status: 400 });
   }
 
-  const updatePayload = {
+  const normalizedAnnualPlanMonths =
+    parsed.annualPlanMonths !== undefined
+      ? normalizeAnnualPlanMonths(parsed.annualPlanMonths)
+      : undefined;
+
+  const modernPayload = {
     ...(parsed.status !== undefined ? { status: parsed.status } : {}),
     ...(parsed.deployedAt !== undefined ? { deployed_at: parsed.deployedAt } : {}),
     ...(parsed.scheduleFrequency !== undefined
       ? { schedule_frequency_override: parsed.scheduleFrequency }
       : {}),
+    ...(normalizedAnnualPlanMonths !== undefined
+      ? { annual_plan_months: normalizedAnnualPlanMonths }
+      : {}),
+  };
+  const statusAndDatePayload = {
+    ...(parsed.status !== undefined ? { status: parsed.status } : {}),
+    ...(parsed.deployedAt !== undefined ? { deployed_at: parsed.deployedAt } : {}),
+  };
+  const statusOnlyPayload = {
+    ...(parsed.status !== undefined ? { status: parsed.status } : {}),
   };
 
   const supabase = getSupabaseAdminClient();
-  const withOverrides =
-    Object.keys(updatePayload).length > 0
+  let annualPlanSupported = true;
+  let updateResult =
+    Object.keys(modernPayload).length > 0
       ? await supabase
           .from("client_programs")
-          .update(updatePayload)
+          .update(modernPayload)
           .eq("client_id", clientId)
           .eq("client_program_id", assignmentId)
           .select(
-            "client_program_id,program_id,status,deployed_at,schedule_frequency_override,schedule_anchor_date_override",
+            "client_program_id,program_id,status,deployed_at,schedule_frequency_override,schedule_anchor_date_override,annual_plan_months",
           )
           .maybeSingle<ClientProgramRow>()
       : await supabase
           .from("client_programs")
           .select(
-            "client_program_id,program_id,status,deployed_at,schedule_frequency_override,schedule_anchor_date_override",
+            "client_program_id,program_id,status,deployed_at,schedule_frequency_override,schedule_anchor_date_override,annual_plan_months",
           )
           .eq("client_id", clientId)
           .eq("client_program_id", assignmentId)
           .maybeSingle<ClientProgramRow>();
 
-  const updateResult =
-    withOverrides.error && isMissingColumnError(withOverrides.error, "schedule_frequency_override")
-      ? Object.keys(updatePayload).some(
-          (key) =>
-            key === "schedule_frequency_override" ||
-            key === "schedule_anchor_date_override",
-        )
-        ? null
-        : Object.keys(updatePayload).length > 0
-          ? await supabase
-              .from("client_programs")
-              .update({
-                ...(parsed.status !== undefined ? { status: parsed.status } : {}),
-                ...(parsed.deployedAt !== undefined ? { deployed_at: parsed.deployedAt } : {}),
-              })
-              .eq("client_id", clientId)
-              .eq("client_program_id", assignmentId)
-              .select("client_program_id,program_id,status,deployed_at")
-              .maybeSingle<ClientProgramRow>()
-          : await supabase
-              .from("client_programs")
-              .select("client_program_id,program_id,status,deployed_at")
-              .eq("client_id", clientId)
-              .eq("client_program_id", assignmentId)
-              .maybeSingle<ClientProgramRow>()
-      : withOverrides;
+  if (updateResult.error && isMissingColumnError(updateResult.error, "annual_plan_months")) {
+    annualPlanSupported = false;
+    if (normalizedAnnualPlanMonths !== undefined) {
+      return NextResponse.json(
+        {
+          error:
+            "Annual plan columns are unavailable. Apply migration 20260304120000_client_program_annual_plan.sql.",
+        },
+        { status: 412 },
+      );
+    }
 
-  if (!updateResult) {
-    return NextResponse.json(
-      {
-        error:
-          "Cadence override columns are unavailable. Apply migration 20260303130000_client_program_cadence_override.sql.",
-      },
-      { status: 412 },
-    );
+    const withoutAnnualPayload = {
+      ...(parsed.status !== undefined ? { status: parsed.status } : {}),
+      ...(parsed.deployedAt !== undefined ? { deployed_at: parsed.deployedAt } : {}),
+      ...(parsed.scheduleFrequency !== undefined
+        ? { schedule_frequency_override: parsed.scheduleFrequency }
+        : {}),
+    };
+    updateResult =
+      Object.keys(withoutAnnualPayload).length > 0
+        ? await supabase
+            .from("client_programs")
+            .update(withoutAnnualPayload)
+            .eq("client_id", clientId)
+            .eq("client_program_id", assignmentId)
+            .select(
+              "client_program_id,program_id,status,deployed_at,schedule_frequency_override,schedule_anchor_date_override",
+            )
+            .maybeSingle<ClientProgramRow>()
+        : await supabase
+            .from("client_programs")
+            .select(
+              "client_program_id,program_id,status,deployed_at,schedule_frequency_override,schedule_anchor_date_override",
+            )
+            .eq("client_id", clientId)
+            .eq("client_program_id", assignmentId)
+            .maybeSingle<ClientProgramRow>();
+  }
+
+  if (updateResult.error && isMissingColumnError(updateResult.error, "schedule_frequency_override")) {
+    annualPlanSupported = false;
+    if (parsed.scheduleFrequency !== undefined) {
+      return NextResponse.json(
+        {
+          error:
+            "Cadence override columns are unavailable. Apply migration 20260303130000_client_program_cadence_override.sql.",
+        },
+        { status: 412 },
+      );
+    }
+
+    updateResult =
+      Object.keys(statusAndDatePayload).length > 0
+        ? await supabase
+            .from("client_programs")
+            .update(statusAndDatePayload)
+            .eq("client_id", clientId)
+            .eq("client_program_id", assignmentId)
+            .select("client_program_id,program_id,status,deployed_at")
+            .maybeSingle<ClientProgramRow>()
+        : await supabase
+            .from("client_programs")
+            .select("client_program_id,program_id,status,deployed_at")
+            .eq("client_id", clientId)
+            .eq("client_program_id", assignmentId)
+            .maybeSingle<ClientProgramRow>();
+  }
+
+  if (updateResult.error && isMissingColumnError(updateResult.error, "deployed_at")) {
+    annualPlanSupported = false;
+    updateResult =
+      Object.keys(statusOnlyPayload).length > 0
+        ? await supabase
+            .from("client_programs")
+            .update(statusOnlyPayload)
+            .eq("client_id", clientId)
+            .eq("client_program_id", assignmentId)
+            .select("client_program_id,program_id,status")
+            .maybeSingle<ClientProgramRow>()
+        : await supabase
+            .from("client_programs")
+            .select("client_program_id,program_id,status")
+            .eq("client_id", clientId)
+            .eq("client_program_id", assignmentId)
+            .maybeSingle<ClientProgramRow>();
   }
 
   if (updateResult.error) {
@@ -431,12 +598,16 @@ export async function PATCH(
   }
 
   const cadence = resolveCadence(assignment);
+  const annualPlanMonths = annualPlanSupported
+    ? normalizeAnnualPlanMonths(assignment.annual_plan_months)
+    : [];
 
   const shouldRefreshProvisorySlots =
     parsed.status !== undefined ||
     parsed.provisorySlots !== undefined ||
     parsed.deployedAt !== undefined ||
-    parsed.scheduleFrequency !== undefined;
+    parsed.scheduleFrequency !== undefined ||
+    parsed.annualPlanMonths !== undefined;
 
   let provisorySlots: AvailabilitySlot[] = [];
   if (shouldRefreshProvisorySlots) {
@@ -444,13 +615,26 @@ export async function PATCH(
 
     if (assignment.status !== "Active") {
       desiredSlots = [];
+    } else if (annualPlanSupported) {
+      const masterEvents = await loadManagerMasterCalendarEvents();
+      const eventsWithoutCurrentProvisory = filterCurrentAssignmentProvisoryEvents(
+        masterEvents,
+        assignment.client_program_id,
+      );
+      desiredSlots = buildAnnualPlanProvisorySlots({
+        annualPlanMonths,
+        deployedAt: assignment.deployed_at,
+        existingEvents: eventsWithoutCurrentProvisory,
+      });
     } else {
       const masterEvents = await loadManagerMasterCalendarEvents();
       desiredSlots = buildSuggestedAvailabilitySlots({
         deployedAt: assignment.deployed_at ?? new Date().toISOString(),
         scheduleFrequency: cadence.scheduleFrequency,
         scheduleAnchorDate: cadence.scheduleAnchorDate,
-        existingEvents: masterEvents.filter((event) => event.sourceClientProgramId !== assignment.client_program_id),
+        existingEvents: masterEvents.filter(
+          (event) => event.sourceClientProgramId !== assignment.client_program_id,
+        ),
         maxSlots: DEFAULT_ASSIGNMENT_CADENCE_SLOT_COUNT,
         enforceCadenceSeries: true,
       });
@@ -500,6 +684,7 @@ export async function PATCH(
       deployedAt: assignment.deployed_at,
       scheduleFrequency: cadence.scheduleFrequency,
       scheduleAnchorDate: cadence.scheduleAnchorDate,
+      annualPlanMonths,
       cadenceSuggestedSlots: provisorySlots,
       calendarProvisorySlots: provisorySlots,
     },

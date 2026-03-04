@@ -41,6 +41,7 @@ type ClientProgramRow = {
   deployed_at?: string | null;
   schedule_frequency_override?: string | null;
   schedule_anchor_date_override?: string | null;
+  annual_plan_months?: unknown;
 };
 
 type ClientCampaignRow = {
@@ -69,6 +70,7 @@ const cadenceFrequencyValues = [
   "annual",
   "custom",
 ] as const;
+const annualPlanMonthRegex = /^\d{4}-(0[1-9]|1[0-2])$/;
 
 function todayIsoDate(): string {
   return new Date().toISOString().slice(0, 10);
@@ -84,7 +86,20 @@ const assignProgramSchema = z.object({
     .regex(/^\d{4}-\d{2}-\d{2}$/)
     .optional()
     .or(z.literal("")),
+  annualPlanMonths: z.array(z.string().regex(annualPlanMonthRegex)).max(12).optional(),
 });
+
+function normalizeAnnualPlanMonths(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const unique = new Set<string>();
+  for (const item of value) {
+    if (typeof item !== "string") continue;
+    const normalized = item.trim();
+    if (!annualPlanMonthRegex.test(normalized)) continue;
+    unique.add(normalized);
+  }
+  return Array.from(unique.values()).sort();
+}
 
 function mapAvailableProgram(program: PeriodicProgramRow) {
   return {
@@ -122,6 +137,7 @@ function mapAssignedProgram(
     scheduleAnchorDate,
     status: assignment.status,
     deployedAt: assignment.deployed_at ?? null,
+    annualPlanMonths: normalizeAnnualPlanMonths(assignment.annual_plan_months),
     cadenceSuggestedSlots: options?.cadenceSuggestedSlots ?? [],
     calendarProvisorySlots: options?.calendarProvisorySlots ?? [],
     calendarCommittedSlots: options?.calendarCommittedSlots ?? [],
@@ -191,8 +207,37 @@ async function loadProgramById(programId: string) {
   return withSchedule;
 }
 
-async function loadAssignments(clientId: string) {
+async function loadAssignments(clientId: string): Promise<{
+  data: ClientProgramRow[] | null;
+  error: { code?: string | null; message?: string | null } | null;
+  annualPlanSupported: boolean;
+}> {
   const supabase = getSupabaseAdminClient();
+  const withAnnualAndOverrides = await supabase
+    .from("client_programs")
+    .select(
+      "client_program_id,program_id,status,deployed_at,schedule_frequency_override,schedule_anchor_date_override,annual_plan_months",
+    )
+    .eq("client_id", clientId)
+    .order("deployed_at", { ascending: false })
+    .returns<ClientProgramRow[]>();
+
+  if (!withAnnualAndOverrides.error) {
+    return {
+      data: withAnnualAndOverrides.data ?? [],
+      error: null,
+      annualPlanSupported: true,
+    };
+  }
+
+  if (!isMissingColumnError(withAnnualAndOverrides.error)) {
+    return {
+      data: withAnnualAndOverrides.data ?? null,
+      error: withAnnualAndOverrides.error,
+      annualPlanSupported: false,
+    };
+  }
+
   const withOverrides = await supabase
     .from("client_programs")
     .select(
@@ -202,36 +247,43 @@ async function loadAssignments(clientId: string) {
     .order("deployed_at", { ascending: false })
     .returns<ClientProgramRow[]>();
 
-  if (withOverrides.error && isMissingColumnError(withOverrides.error, "schedule_frequency_override")) {
-    const withoutOverrides = await supabase
-      .from("client_programs")
-      .select("client_program_id,program_id,status,deployed_at")
-      .eq("client_id", clientId)
-      .order("deployed_at", { ascending: false })
-      .returns<ClientProgramRow[]>();
-
-    if (withoutOverrides.error && isMissingColumnError(withoutOverrides.error, "deployed_at")) {
-      const fallback = await supabase
-        .from("client_programs")
-        .select("client_program_id,program_id,status")
-        .eq("client_id", clientId)
-        .returns<ClientProgramRow[]>();
-      return fallback;
-    }
-
-    return withoutOverrides;
+  if (!withOverrides.error) {
+    return { data: withOverrides.data ?? [], error: null, annualPlanSupported: false };
   }
 
-  if (withOverrides.error && isMissingColumnError(withOverrides.error, "deployed_at")) {
+  if (!isMissingColumnError(withOverrides.error, "schedule_frequency_override")) {
+    return {
+      data: withOverrides.data ?? null,
+      error: withOverrides.error,
+      annualPlanSupported: false,
+    };
+  }
+
+  const withoutOverrides = await supabase
+    .from("client_programs")
+    .select("client_program_id,program_id,status,deployed_at")
+    .eq("client_id", clientId)
+    .order("deployed_at", { ascending: false })
+    .returns<ClientProgramRow[]>();
+
+  if (withoutOverrides.error && isMissingColumnError(withoutOverrides.error, "deployed_at")) {
     const fallback = await supabase
       .from("client_programs")
       .select("client_program_id,program_id,status")
       .eq("client_id", clientId)
       .returns<ClientProgramRow[]>();
-    return fallback;
+    return {
+      data: fallback.data ?? null,
+      error: fallback.error,
+      annualPlanSupported: false,
+    };
   }
 
-  return withOverrides;
+  return {
+    data: withoutOverrides.data ?? null,
+    error: withoutOverrides.error,
+    annualPlanSupported: false,
+  };
 }
 
 async function loadManagerMasterCalendarEvents(): Promise<MasterCalendarEvent[]> {
@@ -384,16 +436,16 @@ export async function GET(
     return NextResponse.json({ error: "Could not load available programs." }, { status: 500 });
   }
 
-  const assignmentsResult = await loadAssignments(clientId);
+  const assignmentsLoaded = await loadAssignments(clientId);
   if (
-    assignmentsResult.error &&
-    !isMissingTableError(assignmentsResult.error, "client_programs")
+    assignmentsLoaded.error &&
+    !isMissingTableError(assignmentsLoaded.error, "client_programs")
   ) {
     return NextResponse.json({ error: "Could not load assigned programs." }, { status: 500 });
   }
 
   const programById = new Map((programsResult.data ?? []).map((row) => [row.program_id, row]));
-  const assignments = assignmentsResult.data ?? [];
+  const assignments = assignmentsLoaded.data ?? [];
 
   let clientMasterCalendarEvents: MasterCalendarEvent[] = [];
   try {
@@ -420,23 +472,26 @@ export async function GET(
     availablePrograms: (programsResult.data ?? []).map(mapAvailableProgram),
     assignedPrograms: assignments.map((item) => {
       const cadence = resolveCadenceForAssignment(item);
+      const storedProvisorySlots = provisoryByAssignment.get(item.client_program_id) ?? [];
       const cadenceSuggestedSlots =
-        item.status === "Active"
+        item.status === "Active" && !assignmentsLoaded.annualPlanSupported
           ? buildSuggestedAvailabilitySlots({
-                deployedAt: item.deployed_at ?? new Date().toISOString(),
-                scheduleFrequency: cadence.scheduleFrequency,
-                scheduleAnchorDate: cadence.scheduleAnchorDate,
-                existingEvents: clientMasterCalendarEvents.filter(
-                  (event) => event.sourceClientProgramId !== item.client_program_id,
-                ),
-                maxSlots: DEFAULT_ASSIGNMENT_CADENCE_SLOT_COUNT,
-                enforceCadenceSeries: true,
-              })
+              deployedAt: item.deployed_at ?? new Date().toISOString(),
+              scheduleFrequency: cadence.scheduleFrequency,
+              scheduleAnchorDate: cadence.scheduleAnchorDate,
+              existingEvents: clientMasterCalendarEvents.filter(
+                (event) => event.sourceClientProgramId !== item.client_program_id,
+              ),
+              maxSlots: DEFAULT_ASSIGNMENT_CADENCE_SLOT_COUNT,
+              enforceCadenceSeries: true,
+            })
           : [];
       const provisorySlots =
-        item.status === "Active"
-          ? cadenceSuggestedSlots
-          : provisoryByAssignment.get(item.client_program_id) ?? [];
+        storedProvisorySlots.length > 0
+          ? storedProvisorySlots
+          : item.status === "Active"
+            ? cadenceSuggestedSlots
+            : [];
 
       return mapAssignedProgram(item, programById, {
         cadenceSuggestedSlots,
@@ -526,7 +581,9 @@ export async function POST(
     return NextResponse.json({ error: "Program is already assigned to this company." }, { status: 409 });
   }
 
-  const insertResult = await supabase
+  const annualPlanMonths = normalizeAnnualPlanMonths(parsed.annualPlanMonths);
+  let annualPlanSupported = true;
+  let insertResult = await supabase
     .from("client_programs")
     .insert({
       client_program_id: randomUUID(),
@@ -538,11 +595,33 @@ export async function POST(
       schedule_frequency_override:
         parsed.scheduleFrequency ?? DEFAULT_CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCY,
       schedule_anchor_date_override: todayIsoDate(),
+      annual_plan_months: annualPlanMonths,
     })
     .select(
-      "client_program_id,program_id,status,deployed_at,schedule_frequency_override,schedule_anchor_date_override",
+      "client_program_id,program_id,status,deployed_at,schedule_frequency_override,schedule_anchor_date_override,annual_plan_months",
     )
     .maybeSingle<ClientProgramRow>();
+
+  if (insertResult.error && isMissingColumnError(insertResult.error, "annual_plan_months")) {
+    annualPlanSupported = false;
+    insertResult = await supabase
+      .from("client_programs")
+      .insert({
+        client_program_id: randomUUID(),
+        client_id: clientId,
+        program_id: parsed.programId,
+        status: parsed.status ?? "Active",
+        deployed_at:
+          parsed.deployedAt && parsed.deployedAt.length > 0 ? parsed.deployedAt : new Date().toISOString(),
+        schedule_frequency_override:
+          parsed.scheduleFrequency ?? DEFAULT_CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCY,
+        schedule_anchor_date_override: todayIsoDate(),
+      })
+      .select(
+        "client_program_id,program_id,status,deployed_at,schedule_frequency_override,schedule_anchor_date_override",
+      )
+      .maybeSingle<ClientProgramRow>();
+  }
 
   if (insertResult.error) {
     if (isMissingColumnError(insertResult.error, "schedule_frequency_override")) {
@@ -575,7 +654,7 @@ export async function POST(
   const cadence = resolveCadenceForAssignment(insertResult.data);
   let calendarUnavailable = false;
   try {
-    if (insertResult.data.status === "Active") {
+    if (insertResult.data.status === "Active" && !annualPlanSupported) {
       const masterEvents = await loadManagerMasterCalendarEvents();
       cadenceSuggestedSlots = buildSuggestedAvailabilitySlots({
         deployedAt: insertResult.data.deployed_at ?? new Date().toISOString(),
