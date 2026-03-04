@@ -175,9 +175,11 @@ function normalizeMaterials(materials: ContinuousProgramMaterial[]) {
 export function ManagerAssignedContinuousProgram({
   clientId,
   assignmentId,
+  fromHistory = false,
 }: {
   clientId: string;
   assignmentId: string;
+  fromHistory?: boolean;
 }) {
   const [clientName, setClientName] = useState("");
   const [assignment, setAssignment] = useState<AssignedContinuousProgram | null>(null);
@@ -546,18 +548,37 @@ export function ManagerAssignedContinuousProgram({
   return (
     <div className="space-y-6">
       <nav className="text-xs text-[#4f6977]">
-        <Link href="/manager/clients" className="text-[#0f5b73]">
-          Client area
-        </Link>{" "}
-        /{" "}
-        <Link href={`/manager/clients/${clientId}`} className="text-[#0f5b73]">
-          {clientName || "Cliente"}
-        </Link>{" "}
-        /{" "}
-        <Link href={`/manager/clients/${clientId}?tab=assigned-continuous`} className="text-[#0f5b73]">
-          Assigned processo continuous
-        </Link>{" "}
-        / <span>{assignment.programTitle}</span>
+        {fromHistory ? (
+          <>
+            <Link href="/manager/history" className="text-[#0f5b73]">
+              Historico
+            </Link>{" "}
+            /{" "}
+            <Link href={`/manager/clients/${clientId}`} className="text-[#0f5b73]">
+              {clientName || "Cliente"}
+            </Link>{" "}
+            /{" "}
+            <Link href={`/manager/clients/${clientId}?tab=assigned-continuous&from=history`} className="text-[#0f5b73]">
+              Assigned processos continuos
+            </Link>{" "}
+            / <span>Processos continuos</span>
+          </>
+        ) : (
+          <>
+            <Link href="/manager/clients" className="text-[#0f5b73]">
+              Client area
+            </Link>{" "}
+            /{" "}
+            <Link href={`/manager/clients/${clientId}`} className="text-[#0f5b73]">
+              {clientName || "Cliente"}
+            </Link>{" "}
+            /{" "}
+            <Link href={`/manager/clients/${clientId}?tab=assigned-continuous`} className="text-[#0f5b73]">
+              Assigned processo continuous
+            </Link>{" "}
+            / <span>{assignment.programTitle}</span>
+          </>
+        )}
       </nav>
 
       <section className="rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">

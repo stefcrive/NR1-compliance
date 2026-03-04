@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 import { isAdminApiAuthorized } from "@/lib/admin-auth";
+import { createClientNotification } from "@/lib/client-notifications";
 import { classifyScore, resolveRisk } from "@/lib/risk";
 import { isMissingTableError } from "@/lib/supabase-errors";
 import { getSupabaseAdminClient } from "@/lib/supabase-admin";
@@ -341,6 +342,19 @@ export async function POST(
   }
 
   const supabase = getSupabaseAdminClient();
+  const { data: client, error: clientError } = await supabase
+    .from("clients")
+    .select("client_id,company_name")
+    .eq("client_id", clientId)
+    .maybeSingle<ClientRow>();
+
+  if (clientError) {
+    return NextResponse.json({ error: "Could not load client." }, { status: 500 });
+  }
+  if (!client) {
+    return NextResponse.json({ error: "Client not found." }, { status: 404 });
+  }
+
   const { data: surveys, error: surveysError } = await supabase
     .from("surveys")
     .select("id,client_id,name,public_slug,status,k_anonymity_min")
@@ -422,6 +436,40 @@ export async function POST(
         message: error instanceof Error ? error.message : "Could not generate report.",
       });
     }
+  }
+
+  try {
+    if (!isBatch && reports.length === 1) {
+      await createClientNotification(supabase, {
+        clientId: client.client_id,
+        notificationType: "manager_report_issued",
+        title: `Relatorio emitido: ${reports[0].report_title}`,
+        message: "O gestor emitiu um novo relatorio e ele ja esta disponivel no workspace.",
+        metadata: {
+          reportId: reports[0].id,
+          reportTitle: reports[0].report_title,
+          surveyId: reports[0].survey_id,
+          generatedBy: reports[0].generated_by,
+          createdAt: reports[0].created_at,
+        },
+      });
+    } else if (reports.length > 0) {
+      await createClientNotification(supabase, {
+        clientId: client.client_id,
+        notificationType: "manager_report_issued",
+        title: `Relatorios emitidos: ${reports.length}`,
+        message: `O gestor publicou ${reports.length} relatorios para ${client.company_name}.`,
+        metadata: {
+          reportIds: reports.map((report) => report.id),
+          surveyIds: reports.map((report) => report.survey_id).filter((surveyId): surveyId is string => Boolean(surveyId)),
+          generated: reports.length,
+          requested: targetSurveys.length,
+          failures,
+        },
+      });
+    }
+  } catch {
+    // Do not block report generation when notification persistence fails.
   }
 
   if (reports.length === 0) {

@@ -127,6 +127,12 @@ function fmtDate(value: string | null) {
   return new Intl.DateTimeFormat("pt-BR", { dateStyle: "short" }).format(new Date(value));
 }
 
+function fmtTime(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "-";
+  return new Intl.DateTimeFormat("pt-BR", { hour: "2-digit", minute: "2-digit" }).format(date);
+}
+
 function csvEscape(value: string | number | null): string {
   if (value === null) return "";
   return `"${String(value).replace(/"/g, '""')}"`;
@@ -164,6 +170,7 @@ function extractCampaignIdFromCalendarEvent(event: { id: string; eventType: Mast
 }
 
 const WEEK = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sab"] as const;
+const MAX_CALENDAR_EVENTS_PER_DAY = 5;
 
 export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
   const router = useRouter();
@@ -223,10 +230,6 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
   const openCampaigns = useMemo(
     () => (payload?.campaigns ?? []).filter((campaign) => campaign.status === "live"),
     [payload],
-  );
-  const selectedOpenCampaignId = useMemo(
-    () => (openCampaigns.some((campaign) => campaign.id === selectedCampaignId) ? selectedCampaignId : ""),
-    [openCampaigns, selectedCampaignId],
   );
 
   const resultsCampaign = useMemo(() => {
@@ -373,50 +376,81 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
 
   const calendarEvents = useMemo(() => {
     const events = payload?.masterCalendar.events ?? [];
-    return events
-      .map((event) => {
-        const date = new Date(event.startsAt);
-        if (Number.isNaN(date.getTime())) return null;
-        return {
-          id: event.id,
-          day: dayKey(date),
-          clientName: event.clientName,
-          title: event.title,
-          startsAt: event.startsAt,
-          endsAt: event.endsAt,
-          details: event.details,
-          eventType: event.eventType,
-          sourceClientProgramId: event.sourceClientProgramId,
-          type:
-            event.eventType === "drps_start"
-              ? "start"
-              : event.eventType === "drps_close"
-                ? "close"
-                : event.eventType === "continuous_meeting"
-                  ? "meeting"
-                  : "blocked",
-        };
-      })
-      .filter((value): value is {
-        id: string;
-        day: string;
-        clientName: string | null;
-        title: string;
-        startsAt: string;
-        endsAt: string;
-        details: {
-          content: string | null;
-          preparationRequired: string | null;
-          eventLifecycle: "provisory" | "committed";
-          proposalKind: "assignment" | "reschedule" | null;
-          availabilityRequestId: string | null;
-        };
-        eventType: "drps_start" | "drps_close" | "continuous_meeting" | "blocked";
-        sourceClientProgramId: string | null;
-        type: "start" | "close" | "meeting" | "blocked";
-      } =>
-        Boolean(value),
-      );
+    const list: Array<{
+      id: string;
+      day: string;
+      clientName: string | null;
+      companyLabel: string;
+      title: string;
+      startsAt: string;
+      endsAt: string;
+      startsAtMs: number;
+      timeLabel: string;
+      details: {
+        content: string | null;
+        preparationRequired: string | null;
+        eventLifecycle: "provisory" | "committed";
+        proposalKind: "assignment" | "reschedule" | null;
+        availabilityRequestId: string | null;
+      };
+      eventType: "drps_start" | "drps_close" | "continuous_meeting" | "blocked";
+      sourceClientProgramId: string | null;
+      type: "start" | "close" | "meeting" | "blocked";
+      typeLabel: "Inicio DRPS" | "Fim DRPS" | "Reuniao continua" | "Bloqueio";
+      lifecycleLabel: "Provisorio" | "Commitado" | null;
+    }> = [];
+
+    for (const event of events) {
+      const date = new Date(event.startsAt);
+      if (Number.isNaN(date.getTime())) continue;
+      const type =
+        event.eventType === "drps_start"
+          ? "start"
+          : event.eventType === "drps_close"
+            ? "close"
+            : event.eventType === "continuous_meeting"
+              ? "meeting"
+              : "blocked";
+      const typeLabel =
+        type === "start"
+          ? "Inicio DRPS"
+          : type === "close"
+            ? "Fim DRPS"
+            : type === "meeting"
+              ? "Reuniao continua"
+              : "Bloqueio";
+      const lifecycleLabel =
+        type === "meeting" || type === "blocked"
+          ? event.details.eventLifecycle === "committed"
+            ? "Commitado"
+            : "Provisorio"
+          : null;
+      const startsAtLabel = fmtTime(event.startsAt);
+      const endsAtDate = new Date(event.endsAt);
+      const timeLabel = Number.isNaN(endsAtDate.getTime())
+        ? startsAtLabel
+        : `${startsAtLabel} - ${fmtTime(event.endsAt)}`;
+      list.push({
+        id: event.id,
+        day: dayKey(date),
+        clientName: event.clientName,
+        companyLabel: event.clientName ?? payload?.client.companyName ?? "Empresa",
+        title: event.title,
+        startsAt: event.startsAt,
+        endsAt: event.endsAt,
+        startsAtMs: date.getTime(),
+        timeLabel,
+        details: event.details,
+        eventType: event.eventType,
+        sourceClientProgramId: event.sourceClientProgramId,
+        type,
+        typeLabel,
+        lifecycleLabel,
+      });
+    }
+
+    list.sort((a, b) => a.startsAtMs - b.startsAtMs);
+    return list;
   }, [payload]);
 
   const eventsByDay = useMemo(() => {
@@ -474,6 +508,21 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
     if (selectedCalendarEvent.eventType === "drps_close") return "Fim DRPS";
     if (selectedCalendarEvent.eventType === "continuous_meeting") return "Reuniao continua";
     return "Bloqueio";
+  }, [selectedCalendarEvent]);
+
+  const selectedCalendarEventLifecycleLabel = useMemo(() => {
+    if (!selectedCalendarEvent) return "";
+    const lifecycle =
+      selectedCalendarEvent.details.eventLifecycle === "provisory"
+        ? "Provisorio"
+        : "Commitado";
+    const proposal =
+      selectedCalendarEvent.details.proposalKind === "reschedule"
+        ? "Reagendamento"
+        : selectedCalendarEvent.details.proposalKind === "assignment"
+          ? "Atribuicao"
+          : null;
+    return proposal ? `${lifecycle} (${proposal})` : lifecycle;
   }, [selectedCalendarEvent]);
 
   const selectedCalendarEventContent = useMemo(() => {
@@ -665,27 +714,6 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
       <section className="rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h3 className="text-lg font-semibold text-[#123447]">Diagnosticos DRPS</h3>
-          <select
-            className="rounded border border-[#c9dce8] px-3 py-2 text-sm"
-            value={selectedOpenCampaignId}
-            disabled={openCampaigns.length === 0}
-            onChange={(event) => {
-              const value = event.target.value;
-              if (!value) return;
-              setSelectedCampaignId(value);
-              void loadData(value);
-            }}
-          >
-            {openCampaigns.length === 0 ? (
-              <option value="">Sem questionarios abertos</option>
-            ) : (
-              openCampaigns.map((campaign) => (
-              <option key={campaign.id} value={campaign.id}>
-                {campaign.name} ({campaignCollectionStatus(campaign.status)})
-              </option>
-              ))
-            )}
-          </select>
         </div>
         <p className="mt-2 text-xs text-[#4f6977]">
           {selectedCampaign
@@ -712,11 +740,15 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
                 </tr>
               ) : (
                 openCampaigns.map((campaign) => (
-                  <tr
-                    key={campaign.id}
-                    className={`border-b ${campaign.id === selectedCampaignId ? "bg-[#f6fbfe]" : ""}`}
-                  >
-                    <td className="px-2 py-2">{campaign.name}</td>
+                  <tr key={campaign.id} className="border-b">
+                    <td className="px-2 py-2">
+                      <Link
+                        href={`/client/${clientSlug}/diagnostic/${campaign.id}`}
+                        className="font-semibold text-[#123447] hover:text-[#0f5b73] hover:underline"
+                      >
+                        {campaign.name}
+                      </Link>
+                    </td>
                     <td className="px-2 py-2">{campaignCollectionStatus(campaign.status)}</td>
                     <td className="px-2 py-2">{fmt(campaign.starts_at)}</td>
                     <td className="px-2 py-2">{fmt(campaign.closes_at)}</td>
@@ -769,6 +801,70 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
           </table>
         </div>
         {drpsActionError ? <p className="mt-3 text-sm text-red-600">{drpsActionError}</p> : null}
+      </section>
+
+      <section className="rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
+        <h3 className="text-lg font-semibold text-[#123447]">Processos continuos atribuidos</h3>
+        <div className="mt-3 overflow-x-auto">
+          <table className="min-w-full text-sm">
+            <thead>
+              <tr className="border-b">
+                <th className="px-2 py-2 text-left">Programa</th>
+                <th className="px-2 py-2 text-left">Status</th>
+                <th className="px-2 py-2 text-left">Aplicado em</th>
+                <th className="px-2 py-2 text-left">Frequencia</th>
+                <th className="px-2 py-2 text-left">Acoes</th>
+              </tr>
+            </thead>
+            <tbody>
+              {payload.assignedPrograms.length === 0 ? (
+                <tr>
+                  <td colSpan={5} className="px-2 py-3 text-xs text-[#5a7383]">
+                    Nenhum processo continuo atribuido.
+                  </td>
+                </tr>
+              ) : (
+                payload.assignedPrograms.map((assignment) => (
+                  <tr key={assignment.id} className="border-b">
+                    <td className="px-2 py-2">{assignment.programTitle}</td>
+                    <td className="px-2 py-2">{assignment.status}</td>
+                    <td className="px-2 py-2">{fmt(assignment.deployedAt)}</td>
+                    <td className="px-2 py-2">{assignment.scheduleFrequency}</td>
+                    <td className="px-2 py-2">
+                      <div className="relative inline-flex">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setOpenProgramActionsFor((previous) =>
+                              previous === assignment.id ? null : assignment.id,
+                            );
+                          }}
+                          className="rounded-full border border-[#c8c8c8] px-3 py-1 text-xs font-semibold text-[#1b2832]"
+                        >
+                          ...
+                        </button>
+                        {openProgramActionsFor === assignment.id ? (
+                          <div className="absolute right-0 top-full z-20 mt-2 w-52 overflow-hidden rounded-xl border border-[#d8e4ee] bg-white shadow-lg">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setOpenProgramActionsFor(null);
+                                router.push(`/client/${clientSlug}/programs/${assignment.programId}`);
+                              }}
+                              className="block w-full px-3 py-2 text-left text-xs font-semibold text-[#123447] hover:bg-[#f4f9fc]"
+                            >
+                              Ver detalhes
+                            </button>
+                          </div>
+                        ) : null}
+                      </div>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
       </section>
 
       {isLinksModalOpen && linksPayload ? (
@@ -912,53 +1008,61 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
               <p className={`text-xs font-semibold ${day.inMonth ? "text-[#163748]" : "text-[#86a0ac]"}`}>
                 {day.value.getDate()}
               </p>
-              <div className="mt-1 space-y-1">
-                {day.events.slice(0, 2).map((event) => {
+              <div className="mt-2 space-y-1.5">
+                {day.events.slice(0, MAX_CALENDAR_EVENTS_PER_DAY).map((event) => {
                   const eventLink = calendarEventLinkById.get(event.id) ?? null;
-                  const commonClass = `rounded px-1 py-0.5 text-[10px] ${
+                  const cardClass = `rounded-md border px-1.5 py-1 ${
                     event.type === "start"
-                      ? "bg-[#e2f4ea] text-[#1f5b38]"
+                      ? "border-[#b9dfc6] bg-[#eaf8ef] text-[#1b5437]"
                       : event.type === "close"
-                        ? "bg-[#fff3df] text-[#7a4b00]"
+                        ? "border-[#f2d6ad] bg-[#fff4e4] text-[#7a4b00]"
                         : event.type === "meeting"
                           ? event.details.eventLifecycle === "committed"
-                            ? "bg-[#2f6f8d] text-white"
-                            : "bg-[#e6f3f8] text-[#1f5f79]"
-                          : "bg-[#fce6f1] text-[#7a2755]"
-                  } block w-full truncate text-left`;
-                  const label =
-                    event.type === "meeting"
-                      ? "Reuniao continua"
-                      : event.type === "blocked"
-                        ? "Bloqueio"
-                        : event.type === "start"
-                          ? "Inicio DRPS"
-                          : "Fim DRPS";
+                            ? "border-[#2f6f8d] bg-[#2f6f8d] text-white"
+                            : "border-[#b8d8e6] bg-[#edf7fb] text-[#1f5f79]"
+                          : "border-[#efc1d6] bg-[#fcecf4] text-[#7a2755]"
+                  }`;
                   if (eventLink) {
                     return (
-                      <Link
-                        key={event.id}
-                        href={eventLink.href}
-                        title={`${event.title} (${fmt(event.startsAt)})`}
-                        className={`${commonClass} hover:opacity-90 hover:underline`}
-                      >
-                        {label}
-                      </Link>
+                      <div key={event.id} className={cardClass}>
+                        <Link
+                          href={eventLink.href}
+                          title={`${event.title} (${fmt(event.startsAt)})`}
+                          className="block min-w-0 text-left hover:underline"
+                        >
+                          <p className="truncate text-[10px] font-semibold">{event.title}</p>
+                          <p className="truncate text-[10px] opacity-90">{event.timeLabel}</p>
+                          <p className="truncate text-[10px] opacity-90">{event.companyLabel}</p>
+                          <p className="truncate text-[10px] opacity-90">
+                            {event.typeLabel}
+                            {event.lifecycleLabel ? ` . ${event.lifecycleLabel}` : ""}
+                          </p>
+                        </Link>
+                      </div>
                     );
                   }
                   return (
-                    <button
-                      type="button"
-                      key={event.id}
-                      onClick={() => setSelectedCalendarEventId(event.id)}
-                      title={`${event.title} (${fmt(event.startsAt)})`}
-                      className={commonClass}
-                    >
-                      {label}
-                    </button>
+                    <div key={event.id} className={cardClass}>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedCalendarEventId(event.id)}
+                        title={`${event.title} (${fmt(event.startsAt)})`}
+                        className="block min-w-0 w-full text-left"
+                      >
+                        <p className="truncate text-[10px] font-semibold">{event.title}</p>
+                        <p className="truncate text-[10px] opacity-90">{event.timeLabel}</p>
+                        <p className="truncate text-[10px] opacity-90">{event.companyLabel}</p>
+                        <p className="truncate text-[10px] opacity-90">
+                          {event.typeLabel}
+                          {event.lifecycleLabel ? ` . ${event.lifecycleLabel}` : ""}
+                        </p>
+                      </button>
+                    </div>
                   );
                 })}
-                {day.events.length > 2 ? <p className="text-[10px] text-[#527083]">+{day.events.length - 2}</p> : null}
+                {day.events.length > MAX_CALENDAR_EVENTS_PER_DAY ? (
+                  <p className="text-[10px] text-[#527083]">+{day.events.length - MAX_CALENDAR_EVENTS_PER_DAY}</p>
+                ) : null}
               </div>
             </div>
           ))}
@@ -1008,11 +1112,7 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
               </div>
               <div className="rounded-lg border border-[#e0e9ee] bg-[#f7fbfd] p-3 md:col-span-2">
                 <p className="text-xs text-[#4d6a79]">Ciclo</p>
-                <p className="text-sm font-semibold text-[#123447]">
-                  {selectedCalendarEvent.details.eventLifecycle === "provisory"
-                    ? "Provisorio"
-                    : "Commitado"}
-                </p>
+                <p className="text-sm font-semibold text-[#123447]">{selectedCalendarEventLifecycleLabel}</p>
               </div>
             </div>
 
@@ -1044,40 +1144,6 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
           </article>
         </div>
       ) : null}
-
-      <section className="rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
-        <h3 className="text-lg font-semibold text-[#123447]">Links por setor (diagnostico selecionado)</h3>
-        <div className="mt-3 overflow-x-auto">
-          <table className="min-w-full text-sm">
-            <thead>
-              <tr className="border-b">
-                <th className="px-2 py-2 text-left">Setor</th>
-                <th className="px-2 py-2 text-left">Parametro</th>
-                <th className="px-2 py-2 text-left">Respostas</th>
-                <th className="px-2 py-2 text-left">Ultimo envio</th>
-                <th className="px-2 py-2 text-left">Link</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(payload.dashboard?.sectors ?? []).map((sector) => (
-                <tr key={`${sector.sector}-${sector.sectorId ?? "none"}`} className="border-b">
-                  <td className="px-2 py-2">{sector.sector}</td>
-                  <td className="px-2 py-2">{sector.riskParameter.toFixed(2)}x</td>
-                  <td className="px-2 py-2">{sector.submissionCount}</td>
-                  <td className="px-2 py-2">{fmt(sector.lastSubmittedAt)}</td>
-                  <td className="px-2 py-2">
-                    <input
-                      readOnly
-                      value={sector.accessLink ?? "-"}
-                      className="min-w-[260px] rounded border border-[#d5e2ea] bg-[#f7fbfe] px-2 py-1 text-xs"
-                    />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
 
       <section className="rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
         <h3 className="text-lg font-semibold text-[#123447]">Relatorios disponibilizados</h3>
@@ -1121,70 +1187,6 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
           </table>
         </div>
         {reportFeedback ? <p className="mt-3 text-sm text-[#0f5b73]">{reportFeedback}</p> : null}
-      </section>
-
-      <section className="rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
-        <h3 className="text-lg font-semibold text-[#123447]">Processos continuos atribuidos</h3>
-        <div className="mt-3 overflow-x-auto">
-          <table className="min-w-full text-sm">
-            <thead>
-              <tr className="border-b">
-                <th className="px-2 py-2 text-left">Programa</th>
-                <th className="px-2 py-2 text-left">Status</th>
-                <th className="px-2 py-2 text-left">Aplicado em</th>
-                <th className="px-2 py-2 text-left">Frequencia</th>
-                <th className="px-2 py-2 text-left">Acoes</th>
-              </tr>
-            </thead>
-            <tbody>
-              {payload.assignedPrograms.length === 0 ? (
-                <tr>
-                  <td colSpan={5} className="px-2 py-3 text-xs text-[#5a7383]">
-                    Nenhum processo continuo atribuido.
-                  </td>
-                </tr>
-              ) : (
-                payload.assignedPrograms.map((assignment) => (
-                  <tr key={assignment.id} className="border-b">
-                    <td className="px-2 py-2">{assignment.programTitle}</td>
-                    <td className="px-2 py-2">{assignment.status}</td>
-                    <td className="px-2 py-2">{fmt(assignment.deployedAt)}</td>
-                    <td className="px-2 py-2">{assignment.scheduleFrequency}</td>
-                    <td className="px-2 py-2">
-                      <div className="relative inline-flex">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setOpenProgramActionsFor((previous) =>
-                              previous === assignment.id ? null : assignment.id,
-                            );
-                          }}
-                          className="rounded-full border border-[#c8c8c8] px-3 py-1 text-xs font-semibold text-[#1b2832]"
-                        >
-                          ...
-                        </button>
-                        {openProgramActionsFor === assignment.id ? (
-                          <div className="absolute right-0 top-full z-20 mt-2 w-52 overflow-hidden rounded-xl border border-[#d8e4ee] bg-white shadow-lg">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setOpenProgramActionsFor(null);
-                                router.push(`/client/${clientSlug}/programs/${assignment.programId}`);
-                              }}
-                              className="block w-full px-3 py-2 text-left text-xs font-semibold text-[#123447] hover:bg-[#f4f9fc]"
-                            >
-                              Ver detalhes
-                            </button>
-                          </div>
-                        ) : null}
-                      </div>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
       </section>
 
       <section className="rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">

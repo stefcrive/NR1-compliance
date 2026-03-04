@@ -2,9 +2,18 @@ import { ClientDiagnosticResultsSection } from "@/components/client-portal-secti
 
 export default async function ClientDiagnosticResultPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ clientSlug: string; campaignId: string }>;
+  searchParams?: Promise<{ from?: string }>;
 }) {
   const { clientSlug, campaignId } = await params;
-  return <ClientDiagnosticResultsSection clientSlug={clientSlug} campaignId={campaignId} />;
+  const resolvedSearchParams = (await searchParams) ?? {};
+  return (
+    <ClientDiagnosticResultsSection
+      clientSlug={clientSlug}
+      campaignId={campaignId}
+      fromHistory={resolvedSearchParams.from === "history"}
+    />
+  );
 }

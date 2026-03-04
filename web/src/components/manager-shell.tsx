@@ -59,6 +59,16 @@ function ListIcon({ className = "h-4 w-4" }: IconProps) {
   );
 }
 
+function HistoryIcon({ className = "h-4 w-4" }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={className}>
+      <path d="M12 8v5l3 2" />
+      <path d="M3 12a9 9 0 1 0 3-6.7" />
+      <path d="M3 4v3h3" />
+    </svg>
+  );
+}
+
 function BellIcon({ className = "h-4 w-4" }: IconProps) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={className}>
@@ -72,6 +82,7 @@ const TOP_NAV = [
   { href: "/manager", labelKey: "home", icon: HomeIcon },
   { href: "/manager/clients", labelKey: "clientArea", icon: ListIcon },
   { href: "/manager/calendar", labelKey: "calendar", icon: CalendarIcon },
+  { href: "/manager/history", labelKey: "history", icon: HistoryIcon },
   { href: "/manager/programs", labelKey: "programsDatabase", icon: GridIcon },
 ] as const;
 
@@ -89,6 +100,7 @@ const COPY = {
     home: "Home",
     clientArea: "Client area",
     calendar: "Calendar",
+    history: "History",
     programsDatabase: "Programs database",
     createClient: "Create client",
     new: "New",
@@ -110,6 +122,7 @@ const COPY = {
     home: "Inicio",
     clientArea: "Area de clientes",
     calendar: "Calendario",
+    history: "Historico",
     programsDatabase: "Base de programas",
     createClient: "Criar cliente",
     new: "Novo",

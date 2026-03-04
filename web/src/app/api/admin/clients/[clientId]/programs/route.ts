@@ -9,6 +9,7 @@ import {
   type AvailabilitySlot,
 } from "@/lib/availability-scheduler";
 import { isAdminApiAuthorized } from "@/lib/admin-auth";
+import { createClientNotification } from "@/lib/client-notifications";
 import { DEFAULT_CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCY } from "@/lib/continuous-programs";
 import {
   buildDrpsCalendarEvents,
@@ -22,6 +23,7 @@ import { getSupabaseAdminClient } from "@/lib/supabase-admin";
 
 type ClientRow = {
   client_id: string;
+  company_name: string;
 };
 
 type PeriodicProgramRow = {
@@ -148,7 +150,7 @@ async function loadClientOrNull(clientId: string) {
   const supabase = getSupabaseAdminClient();
   const clientResult = await supabase
     .from("clients")
-    .select("client_id")
+    .select("client_id,company_name")
     .eq("client_id", clientId)
     .maybeSingle<ClientRow>();
 
@@ -647,6 +649,24 @@ export async function POST(
 
   if (!insertResult.data) {
     return NextResponse.json({ error: "Could not assign program." }, { status: 500 });
+  }
+
+  try {
+    await createClientNotification(supabase, {
+      clientId: client.client_id,
+      notificationType: "manager_program_assigned",
+      title: `Programa atribuido: ${programResult.data.title}`,
+      message: "O gestor atribuiu um processo continuo para sua empresa.",
+      metadata: {
+        assignmentId: insertResult.data.client_program_id,
+        programId: programResult.data.program_id,
+        programTitle: programResult.data.title,
+        assignmentStatus: insertResult.data.status,
+        deployedAt: insertResult.data.deployed_at ?? null,
+      },
+    });
+  } catch {
+    // Do not block program assignment when notification persistence fails.
   }
 
   const programById = new Map([[programResult.data.program_id, programResult.data]]);

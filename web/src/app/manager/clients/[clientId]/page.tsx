@@ -5,13 +5,15 @@ type ClientTab =
   | "company-data"
   | "assigned-drps"
   | "assigned-continuous"
-  | "contracts-invoicing";
+  | "contracts-invoicing"
+  | "history";
 
 function parseTab(tab: string | undefined): ClientTab {
   if (tab === "company-data") return tab;
   if (tab === "assigned-drps") return tab;
   if (tab === "assigned-continuous") return tab;
   if (tab === "contracts-invoicing") return tab;
+  if (tab === "history") return tab;
   return "overview";
 }
 

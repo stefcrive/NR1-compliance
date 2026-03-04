@@ -5,6 +5,7 @@ import { z } from "zod";
 
 import { isAdminApiAuthorized } from "@/lib/admin-auth";
 import { cloneSurveyStructure } from "@/lib/campaign-clone";
+import { createClientNotification } from "@/lib/client-notifications";
 import { slugify } from "@/lib/slug";
 import { isMissingColumnError, isMissingTableError } from "@/lib/supabase-errors";
 import { getSupabaseAdminClient } from "@/lib/supabase-admin";
@@ -186,6 +187,23 @@ export async function POST(
         );
       }
 
+      try {
+        await createClientNotification(supabase, {
+          clientId: legacyClient.client_id,
+          notificationType: "manager_drps_assigned",
+          title: `Novo DRPS atribuido: ${parsed.campaignName}`,
+          message: "O gestor atribuiu um novo diagnostico DRPS para sua empresa.",
+          metadata: {
+            campaignId: legacyCampaignInsert.data?.campaign_id ?? legacyCampaignId,
+            campaignName: parsed.campaignName,
+            campaignStatus: parsed.status ?? "draft",
+            campaignSlug: finalSlug,
+          },
+        });
+      } catch {
+        // Do not block DRPS assignment when notification persistence fails.
+      }
+
       return NextResponse.json(
         {
           campaign:
@@ -261,6 +279,23 @@ export async function POST(
 
   if (insertError || !inserted) {
     return NextResponse.json({ error: "Could not assign DRPS campaign." }, { status: 500 });
+  }
+
+  try {
+    await createClientNotification(supabase, {
+      clientId: client.client_id,
+      notificationType: "manager_drps_assigned",
+      title: `Novo DRPS atribuido: ${inserted.name}`,
+      message: "O gestor atribuiu um novo diagnostico DRPS para sua empresa.",
+      metadata: {
+        campaignId: inserted.id,
+        campaignName: inserted.name,
+        campaignStatus: inserted.status,
+        campaignSlug: inserted.public_slug,
+      },
+    });
+  } catch {
+    // Do not block DRPS assignment when notification persistence fails.
   }
 
   if (parsed.sourceSurveyId) {

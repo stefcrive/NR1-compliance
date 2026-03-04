@@ -535,10 +535,11 @@ const PLOT_INFO_CONTENT: Record<
   radar: {
     title: "Sector Radar Profile",
     whatItShows:
-      "Displays one sector profile across all risk factors at once, allowing pattern recognition across the risk system.",
+      "Overlays multiple sector profiles across all risk factors, allowing comparison of risk shape and intensity between sectors.",
     howToUse: [
-      "Identify spikes to find which risk dimensions dominate this sector's profile.",
-      "Compare radar shape across survey cycles to check if interventions are balancing the profile.",
+      "Identify spikes to find which risk dimensions dominate each sector profile.",
+      "Compare radar shape between sectors to identify localized hotspots versus systemic risks.",
+      "Compare radar shape across survey cycles to check if interventions are balancing each profile.",
       "Use with matrix and prevalence to distinguish broad stress climate from isolated acute risks.",
     ],
   },
@@ -914,9 +915,11 @@ export function ClientDiagnosticStatusSection({ clientSlug }: { clientSlug: stri
 export function ClientDiagnosticResultsSection({
   clientSlug,
   campaignId,
+  fromHistory = false,
 }: {
   clientSlug: string;
   campaignId: string;
+  fromHistory?: boolean;
 }) {
   const { data, isLoading, error } = useClientPortalData(clientSlug, campaignId);
 
@@ -938,6 +941,7 @@ export function ClientDiagnosticResultsSection({
   const [datasetSortKey, setDatasetSortKey] = useState<DatasetSortKey>("timestamp");
   const [datasetSortDirection, setDatasetSortDirection] = useState<"asc" | "desc">("desc");
   const [activePlotInfo, setActivePlotInfo] = useState<PlotInfoKey | null>(null);
+  const [isolatedRadarSector, setIsolatedRadarSector] = useState<string | null>(null);
 
   const datasetSampleRows = useMemo(() => metrics?.dataset.sample ?? [], [metrics?.dataset.sample]);
   const datasetSectorOptions = useMemo(
@@ -1021,40 +1025,58 @@ export function ClientDiagnosticResultsSection({
     };
   }, [matrixPoints]);
 
-  const radarSector = useMemo(() => {
+  const radarSectors = useMemo(() => {
     return (dashboard?.sectors ?? [])
       .filter((sector) => !sector.suppressed && (sector.riskFactors?.length ?? 0) > 0)
       .slice()
-      .sort((a, b) => (b.sectorRiskIndex ?? 0) - (a.sectorRiskIndex ?? 0))[0] ?? null;
+      .sort((a, b) => (b.sectorRiskIndex ?? 0) - (a.sectorRiskIndex ?? 0));
   }, [dashboard?.sectors]);
 
   const radarModel = useMemo(() => {
-    if (!radarSector?.riskFactors || radarSector.riskFactors.length === 0) return null;
-    const factors = radarSector.riskFactors;
+    if (radarSectors.length === 0) return null;
+    const topicMap = new Map<number, { topicId: number; label: string }>();
+    for (const sector of radarSectors) {
+      for (const factor of sector.riskFactors ?? []) {
+        if (!topicMap.has(factor.topicId)) {
+          topicMap.set(factor.topicId, {
+            topicId: factor.topicId,
+            label: shortRiskName(factor.riskFactor, factor.topicId),
+          });
+        }
+      }
+    }
+    const axes = Array.from(topicMap.values()).sort((a, b) => a.topicId - b.topicId);
+    if (axes.length === 0) return null;
+
     const size = 320;
     const center = size / 2;
     const radius = 118;
     const levels = [0.2, 0.4, 0.6, 0.8, 1];
+    const palette = [
+      { line: "#1d4ed8", fill: "#1d4ed833" },
+      { line: "#0f766e", fill: "#0f766e33" },
+      { line: "#b45309", fill: "#b4530933" },
+      { line: "#be123c", fill: "#be123c33" },
+      { line: "#6d28d9", fill: "#6d28d933" },
+      { line: "#0369a1", fill: "#0369a133" },
+      { line: "#3f6212", fill: "#3f621233" },
+      { line: "#c2410c", fill: "#c2410c33" },
+    ];
 
-    const vertices = factors.map((factor, index) => {
-      const angle = (-Math.PI / 2) + (2 * Math.PI * index) / factors.length;
-      const normalizedValue = (factor.meanExposure ?? 0) / 5;
-      const x = center + Math.cos(angle) * radius * normalizedValue;
-      const y = center + Math.sin(angle) * radius * normalizedValue;
+    const axisVertices = axes.map((axis, index) => {
+      const angle = (-Math.PI / 2) + (2 * Math.PI * index) / axes.length;
       const axisX = center + Math.cos(angle) * radius;
       const axisY = center + Math.sin(angle) * radius;
       return {
-        topicId: factor.topicId,
-        label: shortRiskName(factor.riskFactor, factor.topicId),
-        x,
-        y,
+        topicId: axis.topicId,
+        label: axis.label,
+        angle,
         axisX,
         axisY,
       };
     });
 
-    const polygonPoints = vertices.map((vertex) => `${vertex.x},${vertex.y}`).join(" ");
-    const axisLines = vertices.map((vertex) => ({
+    const axisLines = axisVertices.map((vertex) => ({
       x1: center,
       y1: center,
       x2: vertex.axisX,
@@ -1062,7 +1084,7 @@ export function ClientDiagnosticResultsSection({
       topicId: vertex.topicId,
     }));
     const rings = levels.map((level) =>
-      vertices
+      axisVertices
         .map((vertex) => {
           const x = center + (vertex.axisX - center) * level;
           const y = center + (vertex.axisY - center) * level;
@@ -1071,15 +1093,52 @@ export function ClientDiagnosticResultsSection({
         .join(" "),
     );
 
+    const sectorPolygons = radarSectors.map((sector, index) => {
+      const colors = palette[index % palette.length];
+      const factorsByTopic = new Map((sector.riskFactors ?? []).map((factor) => [factor.topicId, factor]));
+      const vertices = axisVertices.map((axis) => {
+        const factor = factorsByTopic.get(axis.topicId) ?? null;
+        const normalizedValue = (factor?.meanExposure ?? 0) / 5;
+        const x = center + Math.cos(axis.angle) * radius * normalizedValue;
+        const y = center + Math.sin(axis.angle) * radius * normalizedValue;
+        return {
+          topicId: axis.topicId,
+          x,
+          y,
+        };
+      });
+      return {
+        sector: sector.sector,
+        sectorRiskIndex: sector.sectorRiskIndex ?? null,
+        lineColor: colors.line,
+        fillColor: colors.fill,
+        polygonPoints: vertices.map((vertex) => `${vertex.x},${vertex.y}`).join(" "),
+        vertices,
+      };
+    });
+
     return {
       size,
       center,
-      polygonPoints,
       axisLines,
       rings,
-      vertices,
+      axisVertices,
+      sectorPolygons,
     };
-  }, [radarSector?.riskFactors]);
+  }, [radarSectors]);
+
+  const effectiveIsolatedRadarSector = useMemo(() => {
+    if (!isolatedRadarSector) return null;
+    return radarSectors.some((sector) => sector.sector === isolatedRadarSector)
+      ? isolatedRadarSector
+      : null;
+  }, [isolatedRadarSector, radarSectors]);
+
+  const radarVisibleSeries = useMemo(() => {
+    if (!radarModel) return [];
+    if (!effectiveIsolatedRadarSector) return radarModel.sectorPolygons;
+    return radarModel.sectorPolygons.filter((series) => series.sector === effectiveIsolatedRadarSector);
+  }, [effectiveIsolatedRadarSector, radarModel]);
 
   const trendModel = useMemo(() => {
     if (!selectedTrend || selectedTrend.points.length === 0) return null;
@@ -1112,10 +1171,21 @@ export function ClientDiagnosticResultsSection({
   return (
     <div className="space-y-6">
       <nav className="text-xs text-[#4f6977]">
-        <Link href={`/client/${clientSlug}/company`} className="text-[#1b2832]">
-          Home
-        </Link>{" "}
-        &gt; <span>{campaign?.name ?? "Diagnostico"}</span> &gt; <span>Resultados</span>
+        {fromHistory ? (
+          <>
+            <Link href={`/client/${clientSlug}/history`} className="text-[#1b2832]">
+              Historico
+            </Link>{" "}
+            / <span>{campaign?.name ?? "Diagnostico"}</span>
+          </>
+        ) : (
+          <>
+            <Link href={`/client/${clientSlug}/company`} className="text-[#1b2832]">
+              Home
+            </Link>{" "}
+            / <span>{campaign?.name ?? "Diagnostico"}</span> / <span>Resultados</span>
+          </>
+        )}
       </nav>
 
       <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
@@ -1393,8 +1463,17 @@ export function ClientDiagnosticResultsSection({
             </button>
           </div>
           <p className="mt-1 text-xs text-[#55707f]">
-            {radarSector ? `${radarSector.sector} (highest sector risk index)` : "No eligible sector"}
+            {radarSectors.length > 0
+              ? `${radarSectors.length} sectors plotted (sorted by sector risk index)`
+              : "No eligible sector"}
           </p>
+          {radarModel ? (
+            <p className="mt-1 text-[11px] text-[#6b8290]">
+              {effectiveIsolatedRadarSector
+                ? `Isolated sector: ${effectiveIsolatedRadarSector} (click again in legend to reset)`
+                : "Click a legend item to isolate one sector on the radar."}
+            </p>
+          ) : null}
           <div className="mt-3 overflow-x-auto">
             {radarModel ? (
               <svg viewBox={`0 0 ${radarModel.size} ${radarModel.size}`} className="mx-auto h-[320px] w-[320px]">
@@ -1418,10 +1497,27 @@ export function ClientDiagnosticResultsSection({
                     strokeWidth="1"
                   />
                 ))}
-                <polygon points={radarModel.polygonPoints} fill="#93c5fd55" stroke="#1d4ed8" strokeWidth="2" />
-                {radarModel.vertices.map((vertex) => (
-                  <g key={`vertex-${vertex.topicId}`}>
-                    <circle cx={vertex.x} cy={vertex.y} r={3} fill="#1d4ed8" />
+                {radarVisibleSeries.map((series) => (
+                  <g key={`radar-sector-${series.sector}`}>
+                    <polygon
+                      points={series.polygonPoints}
+                      fill={series.fillColor}
+                      stroke={series.lineColor}
+                      strokeWidth="2"
+                    />
+                    {series.vertices.map((vertex) => (
+                      <circle
+                        key={`vertex-${series.sector}-${vertex.topicId}`}
+                        cx={vertex.x}
+                        cy={vertex.y}
+                        r={2.5}
+                        fill={series.lineColor}
+                      />
+                    ))}
+                  </g>
+                ))}
+                {radarModel.axisVertices.map((vertex) => (
+                  <g key={`axis-label-${vertex.topicId}`}>
                     <text x={vertex.axisX} y={vertex.axisY} textAnchor="middle" className="fill-[#334155] text-[9px]">
                       {vertex.label}
                     </text>
@@ -1432,6 +1528,38 @@ export function ClientDiagnosticResultsSection({
               <p className="text-sm text-[#5b7482]">No radar data available.</p>
             )}
           </div>
+          {radarModel ? (
+            <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] text-[#4b6472]">
+              <span className="font-semibold text-[#223845]">Legend:</span>
+              {radarModel.sectorPolygons.map((series) => (
+                <button
+                  type="button"
+                  key={`legend-${series.sector}`}
+                  onClick={() =>
+                    setIsolatedRadarSector((previous) =>
+                      previous === series.sector ? null : series.sector,
+                    )
+                  }
+                  className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 ${
+                    effectiveIsolatedRadarSector === series.sector
+                      ? "border-[#17465b] bg-[#e9f5fb]"
+                      : effectiveIsolatedRadarSector
+                        ? "border-[#d8e5ec] opacity-60"
+                        : "border-[#d8e5ec]"
+                  }`}
+                >
+                  <span
+                    className="inline-block h-2.5 w-2.5 rounded-full border"
+                    style={{ backgroundColor: series.fillColor, borderColor: series.lineColor }}
+                  />
+                  <span className="font-medium text-[#2a4452]">{series.sector}</span>
+                  <span className="text-[#5c7482]">
+                    ({series.sectorRiskIndex !== null ? series.sectorRiskIndex.toFixed(2) : "-"})
+                  </span>
+                </button>
+              ))}
+            </div>
+          ) : null}
         </article>
       </section>
 
@@ -1919,12 +2047,58 @@ export function ClientReportsSection({ clientSlug }: { clientSlug: string }) {
 
   if (isLoading) return <p className="text-sm text-[#49697a]">Carregando relatorios...</p>;
   if (error || !data) return <p className="text-sm text-red-600">{error || "Relatorios indisponiveis."}</p>;
+  const completedCampaigns = data.campaigns.filter(
+    (campaign) => campaign.status === "closed" || campaign.status === "archived",
+  );
 
   return (
     <div className="space-y-6">
       <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
         <h2 className="text-2xl font-semibold text-[#141d24]">Reports</h2>
         <p className="mt-1 text-sm text-[#475660]">Tabelas de relatorios DRPS e processos continuos.</p>
+      </section>
+
+      <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+        <h3 className="text-lg font-semibold text-[#141d24]">DRPS concluidos</h3>
+        <div className="mt-3 overflow-x-auto">
+          <table className="min-w-full text-sm">
+            <thead>
+              <tr className="border-b">
+                <th className="px-2 py-2 text-left">Diagnostico</th>
+                <th className="px-2 py-2 text-left">Status</th>
+                <th className="px-2 py-2 text-left">Janela</th>
+                <th className="px-2 py-2 text-left">Resultado</th>
+              </tr>
+            </thead>
+            <tbody>
+              {completedCampaigns.length === 0 ? (
+                <tr>
+                  <td colSpan={4} className="px-2 py-3 text-xs text-[#5a7383]">
+                    Sem diagnosticos DRPS concluidos para este cliente.
+                  </td>
+                </tr>
+              ) : (
+                completedCampaigns.map((campaign) => (
+                  <tr key={campaign.id} className="border-b">
+                    <td className="px-2 py-2">{campaign.name}</td>
+                    <td className="px-2 py-2">{questionnaireCollectionStatus(campaign.status)}</td>
+                    <td className="px-2 py-2">
+                      {fmtDate(campaign.starts_at)} - {fmtDate(campaign.closes_at)}
+                    </td>
+                    <td className="px-2 py-2">
+                      <Link
+                        href={`/client/${clientSlug}/diagnostic/${campaign.id}`}
+                        className="rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
+                      >
+                        Ver resultados
+                      </Link>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
       </section>
 
       <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
@@ -2079,6 +2253,7 @@ export function ClientProgramDetailsSection({
   programId: string;
 }) {
   const searchParams = useSearchParams();
+  const fromHistory = searchParams.get("from") === "history";
   const { data, isLoading, error } = useClientPortalData(clientSlug);
   const fallbackProgram = findProgramById(programId);
   const requestedAssignmentId = searchParams.get("assignmentId");
@@ -2190,10 +2365,21 @@ export function ClientProgramDetailsSection({
   return (
     <div className="space-y-6">
       <nav className="text-xs text-[#4f6977]">
-        <Link href={`/client/${clientSlug}/programs`} className="text-[#1b2832]">
-          Programas Continuos
-        </Link>{" "}
-        &gt; <span>{displayTitle}</span>
+        {fromHistory ? (
+          <>
+            <Link href={`/client/${clientSlug}/history`} className="text-[#1b2832]">
+              Historico
+            </Link>{" "}
+            / <span>{displayTitle}</span>
+          </>
+        ) : (
+          <>
+            <Link href={`/client/${clientSlug}/programs`} className="text-[#1b2832]">
+              Programas Continuos
+            </Link>{" "}
+            / <span>{displayTitle}</span>
+          </>
+        )}
       </nav>
 
       <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">

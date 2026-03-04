@@ -4,6 +4,8 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 
+import { ManagerHistory } from "@/components/manager-history";
+
 type Diagnostic = {
   id: string;
   name: string;
@@ -115,7 +117,13 @@ type SectorPayload = {
   sectors: SectorLink[];
 };
 
-type ClientTab = "overview" | "company-data" | "assigned-drps" | "assigned-continuous" | "contracts-invoicing";
+type ClientTab =
+  | "overview"
+  | "company-data"
+  | "assigned-drps"
+  | "assigned-continuous"
+  | "contracts-invoicing"
+  | "history";
 
 type ClientProfileForm = {
   companyName: string;
@@ -158,6 +166,7 @@ const TAB_ITEMS: Array<{ id: ClientTab; label: string }> = [
   { id: "assigned-drps", label: "Assigned Diagnosticos DRPS" },
   { id: "assigned-continuous", label: "Assigned processo continuos" },
   { id: "contracts-invoicing", label: "contracts & invoicing" },
+  { id: "history", label: "Historico" },
 ];
 const ANNUAL_PLAN_COLUMNS = 12;
 const annualPlanMonthRegex = /^\d{4}-(0[1-9]|1[0-2])$/;
@@ -2138,6 +2147,8 @@ export function ManagerClientFicha({
           ) : null}
         </section>
       ) : null}
+
+      {activeTab === "history" ? <ManagerHistory forcedClientId={client.id} /> : null}
 
       {activeTab === "contracts-invoicing" ? (
         <section className="rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
