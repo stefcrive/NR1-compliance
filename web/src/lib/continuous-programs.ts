@@ -30,7 +30,7 @@ export type ContinuousProgramMetrics = {
 };
 
 export const DEFAULT_CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCY: ContinuousProgramScheduleFrequency =
-  "monthly";
+  "biweekly";
 
 export const DEFAULT_CONTINUOUS_PROGRAM_QUESTIONS = [
   "The campaign objectives were clear for participants.",

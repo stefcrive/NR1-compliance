@@ -34,6 +34,17 @@ type ContinuousProgram = {
   };
 };
 
+type ClientStatus = "Active" | "Pending" | "Inactive";
+
+type AssignableClient = {
+  id: string;
+  companyName: string;
+  cnpj: string;
+  status: ClientStatus;
+};
+
+type AssignmentStatus = "Recommended" | "Active" | "Completed";
+
 const COPY = {
   en: {
     breadcrumbBase: "Programs database",
@@ -71,6 +82,24 @@ const COPY = {
     assignedRecommended: "Recommended",
     assignedActive: "Active",
     assignedCompleted: "Completed",
+    assignButton: "Assign program to company",
+    assignTitle: "Assign Program To Company",
+    assignSubtitle: "Select a company and apply this program.",
+    assignCompany: "Company",
+    assignStatus: "Status",
+    assignDeployAt: "Applied at",
+    assignFrequency: "Cadence",
+    assignAnchorDate: "Cadence anchor date (optional)",
+    assignLoadingClients: "Loading companies...",
+    assignNoClients: "No companies available.",
+    assignErrorNoClient: "Select a company.",
+    assignErrorLoadClients: "Could not load companies.",
+    assignError: "Could not assign program.",
+    assignSuccess: "Program assigned to company.",
+    assignConfirm: "Assign program",
+    assigning: "Assigning...",
+    close: "Close",
+    cancel: "Cancel",
     reload: "Reload",
     save: "Save program",
     saving: "Saving...",
@@ -131,6 +160,24 @@ const COPY = {
     assignedRecommended: "Recomendados",
     assignedActive: "Ativos",
     assignedCompleted: "Concluidos",
+    assignButton: "Atribuir programa a empresa",
+    assignTitle: "Atribuir Programa A Empresa",
+    assignSubtitle: "Selecione a empresa e aplique este programa.",
+    assignCompany: "Empresa",
+    assignStatus: "Status",
+    assignDeployAt: "Aplicado em",
+    assignFrequency: "Cadencia",
+    assignAnchorDate: "Data ancora da cadencia (opcional)",
+    assignLoadingClients: "Carregando empresas...",
+    assignNoClients: "Nenhuma empresa disponivel.",
+    assignErrorNoClient: "Selecione uma empresa.",
+    assignErrorLoadClients: "Nao foi possivel carregar empresas.",
+    assignError: "Nao foi possivel atribuir o programa.",
+    assignSuccess: "Programa atribuido a empresa.",
+    assignConfirm: "Atribuir programa",
+    assigning: "Atribuindo...",
+    close: "Fechar",
+    cancel: "Cancelar",
     reload: "Recarregar",
     save: "Salvar programa",
     saving: "Salvando...",
@@ -168,6 +215,21 @@ function formatFileSize(sizeBytes: number) {
   return `${(sizeBytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function toDatetimeLocal(value: string | null) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const offset = date.getTimezoneOffset() * 60000;
+  return new Date(date.getTime() - offset).toISOString().slice(0, 16);
+}
+
+function fromDatetimeLocal(value: string) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toISOString();
+}
+
 export function ManagerContinuousProgramEditor({ programId }: { programId: string }) {
   const { locale } = useManagerLocale();
   const t = COPY[locale];
@@ -180,7 +242,6 @@ export function ManagerContinuousProgramEditor({ programId }: { programId: strin
   const [scheduleFrequency, setScheduleFrequency] = useState<ContinuousProgramScheduleFrequency>(
     DEFAULT_CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCY,
   );
-  const [scheduleAnchorDate, setScheduleAnchorDate] = useState("");
   const [evaluationQuestions, setEvaluationQuestions] = useState<string[]>(
     DEFAULT_CONTINUOUS_PROGRAM_QUESTIONS,
   );
@@ -192,6 +253,17 @@ export function ManagerContinuousProgramEditor({ programId }: { programId: strin
   const [removingMaterialId, setRemovingMaterialId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [isAssignModalOpen, setIsAssignModalOpen] = useState(false);
+  const [assignClients, setAssignClients] = useState<AssignableClient[]>([]);
+  const [isLoadingAssignClients, setIsLoadingAssignClients] = useState(false);
+  const [isAssigningProgram, setIsAssigningProgram] = useState(false);
+  const [assignClientId, setAssignClientId] = useState("");
+  const [assignStatus, setAssignStatus] = useState<AssignmentStatus>("Active");
+  const [assignDeployedAt, setAssignDeployedAt] = useState(toDatetimeLocal(new Date().toISOString()));
+  const [assignFrequency, setAssignFrequency] = useState<ContinuousProgramScheduleFrequency>(
+    DEFAULT_CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCY,
+  );
+  const [assignError, setAssignError] = useState("");
 
   const loadProgram = useCallback(async () => {
     setIsLoading(true);
@@ -215,7 +287,6 @@ export function ManagerContinuousProgramEditor({ programId }: { programId: strin
       setTargetRiskTopic(payload.program.targetRiskTopic);
       setTriggerThreshold(payload.program.triggerThreshold);
       setScheduleFrequency(payload.program.scheduleFrequency);
-      setScheduleAnchorDate(payload.program.scheduleAnchorDate ?? "");
       setEvaluationQuestions(
         payload.program.evaluationQuestions.length > 0
           ? payload.program.evaluationQuestions
@@ -234,6 +305,75 @@ export function ManagerContinuousProgramEditor({ programId }: { programId: strin
   useEffect(() => {
     void loadProgram();
   }, [loadProgram]);
+
+  async function loadAssignClients() {
+    setIsLoadingAssignClients(true);
+    setAssignError("");
+    try {
+      const response = await fetch("/api/admin/clients", { cache: "no-store" });
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => ({}))) as { error?: string };
+        throw new Error(payload.error ?? t.assignErrorLoadClients);
+      }
+      const payload = (await response.json().catch(() => ({}))) as { clients?: AssignableClient[] };
+      const clients = Array.isArray(payload.clients) ? payload.clients : [];
+      setAssignClients(clients);
+      setAssignClientId((previous) =>
+        previous && clients.some((client) => client.id === previous) ? previous : (clients[0]?.id ?? ""),
+      );
+    } catch (loadError) {
+      setAssignClients([]);
+      setAssignError(loadError instanceof Error ? loadError.message : t.assignErrorLoadClients);
+    } finally {
+      setIsLoadingAssignClients(false);
+    }
+  }
+
+  function openAssignModal() {
+    setAssignStatus("Active");
+    setAssignDeployedAt(toDatetimeLocal(new Date().toISOString()));
+    setAssignFrequency(DEFAULT_CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCY);
+    setAssignError("");
+    setIsAssignModalOpen(true);
+    if (assignClients.length === 0 && !isLoadingAssignClients) {
+      void loadAssignClients();
+    }
+  }
+
+  async function assignProgramToCompany() {
+    if (!assignClientId) {
+      setAssignError(t.assignErrorNoClient);
+      return;
+    }
+
+    setIsAssigningProgram(true);
+    setAssignError("");
+    const deployedAtIso = fromDatetimeLocal(assignDeployedAt);
+    try {
+      const response = await fetch(`/api/admin/clients/${assignClientId}/programs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          programId,
+          status: assignStatus,
+          ...(deployedAtIso ? { deployedAt: deployedAtIso } : {}),
+          scheduleFrequency: assignFrequency,
+        }),
+      });
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => ({}))) as { error?: string };
+        throw new Error(payload.error ?? t.assignError);
+      }
+      setIsAssignModalOpen(false);
+      setError("");
+      await loadProgram();
+      setNotice(t.assignSuccess);
+    } catch (assignProgramError) {
+      setAssignError(assignProgramError instanceof Error ? assignProgramError.message : t.assignError);
+    } finally {
+      setIsAssigningProgram(false);
+    }
+  }
 
   async function uploadMaterials(files: FileList | null) {
     if (!files || files.length === 0) return;
@@ -398,7 +538,6 @@ export function ManagerContinuousProgramEditor({ programId }: { programId: strin
           targetRiskTopic,
           triggerThreshold: clampToTwoDecimals(triggerThreshold),
           scheduleFrequency,
-          scheduleAnchorDate: scheduleAnchorDate || null,
           evaluationQuestions: normalizedQuestions,
           materials: normalizedMaterials,
           metrics: normalizedMetrics,
@@ -416,7 +555,6 @@ export function ManagerContinuousProgramEditor({ programId }: { programId: strin
         setTargetRiskTopic(payload.program.targetRiskTopic);
         setTriggerThreshold(payload.program.triggerThreshold);
         setScheduleFrequency(payload.program.scheduleFrequency);
-        setScheduleAnchorDate(payload.program.scheduleAnchorDate ?? "");
         setEvaluationQuestions(payload.program.evaluationQuestions);
         setMaterials(payload.program.materials);
         setMetrics(payload.program.metrics);
@@ -452,13 +590,22 @@ export function ManagerContinuousProgramEditor({ programId }: { programId: strin
             <h2 className="text-2xl font-semibold text-[#123447]">{t.title}</h2>
             <p className="mt-1 text-sm text-[#35515f]">{t.subtitle}</p>
           </div>
-          <button
-            type="button"
-            onClick={() => void loadProgram()}
-            className="rounded-full border border-[#9ec8db] px-4 py-2 text-xs font-semibold text-[#0f5b73]"
-          >
-            {t.reload}
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={openAssignModal}
+              className="rounded-full bg-[#0f5b73] px-4 py-2 text-xs font-semibold text-white"
+            >
+              {t.assignButton}
+            </button>
+            <button
+              type="button"
+              onClick={() => void loadProgram()}
+              className="rounded-full border border-[#9ec8db] px-4 py-2 text-xs font-semibold text-[#0f5b73]"
+            >
+              {t.reload}
+            </button>
+          </div>
         </div>
       </section>
 
@@ -525,16 +672,6 @@ export function ManagerContinuousProgramEditor({ programId }: { programId: strin
                 </option>
               ))}
             </select>
-          </label>
-
-          <label className="space-y-1">
-            <span className="text-sm font-medium text-[#214759]">{t.fieldAnchorDate}</span>
-            <input
-              type="date"
-              className="w-full rounded-lg border border-[#c9dce8] px-3 py-2 text-sm"
-              value={scheduleAnchorDate}
-              onChange={(event) => setScheduleAnchorDate(event.target.value)}
-            />
           </label>
         </div>
 
@@ -733,6 +870,113 @@ export function ManagerContinuousProgramEditor({ programId }: { programId: strin
         {notice ? <p className="text-sm text-[#1f6b3d]">{notice}</p> : null}
         {error ? <p className="text-sm text-red-600">{error}</p> : null}
       </section>
+
+      {isAssignModalOpen ? (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/35 p-4">
+          <div className="w-full max-w-2xl rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-xl">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h4 className="text-lg font-semibold text-[#123447]">{t.assignTitle}</h4>
+                <p className="text-sm text-[#4f6977]">{t.assignSubtitle}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsAssignModalOpen(false)}
+                className="rounded-full border border-[#c9dce8] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
+              >
+                {t.close}
+              </button>
+            </div>
+
+            {isLoadingAssignClients ? (
+              <p className="mt-4 text-sm text-[#4f6977]">{t.assignLoadingClients}</p>
+            ) : null}
+            {!isLoadingAssignClients && assignClients.length === 0 ? (
+              <p className="mt-4 text-sm text-[#5a7383]">{t.assignNoClients}</p>
+            ) : null}
+
+            {!isLoadingAssignClients && assignClients.length > 0 ? (
+              <div className="mt-4 grid gap-3 md:grid-cols-2">
+                <label className="text-xs text-[#4f6977] md:col-span-2">
+                  {t.assignCompany}
+                  <select
+                    className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
+                    value={assignClientId}
+                    onChange={(event) => setAssignClientId(event.target.value)}
+                  >
+                    {assignClients.map((client) => (
+                      <option key={client.id} value={client.id}>
+                        {client.companyName} | {client.cnpj}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="text-xs text-[#4f6977]">
+                  {t.assignStatus}
+                  <select
+                    className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
+                    value={assignStatus}
+                    onChange={(event) => setAssignStatus(event.target.value as AssignmentStatus)}
+                  >
+                    <option value="Recommended">Recommended</option>
+                    <option value="Active">Active</option>
+                    <option value="Completed">Completed</option>
+                  </select>
+                </label>
+
+                <label className="text-xs text-[#4f6977]">
+                  {t.assignDeployAt}
+                  <input
+                    type="datetime-local"
+                    className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
+                    value={assignDeployedAt}
+                    onChange={(event) => setAssignDeployedAt(event.target.value)}
+                  />
+                </label>
+
+                <label className="text-xs text-[#4f6977]">
+                  {t.assignFrequency}
+                  <select
+                    className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
+                    value={assignFrequency}
+                    onChange={(event) =>
+                      setAssignFrequency(event.target.value as ContinuousProgramScheduleFrequency)
+                    }
+                  >
+                    {CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCIES.map((frequency) => (
+                      <option key={`assign-frequency-${frequency}`} value={frequency}>
+                        {t.frequencies[frequency]}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+              </div>
+            ) : null}
+
+            {assignError ? <p className="mt-3 text-sm text-red-600">{assignError}</p> : null}
+
+            <div className="mt-4 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => void assignProgramToCompany()}
+                disabled={isAssigningProgram || isLoadingAssignClients || assignClients.length === 0}
+                className="rounded-full bg-[#0f5b73] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+              >
+                {isAssigningProgram ? t.assigning : t.assignConfirm}
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsAssignModalOpen(false)}
+                className="rounded-full border border-[#9ec8db] px-4 py-2 text-sm font-semibold text-[#0f5b73]"
+              >
+                {t.cancel}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

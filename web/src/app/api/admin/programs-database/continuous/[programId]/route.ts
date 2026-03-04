@@ -71,6 +71,10 @@ const PROGRAM_BASE_SELECT = "program_id,title,description,target_risk_topic,trig
 const PROGRAM_DETAILS_SELECT =
   "program_id,title,description,target_risk_topic,trigger_threshold,schedule_frequency,schedule_anchor_date,evaluation_questions,materials,metrics";
 
+function todayIsoDate(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
 function parseScheduleFrequency(value: unknown): ContinuousProgramScheduleFrequency {
   if (typeof value !== "string") {
     return DEFAULT_CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCY;
@@ -135,7 +139,7 @@ function mapProgram(row: PeriodicProgramRow, assignments: ReturnType<typeof summ
     scheduleAnchorDate:
       typeof row.schedule_anchor_date === "string" && row.schedule_anchor_date.length > 0
         ? row.schedule_anchor_date
-        : null,
+        : todayIsoDate(),
     evaluationQuestions: parseEvaluationQuestions(row.evaluation_questions),
     materials: parseMaterials(row.materials),
     metrics: parseMetrics(row.metrics),

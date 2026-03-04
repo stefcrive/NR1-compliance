@@ -21,9 +21,11 @@ type BuildSuggestedSlotsParams = {
   existingEvents: MasterCalendarEvent[];
   maxSlots?: number;
   durationMinutes?: number;
+  enforceCadenceSeries?: boolean;
 };
 
 const CANDIDATE_HOURS_UTC = [13, 17, 19] as const;
+export const DEFAULT_ASSIGNMENT_CADENCE_SLOT_COUNT = 4;
 
 function safeDate(value: string | null | undefined): Date | null {
   if (!value) return null;
@@ -43,6 +45,10 @@ function nextBusinessDayUTC(date: Date): Date {
     next.setUTCDate(next.getUTCDate() + 1);
   }
   return next;
+}
+
+function startOfUtcDay(date: Date): Date {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
 }
 
 function setUtcHour(date: Date, hour: number): Date {
@@ -108,19 +114,21 @@ export function slotOverlapsMasterCalendar(
 }
 
 export function buildSuggestedAvailabilitySlots({
-  deployedAt,
+  deployedAt: _deployedAt,
   scheduleFrequency,
   scheduleAnchorDate,
   existingEvents,
   maxSlots = 8,
   durationMinutes = 60,
+  enforceCadenceSeries = false,
 }: BuildSuggestedSlotsParams): AvailabilitySlot[] {
-  const deployed = safeDate(deployedAt) ?? new Date();
+  void _deployedAt;
   const now = new Date();
   const minStart = addDaysUTC(now, 1);
   const intervalDays = frequencyToDays(scheduleFrequency);
   const anchor =
-    safeDate(scheduleAnchorDate ? `${scheduleAnchorDate}T00:00:00.000Z` : null) ?? deployed;
+    safeDate(scheduleAnchorDate ? `${scheduleAnchorDate}T00:00:00.000Z` : null) ??
+    startOfUtcDay(now);
   const slotDurationMs = durationMinutes * 60 * 1000;
   const slots: AvailabilitySlot[] = [];
   const seen = new Set<string>();
@@ -137,8 +145,12 @@ export function buildSuggestedAvailabilitySlots({
       if (slotOverlapsMasterCalendar(candidate, existingEvents)) continue;
       seen.add(key);
       slots.push(candidate);
-      if (slots.length >= maxSlots) break;
+      if (slots.length >= maxSlots || enforceCadenceSeries) break;
     }
+  }
+
+  if (enforceCadenceSeries) {
+    return slots;
   }
 
   for (let dayOffset = 0; dayOffset < 120 && slots.length < maxSlots; dayOffset += 1) {

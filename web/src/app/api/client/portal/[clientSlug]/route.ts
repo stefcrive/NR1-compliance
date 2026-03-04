@@ -6,6 +6,11 @@ import {
   mergeAndSortMasterCalendarEvents,
   type MasterCalendarEvent,
 } from "@/lib/master-calendar";
+import {
+  DEFAULT_CONTINUOUS_PROGRAM_QUESTIONS,
+  DEFAULT_CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCY,
+  type ContinuousProgramMaterial,
+} from "@/lib/continuous-programs";
 import { classifyScore, resolveRisk } from "@/lib/risk";
 import { slugify } from "@/lib/slug";
 import { isMissingColumnError, isMissingTableError } from "@/lib/supabase-errors";
@@ -124,6 +129,8 @@ type ProgramRow = {
   trigger_threshold: number | string;
   schedule_frequency?: string | null;
   schedule_anchor_date?: string | null;
+  evaluation_questions?: unknown;
+  materials?: unknown;
 };
 
 type AvailabilityRequestRow = {
@@ -141,6 +148,73 @@ type AvailabilitySlot = {
   startsAt: string;
   endsAt: string;
 };
+
+function parseScheduleFrequency(value: unknown): string {
+  if (typeof value !== "string") return DEFAULT_CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCY;
+  const normalized = value.trim().toLowerCase();
+  return normalized.length > 0 ? normalized : DEFAULT_CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCY;
+}
+
+function parseIsoDate(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(normalized)) return null;
+  return normalized;
+}
+
+function parseEvaluationQuestions(value: unknown): string[] {
+  if (!Array.isArray(value)) return DEFAULT_CONTINUOUS_PROGRAM_QUESTIONS;
+  const normalized = value
+    .map((item) => (typeof item === "string" ? item.trim() : ""))
+    .filter((item) => item.length > 0)
+    .slice(0, 20);
+  return normalized.length > 0 ? normalized : DEFAULT_CONTINUOUS_PROGRAM_QUESTIONS;
+}
+
+function parseMaterials(value: unknown): ContinuousProgramMaterial[] {
+  if (!Array.isArray(value)) return [];
+  const materials: ContinuousProgramMaterial[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const record = item as Record<string, unknown>;
+    const id = typeof record.id === "string" ? record.id.trim() : "";
+    const title = typeof record.title === "string" ? record.title.trim() : "";
+    const fileName = typeof record.fileName === "string" ? record.fileName.trim() : "";
+    const mimeType = typeof record.mimeType === "string" ? record.mimeType.trim() : "";
+    const uploadedAt = typeof record.uploadedAt === "string" ? record.uploadedAt : "";
+    const storagePath = typeof record.storagePath === "string" ? record.storagePath.trim() : "";
+    const downloadUrl = typeof record.downloadUrl === "string" ? record.downloadUrl.trim() : "";
+    const sizeBytes = typeof record.sizeBytes === "number" ? record.sizeBytes : Number(record.sizeBytes ?? NaN);
+    if (
+      id.length === 0 ||
+      title.length === 0 ||
+      fileName.length === 0 ||
+      mimeType.length === 0 ||
+      !Number.isFinite(sizeBytes) ||
+      sizeBytes < 0 ||
+      uploadedAt.length === 0 ||
+      storagePath.length === 0 ||
+      downloadUrl.length === 0
+    ) {
+      continue;
+    }
+    materials.push({
+      id,
+      title,
+      fileName,
+      mimeType,
+      sizeBytes,
+      uploadedAt,
+      storagePath,
+      downloadUrl,
+    });
+  }
+  return materials;
+}
+
+function todayIsoDate(): string {
+  return new Date().toISOString().slice(0, 10);
+}
 
 function normalizeTopic(row: TopicAggregateRow) {
   const meanProbability = row.mean_probability ?? row.mean_severity;
@@ -189,10 +263,12 @@ function mapAssignedProgram(
   programById: Map<string, ProgramRow>,
 ) {
   const program = programById.get(assignment.program_id) ?? null;
-  const scheduleFrequency =
-    assignment.schedule_frequency_override ?? program?.schedule_frequency ?? "monthly";
+  const scheduleFrequency = parseScheduleFrequency(
+    assignment.schedule_frequency_override ?? program?.schedule_frequency,
+  );
   const scheduleAnchorDate =
-    assignment.schedule_anchor_date_override ?? program?.schedule_anchor_date ?? null;
+    parseIsoDate(assignment.schedule_anchor_date_override ?? program?.schedule_anchor_date) ??
+    todayIsoDate();
   return {
     id: assignment.client_program_id,
     programId: assignment.program_id,
@@ -204,6 +280,8 @@ function mapAssignedProgram(
     triggerThreshold: program ? Number(program.trigger_threshold) : null,
     scheduleFrequency,
     scheduleAnchorDate,
+    evaluationQuestions: parseEvaluationQuestions(program?.evaluation_questions),
+    materials: parseMaterials(program?.materials),
   };
 }
 
@@ -386,34 +464,42 @@ export async function GET(
 
   let programRows: ProgramRow[] = [];
   if (programIds.length > 0) {
-    const withSchedule = await supabase
+    const withDetails = await supabase
       .from("periodic_programs")
       .select(
-        "program_id,title,description,target_risk_topic,trigger_threshold,schedule_frequency,schedule_anchor_date",
+        "program_id,title,description,target_risk_topic,trigger_threshold,schedule_frequency,schedule_anchor_date,evaluation_questions,materials",
       )
       .in("program_id", programIds)
       .returns<ProgramRow[]>();
 
-    if (
-      withSchedule.error &&
-      isMissingColumnError(withSchedule.error, "schedule_frequency")
-    ) {
-      const fallback = await supabase
+    if (withDetails.error && isMissingColumnError(withDetails.error)) {
+      const withSchedule = await supabase
         .from("periodic_programs")
-        .select("program_id,title,description,target_risk_topic,trigger_threshold")
+        .select(
+          "program_id,title,description,target_risk_topic,trigger_threshold,schedule_frequency,schedule_anchor_date",
+        )
         .in("program_id", programIds)
         .returns<ProgramRow[]>();
-      if (fallback.error && !isMissingTableError(fallback.error, "periodic_programs")) {
+
+      if (withSchedule.error && isMissingColumnError(withSchedule.error, "schedule_frequency")) {
+        const fallback = await supabase
+          .from("periodic_programs")
+          .select("program_id,title,description,target_risk_topic,trigger_threshold")
+          .in("program_id", programIds)
+          .returns<ProgramRow[]>();
+        if (fallback.error && !isMissingTableError(fallback.error, "periodic_programs")) {
+          return NextResponse.json({ error: "Could not load assigned programs." }, { status: 500 });
+        }
+        programRows = fallback.data ?? [];
+      } else if (withSchedule.error && !isMissingTableError(withSchedule.error, "periodic_programs")) {
         return NextResponse.json({ error: "Could not load assigned programs." }, { status: 500 });
+      } else {
+        programRows = withSchedule.data ?? [];
       }
-      programRows = fallback.data ?? [];
-    } else if (
-      withSchedule.error &&
-      !isMissingTableError(withSchedule.error, "periodic_programs")
-    ) {
+    } else if (withDetails.error && !isMissingTableError(withDetails.error, "periodic_programs")) {
       return NextResponse.json({ error: "Could not load assigned programs." }, { status: 500 });
     } else {
-      programRows = withSchedule.data ?? [];
+      programRows = withDetails.data ?? [];
     }
   }
 

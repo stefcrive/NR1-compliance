@@ -65,6 +65,10 @@ const PROGRAM_BASE_SELECT = "program_id,title,description,target_risk_topic,trig
 const PROGRAM_DETAILS_SELECT =
   "program_id,title,description,target_risk_topic,trigger_threshold,schedule_frequency,schedule_anchor_date,evaluation_questions,materials,metrics";
 
+function todayIsoDate(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
 function parseScheduleFrequency(value: unknown): ContinuousProgramScheduleFrequency {
   if (typeof value !== "string") return DEFAULT_CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCY;
   const parsed = scheduleFrequencySchema.safeParse(value.toLowerCase());
@@ -103,7 +107,7 @@ function mapProgram(row: PeriodicProgramRow) {
     scheduleAnchorDate:
       typeof row.schedule_anchor_date === "string" && row.schedule_anchor_date.length > 0
         ? row.schedule_anchor_date
-        : null,
+        : todayIsoDate(),
     evaluationQuestions: parseEvaluationQuestions(row.evaluation_questions),
     materials: parseMaterials(row.materials),
     metrics: parseMetrics(row.metrics),
@@ -130,7 +134,7 @@ export async function POST(request: NextRequest) {
     target_risk_topic: parsed.targetRiskTopic,
     trigger_threshold: Number(parsed.triggerThreshold.toFixed(2)),
     schedule_frequency: parsed.scheduleFrequency ?? DEFAULT_CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCY,
-    schedule_anchor_date: parsed.scheduleAnchorDate ?? null,
+    schedule_anchor_date: parsed.scheduleAnchorDate ?? todayIsoDate(),
     evaluation_questions: parsed.evaluationQuestions ?? DEFAULT_CONTINUOUS_PROGRAM_QUESTIONS,
     materials: parsed.materials ?? [],
     metrics: parsed.metrics ?? DEFAULT_CONTINUOUS_PROGRAM_METRICS,

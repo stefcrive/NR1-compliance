@@ -92,7 +92,6 @@ type Snapshot = {
   status: AssignmentStatus;
   deployedAt: string;
   scheduleFrequency: ContinuousProgramScheduleFrequency;
-  scheduleAnchorDate: string;
   provisorySlots: AvailabilitySlot[];
   evaluationQuestions: string[];
   materials: ContinuousProgramMaterial[];
@@ -126,11 +125,6 @@ function fromDatetimeLocal(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "";
   return date.toISOString();
-}
-
-function toDateInput(value: string | null | undefined) {
-  if (!value) return "";
-  return value.slice(0, 10);
 }
 
 function formatFileSize(sizeBytes: number) {
@@ -193,7 +187,6 @@ export function ManagerAssignedContinuousProgram({
   const [scheduleFrequency, setScheduleFrequency] = useState<ContinuousProgramScheduleFrequency>(
     DEFAULT_CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCY,
   );
-  const [scheduleAnchorDate, setScheduleAnchorDate] = useState("");
   const [provisorySlots, setProvisorySlots] = useState<AvailabilitySlot[]>([]);
   const [materials, setMaterials] = useState<ContinuousProgramMaterial[]>([]);
   const [evaluationQuestions, setEvaluationQuestions] = useState<string[]>(
@@ -219,7 +212,6 @@ export function ManagerAssignedContinuousProgram({
       baseline.status !== status ||
       baseline.deployedAt !== deployedAt ||
       baseline.scheduleFrequency !== scheduleFrequency ||
-      baseline.scheduleAnchorDate !== scheduleAnchorDate ||
       JSON.stringify(baseline.provisorySlots) !== JSON.stringify(normalizeSlots(provisorySlots));
 
     const templateChanged =
@@ -236,7 +228,6 @@ export function ManagerAssignedContinuousProgram({
     status,
     deployedAt,
     scheduleFrequency,
-    scheduleAnchorDate,
     provisorySlots,
     evaluationQuestions,
     materials,
@@ -254,7 +245,6 @@ export function ManagerAssignedContinuousProgram({
     const nextStatus = loadedAssignment.status;
     const nextDeployedAt = toDatetimeLocal(loadedAssignment.deployedAt);
     const nextFrequency = toFrequency(loadedAssignment.scheduleFrequency);
-    const nextAnchorDate = toDateInput(loadedAssignment.scheduleAnchorDate ?? null);
     const nextSlots = normalizeSlots(
       loadedAssignment.calendarProvisorySlots ?? loadedAssignment.cadenceSuggestedSlots ?? [],
     );
@@ -264,7 +254,6 @@ export function ManagerAssignedContinuousProgram({
     setStatus(nextStatus);
     setDeployedAt(nextDeployedAt);
     setScheduleFrequency(nextFrequency);
-    setScheduleAnchorDate(nextAnchorDate);
     setProvisorySlots(nextSlots);
     setMaterials(nextMaterials);
     setEvaluationQuestions(nextQuestions);
@@ -272,7 +261,6 @@ export function ManagerAssignedContinuousProgram({
       status: nextStatus,
       deployedAt: nextDeployedAt,
       scheduleFrequency: nextFrequency,
-      scheduleAnchorDate: nextAnchorDate,
       provisorySlots: nextSlots,
       materials: nextMaterials,
       evaluationQuestions: nextQuestions,
@@ -337,51 +325,6 @@ export function ManagerAssignedContinuousProgram({
   useEffect(() => {
     void loadData();
   }, [loadData]);
-
-  function addProvisorySlot() {
-    const now = new Date();
-    now.setMinutes(0, 0, 0);
-    const start = now.toISOString();
-    const end = new Date(now.getTime() + 60 * 60 * 1000).toISOString();
-    setProvisorySlots((previous) => [...previous, { startsAt: start, endsAt: end }]);
-  }
-
-  function updateProvisoryMarkedAt(index: number, value: string) {
-    const startsAt = fromDatetimeLocal(value);
-    if (!startsAt) return;
-    setProvisorySlots((previous) =>
-      previous.map((slot, slotIndex) => {
-        if (slotIndex !== index) return slot;
-        const durationMinutes = durationMinutesFromRange(slot.startsAt, slot.endsAt, 60);
-        const startDate = new Date(startsAt);
-        return {
-          startsAt,
-          endsAt: new Date(startDate.getTime() + durationMinutes * 60 * 1000).toISOString(),
-        };
-      }),
-    );
-  }
-
-  function updateProvisoryDurationMinutes(index: number, value: string) {
-    const parsed = Number.parseInt(value, 10);
-    if (!Number.isFinite(parsed)) return;
-    const nextDurationMinutes = Math.max(15, parsed);
-    setProvisorySlots((previous) =>
-      previous.map((slot, slotIndex) => {
-        if (slotIndex !== index) return slot;
-        const startDate = new Date(slot.startsAt);
-        if (Number.isNaN(startDate.getTime())) return slot;
-        return {
-          startsAt: slot.startsAt,
-          endsAt: new Date(startDate.getTime() + nextDurationMinutes * 60 * 1000).toISOString(),
-        };
-      }),
-    );
-  }
-
-  function removeProvisorySlot(index: number) {
-    setProvisorySlots((previous) => previous.filter((_, slotIndex) => slotIndex !== index));
-  }
 
   async function uploadMaterials(files: FileList | null) {
     if (!files || files.length === 0 || !assignment) return;
@@ -465,7 +408,6 @@ export function ManagerAssignedContinuousProgram({
         targetRiskTopic: sourceTemplate.targetRiskTopic,
         triggerThreshold: sourceTemplate.triggerThreshold,
         scheduleFrequency,
-        scheduleAnchorDate: scheduleAnchorDate || null,
         evaluationQuestions: sourceQuestions,
         materials: sourceMaterials,
         metrics: sourceTemplate.metrics ?? DEFAULT_CONTINUOUS_PROGRAM_METRICS,
@@ -502,7 +444,6 @@ export function ManagerAssignedContinuousProgram({
     }
 
     const normalizedMaterials = normalizeMaterials(materials);
-    const normalizedProvisorySlots = normalizeSlots(provisorySlots);
 
     setIsSaving(true);
     setError("");
@@ -515,20 +456,14 @@ export function ManagerAssignedContinuousProgram({
         const assignmentPayload: {
           status: AssignmentStatus;
           deployedAt: string;
-          provisorySlots: AvailabilitySlot[];
           scheduleFrequency?: ContinuousProgramScheduleFrequency;
-          scheduleAnchorDate?: string;
         } = {
           status,
           deployedAt: deployedAtIso,
-          provisorySlots: normalizedProvisorySlots,
         };
 
         if (!baseline || baseline.scheduleFrequency !== scheduleFrequency) {
           assignmentPayload.scheduleFrequency = scheduleFrequency;
-        }
-        if (!baseline || baseline.scheduleAnchorDate !== scheduleAnchorDate) {
-          assignmentPayload.scheduleAnchorDate = scheduleAnchorDate || "";
         }
 
         const response = await fetch(`/api/admin/clients/${clientId}/programs/${assignment.id}`, {
@@ -674,15 +609,6 @@ export function ManagerAssignedContinuousProgram({
               ))}
             </select>
           </label>
-          <label className="space-y-1">
-            <span className="text-sm font-medium text-[#214759]">Data ancora</span>
-            <input
-              type="date"
-              className="w-full rounded-lg border border-[#c9dce8] px-3 py-2 text-sm"
-              value={scheduleAnchorDate}
-              onChange={(event) => setScheduleAnchorDate(event.target.value)}
-            />
-          </label>
         </div>
         <p className="text-sm text-[#365668]">
           Topico alvo {template.targetRiskTopic} | Gatilho {template.triggerThreshold.toFixed(2)}
@@ -691,14 +617,7 @@ export function ManagerAssignedContinuousProgram({
 
       <section className="space-y-3 rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
         <div className="flex items-center justify-between gap-3">
-          <h3 className="text-lg font-semibold text-[#123447]">Chronograma (marcos)</h3>
-          <button
-            type="button"
-            onClick={addProvisorySlot}
-            className="rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
-          >
-            Adicionar marco
-          </button>
+          <h3 className="text-lg font-semibold text-[#123447]">Chronograma (4 proximos eventos)</h3>
         </div>
         {sortedCommittedSlots.length > 0 ? (
           <div className="rounded-xl border border-[#d8e4ee] bg-[#f8fbfd] p-3">
@@ -735,22 +654,14 @@ export function ManagerAssignedContinuousProgram({
             provisorySlots.map((slot, index) => (
               <div
                 key={`slot-${slot.startsAt}-${index}`}
-                className="grid gap-2 rounded-lg border border-[#d7e6ee] bg-[#f8fbfd] p-2 md:grid-cols-[1fr_180px_auto_auto]"
+                className="grid gap-2 rounded-lg border border-[#d7e6ee] bg-[#f8fbfd] p-2 md:grid-cols-[1fr_180px_auto]"
               >
-                <input
-                  type="datetime-local"
-                  className="rounded border border-[#c9dce8] px-3 py-2 text-xs"
-                  value={toDatetimeLocal(slot.startsAt)}
-                  onChange={(event) => updateProvisoryMarkedAt(index, event.target.value)}
-                />
-                <input
-                  type="number"
-                  min={15}
-                  step={15}
-                  className="rounded border border-[#c9dce8] px-3 py-2 text-xs"
-                  value={String(durationMinutesFromRange(slot.startsAt, slot.endsAt, 60))}
-                  onChange={(event) => updateProvisoryDurationMinutes(index, event.target.value)}
-                />
+                <p className="rounded border border-[#c9dce8] bg-white px-3 py-2 text-xs text-[#123447]">
+                  {fmtDateTime(slot.startsAt)}
+                </p>
+                <p className="rounded border border-[#c9dce8] bg-white px-3 py-2 text-xs text-[#123447]">
+                  {durationMinutesFromRange(slot.startsAt, slot.endsAt, 60)} min
+                </p>
                 <Link
                   href={{
                     pathname: "/manager/calendar",
@@ -760,13 +671,6 @@ export function ManagerAssignedContinuousProgram({
                 >
                   Ver no calendario
                 </Link>
-                <button
-                  type="button"
-                  onClick={() => removeProvisorySlot(index)}
-                  className="rounded-full border border-[#f0b6b6] px-3 py-1 text-xs font-semibold text-[#8a2d2d]"
-                >
-                  Remover
-                </button>
               </div>
             ))
           )}

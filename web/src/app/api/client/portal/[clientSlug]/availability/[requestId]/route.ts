@@ -5,8 +5,10 @@ import { z } from "zod";
 
 import {
   buildSuggestedAvailabilitySlots,
+  DEFAULT_ASSIGNMENT_CADENCE_SLOT_COUNT,
   slotOverlapsMasterCalendar,
 } from "@/lib/availability-scheduler";
+import { DEFAULT_CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCY } from "@/lib/continuous-programs";
 import { createManagerNotification } from "@/lib/manager-notifications";
 import {
   buildDrpsCalendarEvents,
@@ -54,6 +56,10 @@ type AvailabilitySlot = {
   startsAt: string;
   endsAt: string;
 };
+
+function todayIsoDate(): string {
+  return new Date().toISOString().slice(0, 10);
+}
 
 const submitAvailabilitySchema = z.object({
   selectedSlots: z.array(z.string().datetime()).min(1),
@@ -186,14 +192,10 @@ export async function POST(
     suggestedSlots = buildSuggestedAvailabilitySlots({
       deployedAt: assignment.deployed_at ?? new Date().toISOString(),
       scheduleFrequency:
-        assignment.schedule_frequency_override ??
-        programResult.data?.schedule_frequency ??
-        null,
-      scheduleAnchorDate:
-        assignment.schedule_anchor_date_override ??
-        programResult.data?.schedule_anchor_date ??
-        null,
+        assignment.schedule_frequency_override ?? DEFAULT_CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCY,
+      scheduleAnchorDate: todayIsoDate(),
       existingEvents: events,
+      maxSlots: DEFAULT_ASSIGNMENT_CADENCE_SLOT_COUNT,
     });
   }
 

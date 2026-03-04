@@ -5,10 +5,12 @@ import { z } from "zod";
 
 import {
   buildSuggestedAvailabilitySlots,
+  DEFAULT_ASSIGNMENT_CADENCE_SLOT_COUNT,
   slotOverlapsMasterCalendar,
   type AvailabilitySlot,
 } from "@/lib/availability-scheduler";
 import { isAdminApiAuthorized } from "@/lib/admin-auth";
+import { DEFAULT_CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCY } from "@/lib/continuous-programs";
 import {
   buildDrpsCalendarEvents,
   extractCalendarEventDetails,
@@ -58,6 +60,10 @@ const cadenceFrequencyValues = [
   "annual",
   "custom",
 ] as const;
+
+function todayIsoDate(): string {
+  return new Date().toISOString().slice(0, 10);
+}
 
 const slotSchema = z
   .object({
@@ -124,12 +130,11 @@ async function loadManagerMasterCalendarEvents() {
   return mergeAndSortMasterCalendarEvents(drpsEvents, stored.events);
 }
 
-function resolveCadence(assignment: ClientProgramRow, program: ProgramRow) {
+function resolveCadence(assignment: ClientProgramRow) {
   return {
     scheduleFrequency:
-      assignment.schedule_frequency_override ?? program.schedule_frequency ?? "monthly",
-    scheduleAnchorDate:
-      assignment.schedule_anchor_date_override ?? program.schedule_anchor_date ?? null,
+      assignment.schedule_frequency_override ?? DEFAULT_CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCY,
+    scheduleAnchorDate: todayIsoDate(),
   };
 }
 
@@ -332,14 +337,6 @@ export async function PATCH(
     ...(parsed.scheduleFrequency !== undefined
       ? { schedule_frequency_override: parsed.scheduleFrequency }
       : {}),
-    ...(parsed.scheduleAnchorDate !== undefined
-      ? {
-          schedule_anchor_date_override:
-            parsed.scheduleAnchorDate && parsed.scheduleAnchorDate.length > 0
-              ? parsed.scheduleAnchorDate
-              : null,
-        }
-      : {}),
   };
 
   const supabase = getSupabaseAdminClient();
@@ -433,20 +430,20 @@ export async function PATCH(
     return NextResponse.json({ error: "Program not found." }, { status: 404 });
   }
 
-  const cadence = resolveCadence(assignment, programResult.data);
+  const cadence = resolveCadence(assignment);
 
   const shouldRefreshProvisorySlots =
+    parsed.status !== undefined ||
     parsed.provisorySlots !== undefined ||
     parsed.deployedAt !== undefined ||
-    parsed.scheduleFrequency !== undefined ||
-    parsed.scheduleAnchorDate !== undefined;
+    parsed.scheduleFrequency !== undefined;
 
   let provisorySlots: AvailabilitySlot[] = [];
   if (shouldRefreshProvisorySlots) {
     let desiredSlots: AvailabilitySlot[] = [];
 
-    if (parsed.provisorySlots) {
-      desiredSlots = normalizeSlots(parsed.provisorySlots);
+    if (assignment.status !== "Active") {
+      desiredSlots = [];
     } else {
       const masterEvents = await loadManagerMasterCalendarEvents();
       desiredSlots = buildSuggestedAvailabilitySlots({
@@ -454,6 +451,8 @@ export async function PATCH(
         scheduleFrequency: cadence.scheduleFrequency,
         scheduleAnchorDate: cadence.scheduleAnchorDate,
         existingEvents: masterEvents.filter((event) => event.sourceClientProgramId !== assignment.client_program_id),
+        maxSlots: DEFAULT_ASSIGNMENT_CADENCE_SLOT_COUNT,
+        enforceCadenceSeries: true,
       });
     }
 

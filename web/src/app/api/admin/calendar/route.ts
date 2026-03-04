@@ -96,6 +96,10 @@ const updateCalendarEventSchema = z
     path: ["eventId"],
   });
 
+const deleteCalendarEventSchema = z.object({
+  eventId: z.string().uuid(),
+});
+
 function normalizeMetadata(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return {};
@@ -715,4 +719,58 @@ export async function PATCH(request: NextRequest) {
       details: extractCalendarEventDetails(finalEvent.metadata),
     },
   });
+}
+
+export async function DELETE(request: NextRequest) {
+  if (!isAdminApiAuthorized(request)) {
+    return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
+  }
+
+  let parsed: z.infer<typeof deleteCalendarEventSchema>;
+  try {
+    parsed = deleteCalendarEventSchema.parse(await request.json());
+  } catch {
+    return NextResponse.json({ error: "Invalid payload." }, { status: 400 });
+  }
+
+  const supabase = getSupabaseAdminClient();
+  const currentResult = await supabase
+    .from("calendar_events")
+    .select("event_id,event_type")
+    .eq("event_id", parsed.eventId)
+    .maybeSingle<Pick<EditableCalendarEventRow, "event_id" | "event_type">>();
+
+  if (currentResult.error) {
+    if (isMissingTableError(currentResult.error, "calendar_events")) {
+      return NextResponse.json(
+        {
+          error:
+            "Master calendar table unavailable. Apply migration 20260302220000_master_calendar_availability.sql.",
+        },
+        { status: 412 },
+      );
+    }
+    return NextResponse.json({ error: "Could not load calendar event." }, { status: 500 });
+  }
+
+  if (!currentResult.data) {
+    return NextResponse.json({ error: "Calendar event not found." }, { status: 404 });
+  }
+
+  if (
+    currentResult.data.event_type !== "blocked" &&
+    currentResult.data.event_type !== "continuous_meeting"
+  ) {
+    return NextResponse.json({ error: "Only managed events can be deleted." }, { status: 409 });
+  }
+
+  const deleteResult = await supabase
+    .from("calendar_events")
+    .delete()
+    .eq("event_id", parsed.eventId);
+  if (deleteResult.error) {
+    return NextResponse.json({ error: "Could not delete calendar event." }, { status: 500 });
+  }
+
+  return NextResponse.json({ deletedEventId: parsed.eventId });
 }

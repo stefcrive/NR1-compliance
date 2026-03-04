@@ -10,6 +10,7 @@ type Tab = "clients" | "calendar";
 type ClientStatusFilter = "all" | ClientStatus;
 type BillingFilter = "all" | BillingStatus;
 type ClientListView = "cards" | "table";
+type CalendarView = "day" | "week" | "month";
 
 type Client = {
   id: string;
@@ -71,6 +72,8 @@ const WEEK_LABELS = {
   en: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
   pt: ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sab"],
 } as const;
+const MAX_EVENTS_PER_DAY = 5;
+const UNLINKED_CLIENT_FILTER = "__unlinked__";
 
 const COPY = {
   en: {
@@ -108,8 +111,17 @@ const COPY = {
     calendarLegendLabel: "Legend",
     calendarLegendProvisory: "Provisory meeting",
     calendarLegendCommitted: "Committed meeting",
-    prevMonth: "Previous month",
-    nextMonth: "Next month",
+    calendarViewLabel: "View",
+    calendarViewDay: "Day",
+    calendarViewWeek: "Week",
+    calendarViewMonth: "Month",
+    calendarClientFilterLabel: "Client",
+    calendarClientAll: "All clients",
+    calendarClientUnlinked: "Unlinked",
+    calendarSearchPlaceholder: "Search calendar events",
+    prevPeriod: "Previous",
+    nextPeriod: "Next",
+    noCalendarEventsForFilters: "No events for the current calendar filters.",
     liveDrps: "Active DRPS diagnostics",
     liveContinuous: "Active continuous programs",
     noActiveCampaigns: "No active DRPS diagnostics.",
@@ -182,6 +194,11 @@ const COPY = {
     eventProposalReschedule: "Reschedule request",
     eventCommitReschedule: "Confirm reschedule",
     eventCommitRescheduleError: "Could not confirm reschedule.",
+    eventDeleteAction: "Delete event",
+    eventDeleting: "Deleting...",
+    eventDeleteConfirm: "Delete this calendar event?",
+    eventDeleteError: "Could not delete event.",
+    eventMoreCount: "more",
   },
   pt: {
     title: "Area do gestor",
@@ -218,8 +235,17 @@ const COPY = {
     calendarLegendLabel: "Legenda",
     calendarLegendProvisory: "Reuniao provisoria",
     calendarLegendCommitted: "Reuniao commitada",
-    prevMonth: "Mes anterior",
-    nextMonth: "Proximo",
+    calendarViewLabel: "Visualizacao",
+    calendarViewDay: "Dia",
+    calendarViewWeek: "Semana",
+    calendarViewMonth: "Mes",
+    calendarClientFilterLabel: "Cliente",
+    calendarClientAll: "Todos os clientes",
+    calendarClientUnlinked: "Sem vinculo",
+    calendarSearchPlaceholder: "Buscar eventos no calendario",
+    prevPeriod: "Anterior",
+    nextPeriod: "Proximo",
+    noCalendarEventsForFilters: "Nenhum evento para os filtros atuais do calendario.",
     liveDrps: "Diagnosticos DRPS ativos",
     liveContinuous: "Programas continuos ativos",
     noActiveCampaigns: "Nenhum diagnostico DRPS ativo.",
@@ -292,6 +318,11 @@ const COPY = {
     eventProposalReschedule: "Pedido de reagendamento",
     eventCommitReschedule: "Confirmar reagendamento",
     eventCommitRescheduleError: "Nao foi possivel confirmar o reagendamento.",
+    eventDeleteAction: "Excluir evento",
+    eventDeleting: "Excluindo...",
+    eventDeleteConfirm: "Excluir este evento do calendario?",
+    eventDeleteError: "Nao foi possivel excluir o evento.",
+    eventMoreCount: "a mais",
   },
 } as const;
 
@@ -303,6 +334,12 @@ function toDate(value: string, locale: ManagerLocale) {
   return new Intl.DateTimeFormat(uiLocale(locale), { dateStyle: "short", timeStyle: "short" }).format(
     new Date(value),
   );
+}
+
+function toTime(value: string, locale: ManagerLocale) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "--:--";
+  return new Intl.DateTimeFormat(uiLocale(locale), { hour: "2-digit", minute: "2-digit" }).format(date);
 }
 
 function toDatetimeLocal(value: Date) {
@@ -337,6 +374,35 @@ function dayKey(date: Date) {
 
 function monthLabel(date: Date, locale: ManagerLocale) {
   return new Intl.DateTimeFormat(uiLocale(locale), { month: "long", year: "numeric" }).format(date);
+}
+
+function startOfDay(date: Date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+function startOfWeek(date: Date) {
+  const value = startOfDay(date);
+  value.setDate(value.getDate() - value.getDay());
+  return value;
+}
+
+function addDays(date: Date, days: number) {
+  const value = new Date(date);
+  value.setDate(value.getDate() + days);
+  return value;
+}
+
+function dayLabel(date: Date, locale: ManagerLocale) {
+  return new Intl.DateTimeFormat(uiLocale(locale), {
+    weekday: "long",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  }).format(date);
+}
+
+function shortDateLabel(date: Date, locale: ManagerLocale) {
+  return new Intl.DateTimeFormat(uiLocale(locale), { month: "short", day: "numeric" }).format(date);
 }
 
 function extractCampaignIdFromCalendarEvent(event: MasterCalendarEvent) {
@@ -402,10 +468,8 @@ export function ManagerWorkspace({
   const { locale } = useManagerLocale();
   const t = COPY[locale];
   const [tab, setTab] = useState<Tab>(initialTab);
-  const [month, setMonth] = useState(() => {
-    const now = new Date();
-    return new Date(now.getFullYear(), now.getMonth(), 1);
-  });
+  const [calendarView, setCalendarView] = useState<CalendarView>("month");
+  const [calendarCursorDate, setCalendarCursorDate] = useState(() => startOfDay(new Date()));
   const [clients, setClients] = useState<Client[]>([]);
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [calendarEvents, setCalendarEvents] = useState<MasterCalendarEvent[]>([]);
@@ -417,6 +481,8 @@ export function ManagerWorkspace({
   const [clientStatusFilter, setClientStatusFilter] = useState<ClientStatusFilter>("all");
   const [billingFilter, setBillingFilter] = useState<BillingFilter>("all");
   const [clientListView, setClientListView] = useState<ClientListView>("cards");
+  const [calendarClientFilter, setCalendarClientFilter] = useState("all");
+  const [calendarSearchQuery, setCalendarSearchQuery] = useState("");
   const [blockClientId, setBlockClientId] = useState("");
   const [blockTitle, setBlockTitle] = useState("Bloqueio operacional");
   const [blockStartsAt, setBlockStartsAt] = useState(() => toDatetimeLocal(new Date(Date.now() + 24 * 60 * 60 * 1000)));
@@ -431,6 +497,7 @@ export function ManagerWorkspace({
   const [eventEditContent, setEventEditContent] = useState("");
   const [eventEditPreparation, setEventEditPreparation] = useState("");
   const [isSavingEventEdit, setIsSavingEventEdit] = useState(false);
+  const [deletingEventId, setDeletingEventId] = useState<string | null>(null);
   const [eventEditFeedback, setEventEditFeedback] = useState("");
   const [draggingEventId, setDraggingEventId] = useState<string | null>(null);
 
@@ -706,6 +773,46 @@ export function ManagerWorkspace({
     updateCalendarEvent,
   ]);
 
+  const deleteCalendarEvent = useCallback(
+    async (event: MasterCalendarEvent) => {
+      if (!isEditableCalendarEvent(event)) return;
+      if (!window.confirm(t.eventDeleteConfirm)) return;
+      setDeletingEventId(event.id);
+      setEventEditFeedback("");
+      try {
+        const response = await fetch("/api/admin/calendar", {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ eventId: event.id }),
+        });
+        const body = (await response.json().catch(() => ({}))) as {
+          error?: string;
+          deletedEventId?: string;
+        };
+        if (!response.ok || !body.deletedEventId) {
+          throw new Error(body.error ?? t.eventDeleteError);
+        }
+        setCalendarEvents((previous) => previous.filter((item) => item.id !== body.deletedEventId));
+        setEventEditFeedback("");
+      } catch (deleteError) {
+        const message = deleteError instanceof Error ? deleteError.message : t.eventDeleteError;
+        if (selectedCalendarEventId === event.id) {
+          setEventEditFeedback(message);
+        } else {
+          setError(message);
+        }
+      } finally {
+        setDeletingEventId((current) => (current === event.id ? null : current));
+      }
+    },
+    [
+      isEditableCalendarEvent,
+      selectedCalendarEventId,
+      t.eventDeleteConfirm,
+      t.eventDeleteError,
+    ],
+  );
+
   const commitSelectedReschedule = useCallback(async () => {
     if (
       !selectedCalendarEvent ||
@@ -890,19 +997,46 @@ export function ManagerWorkspace({
     t.eventOpenProgramDetails,
   ]);
 
+  const filteredCalendarEvents = useMemo(() => {
+    const query = calendarSearchQuery.trim().toLowerCase();
+    return isolatedCalendarEvents.filter((event) => {
+      const byClient =
+        calendarClientFilter === "all"
+          ? true
+          : calendarClientFilter === UNLINKED_CLIENT_FILTER
+            ? !event.clientId
+            : event.clientId === calendarClientFilter;
+      if (!byClient) return false;
+      if (!query) return true;
+      const haystack = [
+        event.title,
+        event.clientName ?? "",
+        event.details.content ?? "",
+        event.details.preparationRequired ?? "",
+      ]
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(query);
+    });
+  }, [calendarClientFilter, calendarSearchQuery, isolatedCalendarEvents]);
+
   const events = useMemo(() => {
     const list: Array<{
       key: string;
       id: string;
       title: string;
       type: "start" | "close" | "meeting" | "blocked";
-      label: string;
+      startsAtMs: number;
+      timeLabel: string;
+      companyLabel: string;
+      typeLabel: string;
+      lifecycleLabel: string | null;
+      canDelete: boolean;
       source: MasterCalendarEvent;
     }> = [];
-    for (const event of isolatedCalendarEvents) {
+    for (const event of filteredCalendarEvents) {
       const value = new Date(event.startsAt);
       if (Number.isNaN(value.getTime())) continue;
-      const client = event.clientName ?? t.noCompany;
       const type =
         event.eventType === "drps_start"
           ? "start"
@@ -911,16 +1045,48 @@ export function ManagerWorkspace({
             : event.eventType === "continuous_meeting"
               ? "meeting"
               : "blocked";
-      const label =
-        type === "meeting"
-          ? event.title
-          : type === "blocked"
-            ? event.title
-            : `${client} DRPS`;
-      list.push({ key: dayKey(value), id: event.id, title: event.title, type, label, source: event });
+      const typeLabel =
+        type === "start"
+          ? t.eventTypeDrpsStart
+          : type === "close"
+            ? t.eventTypeDrpsClose
+            : type === "meeting"
+              ? t.eventTypeMeeting
+              : t.eventTypeBlocked;
+      const lifecycleLabel =
+        type === "meeting" || type === "blocked"
+          ? event.details.eventLifecycle === "committed"
+            ? t.eventLifecycleCommitted
+            : t.eventLifecycleProvisory
+          : null;
+      list.push({
+        key: dayKey(value),
+        id: event.id,
+        title: event.title,
+        type,
+        startsAtMs: value.getTime(),
+        timeLabel: `${toTime(event.startsAt, locale)} - ${toTime(event.endsAt, locale)}`,
+        companyLabel: event.clientName ?? t.noCompany,
+        typeLabel,
+        lifecycleLabel,
+        canDelete: isEditableCalendarEvent(event),
+        source: event,
+      });
     }
+    list.sort((a, b) => a.startsAtMs - b.startsAtMs);
     return list;
-  }, [isolatedCalendarEvents, t.noCompany]);
+  }, [
+    filteredCalendarEvents,
+    isEditableCalendarEvent,
+    locale,
+    t.eventLifecycleCommitted,
+    t.eventLifecycleProvisory,
+    t.eventTypeBlocked,
+    t.eventTypeDrpsClose,
+    t.eventTypeDrpsStart,
+    t.eventTypeMeeting,
+    t.noCompany,
+  ]);
 
   const byDay = useMemo(() => {
     const map = new Map<string, typeof events>();
@@ -928,17 +1094,77 @@ export function ManagerWorkspace({
     return map;
   }, [events]);
 
-  const days = useMemo(() => {
-    const start = new Date(month.getFullYear(), month.getMonth(), 1);
+  const monthReferenceDate = useMemo(
+    () => new Date(calendarCursorDate.getFullYear(), calendarCursorDate.getMonth(), 1),
+    [calendarCursorDate],
+  );
+
+  const monthDays = useMemo(() => {
+    const start = new Date(monthReferenceDate.getFullYear(), monthReferenceDate.getMonth(), 1);
     const gridStart = new Date(start);
     gridStart.setDate(1 - start.getDay());
     return Array.from({ length: 42 }, (_, idx) => {
       const value = new Date(gridStart);
       value.setDate(gridStart.getDate() + idx);
       const key = dayKey(value);
-      return { value, key, inMonth: value.getMonth() === month.getMonth(), events: byDay.get(key) ?? [] };
+      return {
+        value,
+        key,
+        inMonth: value.getMonth() === monthReferenceDate.getMonth(),
+        events: byDay.get(key) ?? [],
+      };
     });
-  }, [month, byDay]);
+  }, [byDay, monthReferenceDate]);
+
+  const weekDays = useMemo(() => {
+    const start = startOfWeek(calendarCursorDate);
+    return Array.from({ length: 7 }, (_, idx) => {
+      const value = addDays(start, idx);
+      const key = dayKey(value);
+      return { value, key, inMonth: true, events: byDay.get(key) ?? [] };
+    });
+  }, [byDay, calendarCursorDate]);
+
+  const dayViewDays = useMemo(() => {
+    const value = startOfDay(calendarCursorDate);
+    const key = dayKey(value);
+    return [{ value, key, inMonth: true, events: byDay.get(key) ?? [] }];
+  }, [byDay, calendarCursorDate]);
+
+  const visibleCalendarDays = useMemo(() => {
+    if (calendarView === "month") return monthDays;
+    if (calendarView === "week") return weekDays;
+    return dayViewDays;
+  }, [calendarView, dayViewDays, monthDays, weekDays]);
+
+  const calendarPeriodLabel = useMemo(() => {
+    if (calendarView === "month") return monthLabel(monthReferenceDate, locale);
+    if (calendarView === "week") {
+      const start = weekDays[0]?.value ?? startOfWeek(calendarCursorDate);
+      const end = weekDays[6]?.value ?? addDays(start, 6);
+      return `${shortDateLabel(start, locale)} - ${shortDateLabel(end, locale)}`;
+    }
+    return dayLabel(calendarCursorDate, locale);
+  }, [calendarCursorDate, calendarView, locale, monthReferenceDate, weekDays]);
+
+  const moveCalendarCursor = useCallback(
+    (direction: -1 | 1) => {
+      setCalendarCursorDate((previous) => {
+        if (calendarView === "month") {
+          const nextMonth = new Date(previous.getFullYear(), previous.getMonth(), 1);
+          nextMonth.setMonth(nextMonth.getMonth() + direction);
+          return nextMonth;
+        }
+        if (calendarView === "week") {
+          const nextWeek = addDays(previous, direction * 7);
+          return startOfDay(nextWeek);
+        }
+        const nextDay = addDays(previous, direction);
+        return startOfDay(nextDay);
+      });
+    },
+    [calendarView],
+  );
 
   const filteredClients = useMemo(
     () =>
@@ -972,6 +1198,21 @@ export function ManagerWorkspace({
     { id: "overdue", label: t.billingOverdue },
     { id: "blocked", label: t.billingBlocked },
   ];
+
+  const calendarViewOptions: Array<{ id: CalendarView; label: string }> = [
+    { id: "day", label: t.calendarViewDay },
+    { id: "week", label: t.calendarViewWeek },
+    { id: "month", label: t.calendarViewMonth },
+  ];
+
+  const calendarClientOptions = useMemo(
+    () =>
+      clients
+        .slice()
+        .sort((a, b) => a.companyName.localeCompare(b.companyName))
+        .map((client) => ({ id: client.id, label: client.companyName })),
+    [clients],
+  );
 
   function toggleDrpsIsolation(campaign: Campaign) {
     setCalendarIsolation((previous) =>
@@ -1208,22 +1449,79 @@ export function ManagerWorkspace({
               <div className="flex gap-2">
                 <button
                   type="button"
-                  onClick={() => setMonth((p) => new Date(p.getFullYear(), p.getMonth() - 1, 1))}
+                  onClick={() => moveCalendarCursor(-1)}
                   className="rounded-full border border-[#c8c8c8] bg-white px-3 py-1 text-xs"
                 >
-                  {t.prevMonth}
+                  {t.prevPeriod}
                 </button>
                 <button
                   type="button"
-                  onClick={() => setMonth((p) => new Date(p.getFullYear(), p.getMonth() + 1, 1))}
+                  onClick={() => moveCalendarCursor(1)}
                   className="rounded-full border border-[#c8c8c8] bg-white px-3 py-1 text-xs"
                 >
-                  {t.nextMonth}
+                  {t.nextPeriod}
                 </button>
               </div>
             </div>
-            <p className="mt-2 text-sm text-[#465864]">{monthLabel(month, locale)}</p>
+            <p className="mt-2 text-sm text-[#465864]">{calendarPeriodLabel}</p>
             <p className="mt-1 text-xs text-[#58717f]">{t.calendarHint}</p>
+            <div className="mt-3 grid gap-2 lg:grid-cols-[auto_minmax(180px,220px)_minmax(260px,1fr)]">
+              <div
+                className="inline-flex items-center gap-1 rounded-xl border border-[#d0d5da] bg-white p-1"
+                role="group"
+                aria-label={t.calendarViewLabel}
+              >
+                {calendarViewOptions.map((viewOption) => (
+                  <button
+                    key={viewOption.id}
+                    type="button"
+                    onClick={() => setCalendarView(viewOption.id)}
+                    className={`rounded-lg px-3 py-1.5 text-xs font-semibold ${
+                      calendarView === viewOption.id
+                        ? "bg-[#111] text-white"
+                        : "text-[#40515c] hover:bg-[#eff2f4]"
+                    }`}
+                  >
+                    {viewOption.label}
+                  </button>
+                ))}
+              </div>
+              <label className="block">
+                <span className="sr-only">{t.calendarClientFilterLabel}</span>
+                <select
+                  value={calendarClientFilter}
+                  onChange={(event) => setCalendarClientFilter(event.target.value)}
+                  className="w-full rounded-xl border border-[#d0d5da] bg-white px-3 py-2 text-sm text-[#1a2630] outline-none ring-[#7ba8c0] transition focus:ring-2"
+                >
+                  <option value="all">{t.calendarClientAll}</option>
+                  <option value={UNLINKED_CLIENT_FILTER}>{t.calendarClientUnlinked}</option>
+                  {calendarClientOptions.map((client) => (
+                    <option key={client.id} value={client.id}>
+                      {client.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="relative block">
+                <span className="sr-only">{t.calendarSearchPlaceholder}</span>
+                <input
+                  value={calendarSearchQuery}
+                  onChange={(event) => setCalendarSearchQuery(event.target.value)}
+                  className="w-full rounded-xl border border-[#d0d5da] bg-white px-3 py-2.5 pr-10 text-sm text-[#1a2630] outline-none ring-[#7ba8c0] transition focus:ring-2"
+                  placeholder={t.calendarSearchPlaceholder}
+                />
+                <svg
+                  viewBox="0 0 24 24"
+                  aria-hidden="true"
+                  className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#60727f]"
+                >
+                  <path
+                    d="M10.5 3a7.5 7.5 0 1 1 4.86 13.21l4.21 4.2-1.42 1.42-4.2-4.21A7.5 7.5 0 0 1 10.5 3Zm0 2a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11Z"
+                    fill="currentColor"
+                  />
+                </svg>
+              </label>
+            </div>
             <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-[#4f6977]">
               <span className="font-semibold">{t.calendarLegendLabel}:</span>
               <span className="rounded-full bg-[#e6f3f8] px-2 py-0.5 text-[#1f5f79]">
@@ -1247,68 +1545,193 @@ export function ManagerWorkspace({
                 </button>
               </div>
             ) : null}
-            <div className="mt-4 grid grid-cols-7 gap-2">
-              {WEEK_LABELS[locale].map((w) => (
-                <p key={w} className="text-center text-xs font-semibold text-[#5e7d8d]">
-                  {w}
-                </p>
-              ))}
-              {days.map((d) => (
-                <div
-                  key={d.key}
-                  className={`min-h-[110px] rounded-xl border p-2 ${
-                    d.inMonth ? "border-[#dbdbdb] bg-white" : "border-[#e8e8e8] bg-[#f1f1f1]"
-                  }`}
-                  onDragOver={(event) => {
-                    if (!draggingEventId) return;
-                    event.preventDefault();
-                  }}
-                  onDrop={(event) => {
-                    event.preventDefault();
-                    if (!draggingEventId) return;
-                    const movedEventId = draggingEventId;
-                    setDraggingEventId(null);
-                    void moveCalendarEventToDay(movedEventId, d.value);
-                  }}
-                >
-                  <p className={`text-xs font-semibold ${d.inMonth ? "text-[#163748]" : "text-[#8497a4]"}`}>
-                    {d.value.getDate()}
+            {events.length === 0 ? (
+              <p className="mt-4 text-sm text-[#5a7383]">{t.noCalendarEventsForFilters}</p>
+            ) : calendarView === "month" ? (
+              <div className="mt-4 grid grid-cols-7 gap-2">
+                {WEEK_LABELS[locale].map((w) => (
+                  <p key={w} className="text-center text-xs font-semibold text-[#5e7d8d]">
+                    {w}
                   </p>
-                  <div className="mt-1 space-y-1">
-                    {d.events.slice(0, 3).map((e) => (
-                      <button
-                        type="button"
-                        key={e.id}
-                        draggable={isEditableCalendarEvent(e.source)}
-                        onDragStart={() => {
-                          if (!isEditableCalendarEvent(e.source)) return;
-                          setDraggingEventId(e.id);
-                        }}
-                        onDragEnd={() => setDraggingEventId(null)}
-                        onClick={() => setSelectedCalendarEventId(e.id)}
-                        className={`rounded px-1 py-0.5 text-[10px] ${
-                          e.type === "start"
-                            ? "bg-[#e2f4ea] text-[#1f5b38]"
-                            : e.type === "close"
-                              ? "bg-[#fff3df] text-[#7a4b00]"
-                              : e.type === "meeting"
-                                ? e.source.details.eventLifecycle === "committed"
-                                  ? "bg-[#2f6f8d] text-white"
-                                  : "bg-[#e6f3f8] text-[#1f5f79]"
-                                : "bg-[#fce6f1] text-[#7a2755]"
-                        } w-full truncate text-left ${
-                          isEditableCalendarEvent(e.source) ? "cursor-move" : "cursor-pointer"
-                        }`}
-                        title={`${e.title} - ${toDate(e.source.startsAt, locale)}`}
-                      >
-                        {e.label}
-                      </button>
-                    ))}
-                    {d.events.length > 3 ? <p className="text-[10px] text-[#527083]">+{d.events.length - 3}</p> : null}
+                ))}
+                {monthDays.map((d) => (
+                  <div
+                    key={d.key}
+                    className={`min-h-[170px] rounded-xl border p-2 xl:min-h-[190px] ${
+                      d.inMonth ? "border-[#dbdbdb] bg-white" : "border-[#e8e8e8] bg-[#f1f1f1]"
+                    }`}
+                    onDragOver={(event) => {
+                      if (!draggingEventId) return;
+                      event.preventDefault();
+                    }}
+                    onDrop={(event) => {
+                      event.preventDefault();
+                      if (!draggingEventId) return;
+                      const movedEventId = draggingEventId;
+                      setDraggingEventId(null);
+                      void moveCalendarEventToDay(movedEventId, d.value);
+                    }}
+                  >
+                    <p className={`text-xs font-semibold ${d.inMonth ? "text-[#163748]" : "text-[#8497a4]"}`}>
+                      {d.value.getDate()}
+                    </p>
+                    <div className="mt-2 space-y-1.5">
+                      {d.events.slice(0, MAX_EVENTS_PER_DAY).map((e) => (
+                        <div
+                          key={e.id}
+                          className={`rounded-md border px-1.5 py-1 ${
+                            e.type === "start"
+                              ? "border-[#b9dfc6] bg-[#eaf8ef] text-[#1b5437]"
+                              : e.type === "close"
+                                ? "border-[#f2d6ad] bg-[#fff4e4] text-[#7a4b00]"
+                                : e.type === "meeting"
+                                  ? e.source.details.eventLifecycle === "committed"
+                                    ? "border-[#2f6f8d] bg-[#2f6f8d] text-white"
+                                    : "border-[#b8d8e6] bg-[#edf7fb] text-[#1f5f79]"
+                                  : "border-[#efc1d6] bg-[#fcecf4] text-[#7a2755]"
+                          }`}
+                        >
+                          <div className="flex items-start gap-1">
+                            <button
+                              type="button"
+                              draggable={isEditableCalendarEvent(e.source)}
+                              onDragStart={() => {
+                                if (!isEditableCalendarEvent(e.source)) return;
+                                setDraggingEventId(e.id);
+                              }}
+                              onDragEnd={() => setDraggingEventId(null)}
+                              onClick={() => setSelectedCalendarEventId(e.id)}
+                              className={`min-w-0 flex-1 text-left ${
+                                isEditableCalendarEvent(e.source) ? "cursor-move" : "cursor-pointer"
+                              }`}
+                              title={`${e.title} - ${toDate(e.source.startsAt, locale)}`}
+                            >
+                              <p className="truncate text-[10px] font-semibold">{e.title}</p>
+                              <p className="truncate text-[10px] opacity-90">{e.timeLabel}</p>
+                              <p className="truncate text-[10px] opacity-90">{e.companyLabel}</p>
+                              <p className="truncate text-[10px] opacity-90">
+                                {e.typeLabel}
+                                {e.lifecycleLabel ? ` . ${e.lifecycleLabel}` : ""}
+                              </p>
+                            </button>
+                            {e.canDelete ? (
+                              <button
+                                type="button"
+                                onClick={() => void deleteCalendarEvent(e.source)}
+                                disabled={deletingEventId === e.id}
+                                className={`rounded px-1 text-[11px] font-semibold ${
+                                  e.source.details.eventLifecycle === "committed"
+                                    ? "bg-white/30 text-current"
+                                    : "bg-white/70 text-current"
+                                } disabled:opacity-50`}
+                                title={t.eventDeleteAction}
+                                aria-label={t.eventDeleteAction}
+                              >
+                                {deletingEventId === e.id ? "..." : "x"}
+                              </button>
+                            ) : null}
+                          </div>
+                        </div>
+                      ))}
+                      {d.events.length > MAX_EVENTS_PER_DAY ? (
+                        <p className="text-[10px] text-[#527083]">
+                          +{d.events.length - MAX_EVENTS_PER_DAY} {t.eventMoreCount}
+                        </p>
+                      ) : null}
+                    </div>
                   </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            ) : (
+              <div className={`mt-4 grid gap-2 ${calendarView === "week" ? "md:grid-cols-7" : "grid-cols-1"}`}>
+                {visibleCalendarDays.map((d) => (
+                  <div
+                    key={d.key}
+                    className="min-h-[180px] rounded-xl border border-[#dbdbdb] bg-white p-2"
+                    onDragOver={(event) => {
+                      if (!draggingEventId) return;
+                      event.preventDefault();
+                    }}
+                    onDrop={(event) => {
+                      event.preventDefault();
+                      if (!draggingEventId) return;
+                      const movedEventId = draggingEventId;
+                      setDraggingEventId(null);
+                      void moveCalendarEventToDay(movedEventId, d.value);
+                    }}
+                  >
+                    <p className="text-xs font-semibold text-[#163748]">
+                      {calendarView === "week"
+                        ? `${WEEK_LABELS[locale][d.value.getDay()]} ${d.value.getDate()}`
+                        : dayLabel(d.value, locale)}
+                    </p>
+                    <div className="mt-2 space-y-2">
+                      {d.events.length === 0 ? (
+                        <p className="text-xs text-[#527083]">-</p>
+                      ) : (
+                        d.events.map((e) => (
+                          <div
+                            key={e.id}
+                            className={`rounded-md border px-2 py-1.5 ${
+                              e.type === "start"
+                                ? "border-[#b9dfc6] bg-[#eaf8ef] text-[#1b5437]"
+                                : e.type === "close"
+                                  ? "border-[#f2d6ad] bg-[#fff4e4] text-[#7a4b00]"
+                                  : e.type === "meeting"
+                                    ? e.source.details.eventLifecycle === "committed"
+                                      ? "border-[#2f6f8d] bg-[#2f6f8d] text-white"
+                                      : "border-[#b8d8e6] bg-[#edf7fb] text-[#1f5f79]"
+                                    : "border-[#efc1d6] bg-[#fcecf4] text-[#7a2755]"
+                            }`}
+                          >
+                            <div className="flex items-start gap-2">
+                              <button
+                                type="button"
+                                draggable={isEditableCalendarEvent(e.source)}
+                                onDragStart={() => {
+                                  if (!isEditableCalendarEvent(e.source)) return;
+                                  setDraggingEventId(e.id);
+                                }}
+                                onDragEnd={() => setDraggingEventId(null)}
+                                onClick={() => setSelectedCalendarEventId(e.id)}
+                                className={`min-w-0 flex-1 text-left ${
+                                  isEditableCalendarEvent(e.source) ? "cursor-move" : "cursor-pointer"
+                                }`}
+                                title={`${e.title} - ${toDate(e.source.startsAt, locale)}`}
+                              >
+                                <p className="truncate text-xs font-semibold">{e.title}</p>
+                                <p className="truncate text-[11px] opacity-90">{e.timeLabel}</p>
+                                <p className="truncate text-[11px] opacity-90">{e.companyLabel}</p>
+                                <p className="truncate text-[11px] opacity-90">
+                                  {e.typeLabel}
+                                  {e.lifecycleLabel ? ` . ${e.lifecycleLabel}` : ""}
+                                </p>
+                              </button>
+                              {e.canDelete ? (
+                                <button
+                                  type="button"
+                                  onClick={() => void deleteCalendarEvent(e.source)}
+                                  disabled={deletingEventId === e.id}
+                                  className={`rounded px-1 text-[11px] font-semibold ${
+                                    e.source.details.eventLifecycle === "committed"
+                                      ? "bg-white/30 text-current"
+                                      : "bg-white/70 text-current"
+                                  } disabled:opacity-50`}
+                                  title={t.eventDeleteAction}
+                                  aria-label={t.eventDeleteAction}
+                                >
+                                  {deletingEventId === e.id ? "..." : "x"}
+                                </button>
+                              ) : null}
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </article>
 
           <article className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
@@ -1620,19 +2043,29 @@ export function ManagerWorkspace({
                     className="mt-1 w-full rounded border border-[#c8d7e1] px-2 py-1.5 text-sm"
                   />
                 </label>
-                <button
-                  type="button"
-                  onClick={() => void saveSelectedCalendarEvent()}
-                  disabled={isSavingEventEdit}
-                  className="rounded-full bg-[#123447] px-4 py-2 text-xs font-semibold text-white disabled:opacity-50"
-                >
-                  {isSavingEventEdit ? t.eventEditSaving : t.eventEditSave}
-                </button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void saveSelectedCalendarEvent()}
+                    disabled={isSavingEventEdit || deletingEventId === selectedCalendarEvent.id}
+                    className="rounded-full bg-[#123447] px-4 py-2 text-xs font-semibold text-white disabled:opacity-50"
+                  >
+                    {isSavingEventEdit ? t.eventEditSaving : t.eventEditSave}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void deleteCalendarEvent(selectedCalendarEvent)}
+                    disabled={isSavingEventEdit || deletingEventId === selectedCalendarEvent.id}
+                    className="rounded-full border border-[#9d304e] px-4 py-2 text-xs font-semibold text-[#9d304e] disabled:opacity-50"
+                  >
+                    {deletingEventId === selectedCalendarEvent.id ? t.eventDeleting : t.eventDeleteAction}
+                  </button>
+                </div>
                 {canCommitSelectedReschedule ? (
                   <button
                     type="button"
                     onClick={() => void commitSelectedReschedule()}
-                    disabled={isSavingEventEdit}
+                    disabled={isSavingEventEdit || deletingEventId === selectedCalendarEvent.id}
                     className="rounded-full border border-[#0f5b73] px-4 py-2 text-xs font-semibold text-[#0f5b73] disabled:opacity-50"
                   >
                     {t.eventCommitReschedule}

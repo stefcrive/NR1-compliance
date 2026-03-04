@@ -353,26 +353,22 @@ export function ManagerClientFicha({
     status: ContinuousProgramStatus;
     deployedAt: string;
     scheduleFrequency: string;
-    scheduleAnchorDate: string;
   }>({
     programId: "",
     status: "Active",
     deployedAt: "",
-    scheduleFrequency: "monthly",
-    scheduleAnchorDate: "",
+    scheduleFrequency: "biweekly",
   });
   const [editingAssignedProgramId, setEditingAssignedProgramId] = useState<string | null>(null);
   const [editAssignedProgramForm, setEditAssignedProgramForm] = useState<{
     status: ContinuousProgramStatus;
     deployedAt: string;
     scheduleFrequency: string;
-    scheduleAnchorDate: string;
     provisorySlots: AvailabilitySlot[];
   }>({
     status: "Active",
     deployedAt: "",
-    scheduleFrequency: "monthly",
-    scheduleAnchorDate: "",
+    scheduleFrequency: "biweekly",
     provisorySlots: [],
   });
   const [editCalendarMonth, setEditCalendarMonth] = useState(() => {
@@ -467,14 +463,10 @@ export function ManagerClientFicha({
         )
           ? previous.programId
           : nextAvailable.find((program) => !nextAssignedIds.has(program.id))?.id ?? "";
-      const selectedProgram = nextAvailable.find((program) => program.id === nextProgramId) ?? null;
       return {
         ...previous,
         programId: nextProgramId,
-        scheduleFrequency: selectedProgram?.scheduleFrequency ?? previous.scheduleFrequency,
-        scheduleAnchorDate: selectedProgram?.scheduleAnchorDate
-          ? toDateInput(selectedProgram.scheduleAnchorDate)
-          : "",
+        scheduleFrequency: "biweekly",
       };
     });
   }, []);
@@ -780,10 +772,7 @@ export function ManagerClientFicha({
       programId: firstAvailableProgram?.id ?? "",
       status: "Active",
       deployedAt: toDatetimeLocal(new Date().toISOString()),
-      scheduleFrequency: firstAvailableProgram?.scheduleFrequency ?? "monthly",
-      scheduleAnchorDate: firstAvailableProgram?.scheduleAnchorDate
-        ? toDateInput(firstAvailableProgram.scheduleAnchorDate)
-        : "",
+      scheduleFrequency: "biweekly",
     });
     setContinuousError("");
     setIsProgramModalOpen(true);
@@ -799,10 +788,7 @@ export function ManagerClientFicha({
     setEditAssignedProgramForm({
       status: assignment.status,
       deployedAt: toDatetimeLocal(assignment.deployedAt),
-      scheduleFrequency: assignment.scheduleFrequency ?? "monthly",
-      scheduleAnchorDate: assignment.scheduleAnchorDate
-        ? toDateInput(assignment.scheduleAnchorDate)
-        : "",
+      scheduleFrequency: assignment.scheduleFrequency ?? "biweekly",
       provisorySlots: sortedSlots,
     });
     if (firstSlot && !Number.isNaN(firstSlot.getTime())) {
@@ -863,7 +849,6 @@ export function ManagerClientFicha({
         status: assignProgramForm.status,
         ...(deployedAtIso ? { deployedAt: deployedAtIso } : {}),
         scheduleFrequency: assignProgramForm.scheduleFrequency,
-        scheduleAnchorDate: assignProgramForm.scheduleAnchorDate || "",
       }),
     });
     const data = (await response.json().catch(() => ({}))) as { error?: string };
@@ -888,9 +873,6 @@ export function ManagerClientFicha({
     setIsSavingProgram(true);
     setContinuousError("");
     const deployedAtIso = fromDatetimeLocal(editAssignedProgramForm.deployedAt);
-    const sortedProvisorySlots = editAssignedProgramForm.provisorySlots
-      .slice()
-      .sort((left, right) => new Date(left.startsAt).getTime() - new Date(right.startsAt).getTime());
     const response = await fetch(
       `/api/admin/clients/${client.id}/programs/${editingAssignedProgramId}`,
       {
@@ -900,8 +882,6 @@ export function ManagerClientFicha({
           status: editAssignedProgramForm.status,
           ...(deployedAtIso ? { deployedAt: deployedAtIso } : {}),
           scheduleFrequency: editAssignedProgramForm.scheduleFrequency,
-          scheduleAnchorDate: editAssignedProgramForm.scheduleAnchorDate || "",
-          provisorySlots: sortedProvisorySlots,
         }),
       },
     );
@@ -1543,9 +1523,9 @@ export function ManagerClientFicha({
               <button type="button" disabled={isBusy} onClick={() => void generateSeriesReports()} className="rounded-full border border-[#e4c898] px-4 py-2 text-sm font-semibold text-[#7a4b00] disabled:opacity-50">Gerar serie de relatorios</button>
             </div>
           </section>
-          <section className="rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
+          <section className="h-auto max-h-none overflow-visible rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
             <h3 className="text-lg font-semibold text-[#123447]">Diagnosticos DRPS atribuidos</h3>
-            <div className="mt-3 overflow-x-auto">
+            <div className="mt-3 max-h-none overflow-x-auto overflow-y-visible">
               <table className="min-w-full text-sm">
                 <thead>
                   <tr className="border-b">
@@ -1971,20 +1951,6 @@ export function ManagerClientFicha({
                                 <option value="annual">annual</option>
                                 <option value="custom">custom</option>
                               </select>
-                              <label className="rounded border border-[#c9dce8] bg-white px-3 py-2 text-xs text-[#456576]">
-                                Data ancora da cadencia
-                                <input
-                                  type="date"
-                                  className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
-                                  value={editAssignedProgramForm.scheduleAnchorDate}
-                                  onChange={(event) =>
-                                    setEditAssignedProgramForm((previous) => ({
-                                      ...previous,
-                                      scheduleAnchorDate: event.target.value,
-                                    }))
-                                  }
-                                />
-                              </label>
                             </div>
                             {editingCommittedSlots.length > 0 ? (
                               <div className="mt-3 rounded-xl border border-[#d8e4ee] bg-white p-3">
@@ -2174,18 +2140,10 @@ export function ManagerClientFicha({
                           value={assignProgramForm.programId}
                           onChange={(event) =>
                             setAssignProgramForm((previous) => {
-                              const nextProgram =
-                                unassignedProgramOptions.find(
-                                  (program) => program.id === event.target.value,
-                                ) ?? null;
                               return {
                                 ...previous,
                                 programId: event.target.value,
-                                scheduleFrequency:
-                                  nextProgram?.scheduleFrequency ?? previous.scheduleFrequency,
-                                scheduleAnchorDate: nextProgram?.scheduleAnchorDate
-                                  ? toDateInput(nextProgram.scheduleAnchorDate)
-                                  : "",
+                                scheduleFrequency: "biweekly",
                               };
                             })
                           }
@@ -2245,20 +2203,6 @@ export function ManagerClientFicha({
                             setAssignProgramForm((previous) => ({
                               ...previous,
                               deployedAt: event.target.value,
-                            }))
-                          }
-                        />
-                      </label>
-                      <label className="text-xs text-[#4f6977] md:col-span-2">
-                        Data ancora da recorrencia (opcional)
-                        <input
-                          type="date"
-                          className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
-                          value={assignProgramForm.scheduleAnchorDate}
-                          onChange={(event) =>
-                            setAssignProgramForm((previous) => ({
-                              ...previous,
-                              scheduleAnchorDate: event.target.value,
                             }))
                           }
                         />

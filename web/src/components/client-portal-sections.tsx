@@ -1,10 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
-import { findProgramById, listAssignedPrograms } from "@/lib/programs-catalog";
+import { findProgramById } from "@/lib/programs-catalog";
 
 type Diagnostic = {
   id: string;
@@ -54,7 +54,37 @@ type ClientPortalPayload = {
     triggerThreshold: number | null;
     scheduleFrequency: string;
     scheduleAnchorDate: string | null;
+    evaluationQuestions?: string[];
+    materials?: Array<{
+      id: string;
+      title: string;
+      fileName: string;
+      mimeType: string;
+      sizeBytes: number;
+      uploadedAt: string;
+      storagePath: string;
+      downloadUrl: string;
+    }>;
   }>;
+  masterCalendar?: {
+    events: Array<{
+      id: string;
+      eventType: "drps_start" | "drps_close" | "continuous_meeting" | "blocked";
+      title: string;
+      startsAt: string;
+      endsAt: string;
+      status: "scheduled" | "completed" | "cancelled";
+      sourceClientProgramId: string | null;
+      details?: {
+        content: string | null;
+        preparationRequired: string | null;
+        eventLifecycle: "provisory" | "committed";
+        proposalKind: "assignment" | "reschedule" | null;
+        availabilityRequestId: string | null;
+      };
+    }>;
+    calendarEventsUnavailable: boolean;
+  };
   campaigns: Diagnostic[];
   selectedCampaign: Diagnostic | null;
   dashboard: {
@@ -106,8 +136,44 @@ function fmtDateTime(value: string | null | undefined) {
   return new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short" }).format(new Date(value));
 }
 
+function fmtDuration(startValue: string, endValue: string) {
+  const start = new Date(startValue);
+  const end = new Date(endValue);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return "-";
+
+  const totalMinutes = Math.max(0, Math.round((end.getTime() - start.getTime()) / 60000));
+  const days = Math.floor(totalMinutes / (24 * 60));
+  const hours = Math.floor((totalMinutes % (24 * 60)) / 60);
+  const minutes = totalMinutes % 60;
+
+  const parts: string[] = [];
+  if (days > 0) parts.push(`${days}d`);
+  if (hours > 0) parts.push(`${hours}h`);
+  if (minutes > 0 || parts.length === 0) parts.push(`${minutes}min`);
+  return parts.join(" ");
+}
+
 function fmtCurrency(value: number) {
   return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(value);
+}
+
+function formatFrequencyLabel(value: string | null | undefined) {
+  if (!value) return "-";
+  if (value === "weekly") return "Semanal";
+  if (value === "biweekly") return "Quinzenal";
+  if (value === "monthly") return "Mensal";
+  if (value === "quarterly") return "Trimestral";
+  if (value === "semiannual") return "Semestral";
+  if (value === "annual") return "Anual";
+  if (value === "custom") return "Personalizada";
+  return value;
+}
+
+function formatBytes(sizeBytes: number) {
+  if (!Number.isFinite(sizeBytes) || sizeBytes < 0) return "-";
+  if (sizeBytes < 1024) return `${sizeBytes} B`;
+  if (sizeBytes < 1024 * 1024) return `${(sizeBytes / 1024).toFixed(1)} KB`;
+  return `${(sizeBytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function csvEscape(value: string | number | null): string {
@@ -346,8 +412,8 @@ export function ClientDiagnosticStatusSection({ clientSlug }: { clientSlug: stri
         </p>
       </section>
 
-      <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
-        <div className="overflow-x-auto">
+      <section className="h-auto max-h-none overflow-visible rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+        <div className="max-h-none overflow-x-auto overflow-y-visible">
           <table className="min-w-full text-sm">
             <thead>
               <tr className="border-b">
@@ -633,7 +699,12 @@ export function ClientDiagnosticResultsSection({
 }
 
 export function ClientProgramsListSection({ clientSlug }: { clientSlug: string }) {
-  const assigned = listAssignedPrograms(clientSlug);
+  const { data, isLoading, error } = useClientPortalData(clientSlug);
+
+  if (isLoading) return <p className="text-sm text-[#49697a]">Carregando processos continuos...</p>;
+  if (error || !data) return <p className="text-sm text-red-600">{error || "Processos indisponiveis."}</p>;
+
+  const assigned = data.assignedPrograms ?? [];
 
   return (
     <div className="space-y-6">
@@ -645,27 +716,29 @@ export function ClientProgramsListSection({ clientSlug }: { clientSlug: string }
       </section>
 
       <section className="grid gap-4 md:grid-cols-2">
-        {assigned.map((assignment) => {
-          const program = findProgramById(assignment.programId);
-          if (!program) return null;
-
-          return (
-            <article key={assignment.campaignCode} className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
-              <p className="text-xs uppercase tracking-[0.15em] text-[#55707f]">{assignment.campaignCode}</p>
-              <h3 className="mt-1 text-xl font-semibold text-[#141d24]">{program.name}</h3>
-              <p className="mt-1 text-sm text-[#3e5b6b]">{program.summary}</p>
+        {assigned.length === 0 ? (
+          <p className="text-sm text-[#5a7383]">Nenhum processo continuo atribuido.</p>
+        ) : (
+          assigned.map((assignment) => (
+            <article key={assignment.id} className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+              <p className="text-xs uppercase tracking-[0.15em] text-[#55707f]">{assignment.id}</p>
+              <h3 className="mt-1 text-xl font-semibold text-[#141d24]">{assignment.programTitle}</h3>
+              {assignment.programDescription ? (
+                <p className="mt-1 text-sm text-[#3e5b6b]">{assignment.programDescription}</p>
+              ) : null}
               <p className="mt-2 text-xs text-[#55707f]">
-                {assignment.status} | {fmtDate(assignment.startDate)} - {fmtDate(assignment.endDate)}
+                {assignment.status} | Aplicado em {fmtDate(assignment.deployedAt)} | Frequencia{" "}
+                {assignment.scheduleFrequency || "-"}
               </p>
               <Link
-                href={`/client/${clientSlug}/programs/${assignment.programId}`}
+                href={`/client/${clientSlug}/programs/${assignment.programId}?assignmentId=${assignment.id}`}
                 className="mt-4 inline-flex rounded-full border border-[#c8c8c8] px-4 py-2 text-xs font-semibold text-[#1b2832]"
               >
                 Abrir detalhes
               </Link>
             </article>
-          );
-        })}
+          ))
+        )}
       </section>
     </div>
   );
@@ -813,7 +886,7 @@ export function ClientReportsSection({ clientSlug }: { clientSlug: string }) {
                     <td className="px-2 py-2">{program.scheduleFrequency || "-"}</td>
                     <td className="px-2 py-2">
                       <Link
-                        href={`/client/${clientSlug}/programs/${program.programId}`}
+                        href={`/client/${clientSlug}/programs/${program.programId}?assignmentId=${program.id}`}
                         className="rounded-full border border-[#c8c8c8] px-3 py-1 text-xs font-semibold text-[#1b2832]"
                       >
                         Abrir
@@ -891,18 +964,60 @@ export function ClientProgramDetailsSection({
   clientSlug: string;
   programId: string;
 }) {
+  const searchParams = useSearchParams();
   const { data, isLoading, error } = useClientPortalData(clientSlug);
-  const program = findProgramById(programId);
-  const assignment = listAssignedPrograms(clientSlug).find((item) => item.programId === programId) ?? null;
+  const fallbackProgram = findProgramById(programId);
+  const requestedAssignmentId = searchParams.get("assignmentId");
   const assignedFromApi = useMemo(
-    () =>
-      data?.assignedPrograms?.find((item) => item.programId === programId) ?? null,
-    [data?.assignedPrograms, programId],
+    () => {
+      const assignedPrograms = data?.assignedPrograms ?? [];
+      if (requestedAssignmentId) {
+        const byId = assignedPrograms.find((item) => item.id === requestedAssignmentId) ?? null;
+        if (byId) return byId;
+      }
+      return assignedPrograms.find((item) => item.programId === programId) ?? null;
+    },
+    [data?.assignedPrograms, programId, requestedAssignmentId],
   );
-  const hasAssignment = Boolean(assignedFromApi || (program && assignment));
-  const displayTitle = assignedFromApi?.programTitle ?? program?.name ?? "Programa";
-  const displaySummary = assignedFromApi?.programDescription ?? program?.summary ?? null;
-  const storageKey = `nr1-program-evals:${clientSlug}:${programId}`;
+  const hasAssignment = Boolean(assignedFromApi);
+  const displayTitle = assignedFromApi?.programTitle ?? fallbackProgram?.name ?? "Programa";
+  const displaySummary = assignedFromApi?.programDescription ?? fallbackProgram?.summary ?? null;
+  const evaluationQuestions = useMemo(() => {
+    const fromApi = (assignedFromApi?.evaluationQuestions ?? [])
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0);
+    if (fromApi.length > 0) return fromApi;
+    return fallbackProgram?.evaluationQuestions ?? [];
+  }, [assignedFromApi?.evaluationQuestions, fallbackProgram?.evaluationQuestions]);
+  const materials = useMemo(() => {
+    const fromApi = assignedFromApi?.materials ?? [];
+    if (fromApi.length > 0) return fromApi;
+    return (fallbackProgram?.materials ?? []).map((item) => ({
+      id: item.id,
+      title: item.title,
+      fileName: item.title,
+      mimeType: "application/octet-stream",
+      sizeBytes: 0,
+      uploadedAt: "",
+      storagePath: "",
+      downloadUrl: item.downloadUrl,
+    }));
+  }, [assignedFromApi?.materials, fallbackProgram?.materials]);
+  const assignmentMeetings = useMemo(() => {
+    if (!assignedFromApi) return [] as NonNullable<ClientPortalPayload["masterCalendar"]>["events"];
+    return (data?.masterCalendar?.events ?? [])
+      .filter(
+        (item) =>
+          item.eventType === "continuous_meeting" && item.sourceClientProgramId === assignedFromApi.id,
+      )
+      .slice()
+      .sort((left, right) => new Date(left.startsAt).getTime() - new Date(right.startsAt).getTime());
+  }, [assignedFromApi, data?.masterCalendar?.events]);
+  const nextMeeting = useMemo(() => {
+    return assignmentMeetings.find((item) => item.status === "scheduled") ?? assignmentMeetings[0] ?? null;
+  }, [assignmentMeetings]);
+  const evaluationScopeId = requestedAssignmentId ?? programId;
+  const storageKey = `nr1-program-evals:${clientSlug}:${evaluationScopeId}`;
   const [scores, setScores] = useState<Record<number, number>>({});
   const [entries, setEntries] = useState<EvaluationEntry[]>(() => {
     if (typeof window === "undefined") return [];
@@ -918,13 +1033,13 @@ export function ClientProgramDetailsSection({
   const [evaluationError, setEvaluationError] = useState("");
 
   const averageByQuestion = useMemo(() => {
-    if (!program || entries.length === 0) return [] as number[];
-    return program.evaluationQuestions.map((_, index) => {
+    if (evaluationQuestions.length === 0 || entries.length === 0) return [] as number[];
+    return evaluationQuestions.map((_, index) => {
       const values = entries.map((entry) => entry.scores[index]).filter((value) => typeof value === "number");
       if (values.length === 0) return 0;
       return values.reduce((acc, value) => acc + value, 0) / values.length;
     });
-  }, [entries, program]);
+  }, [entries, evaluationQuestions]);
 
   const overallAverage = useMemo(() => {
     if (averageByQuestion.length === 0) return 0;
@@ -933,8 +1048,8 @@ export function ClientProgramDetailsSection({
 
   function submitEvaluation(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!program) return;
-    const answers = program.evaluationQuestions.map((_, index) => scores[index] ?? 0);
+    if (evaluationQuestions.length === 0) return;
+    const answers = evaluationQuestions.map((_, index) => scores[index] ?? 0);
     if (answers.some((value) => value < 1 || value > 5)) {
       setEvaluationError("Answer all evaluation questions from 1 to 5.");
       return;
@@ -973,9 +1088,7 @@ export function ClientProgramDetailsSection({
         <p className="mt-2 text-xs text-[#55707f]">
           {assignedFromApi
             ? `${assignedFromApi.status} | Aplicado em ${fmtDate(assignedFromApi.deployedAt)}`
-            : assignment
-              ? `${assignment.campaignCode} | ${fmtDate(assignment.startDate)} - ${fmtDate(assignment.endDate)}`
-              : "-"}
+            : "-"}
         </p>
       </section>
 
@@ -999,7 +1112,7 @@ export function ClientProgramDetailsSection({
                 </tr>
                 <tr className="border-b">
                   <td className="px-2 py-2 font-semibold text-[#3e5b6b]">Frequencia</td>
-                  <td className="px-2 py-2">{assignedFromApi.scheduleFrequency || "-"}</td>
+                  <td className="px-2 py-2">{formatFrequencyLabel(assignedFromApi.scheduleFrequency)}</td>
                 </tr>
                 <tr className="border-b">
                   <td className="px-2 py-2 font-semibold text-[#3e5b6b]">Data ancora</td>
@@ -1009,9 +1122,13 @@ export function ClientProgramDetailsSection({
                   <td className="px-2 py-2 font-semibold text-[#3e5b6b]">Topico de risco alvo</td>
                   <td className="px-2 py-2">{assignedFromApi.targetRiskTopic ?? "-"}</td>
                 </tr>
-                <tr>
+                <tr className="border-b">
                   <td className="px-2 py-2 font-semibold text-[#3e5b6b]">Threshold gatilho</td>
                   <td className="px-2 py-2">{assignedFromApi.triggerThreshold ?? "-"}</td>
+                </tr>
+                <tr>
+                  <td className="px-2 py-2 font-semibold text-[#3e5b6b]">Proxima reuniao</td>
+                  <td className="px-2 py-2">{nextMeeting ? fmtDateTime(nextMeeting.startsAt) : "-"}</td>
                 </tr>
               </tbody>
             </table>
@@ -1019,58 +1136,102 @@ export function ClientProgramDetailsSection({
         </section>
       ) : null}
 
-      {program ? (
+      {assignedFromApi ? (
         <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
-          <h3 className="text-lg font-semibold text-[#141d24]">Program chronogram</h3>
+          <h3 className="text-lg font-semibold text-[#141d24]">Cronograma (reunioes no calendario)</h3>
           <div className="mt-3 overflow-x-auto">
             <table className="min-w-full text-sm">
               <thead>
                 <tr className="border-b">
-                  <th className="px-2 py-2 text-left">Milestone</th>
-                  <th className="px-2 py-2 text-left">Date</th>
-                  <th className="px-2 py-2 text-left">Owner</th>
+                  <th className="px-2 py-2 text-left">Evento</th>
+                  <th className="px-2 py-2 text-left">Data atual</th>
+                  <th className="px-2 py-2 text-left">Duracao</th>
+                  <th className="px-2 py-2 text-left">Status</th>
+                  <th className="px-2 py-2 text-left">Acoes</th>
                 </tr>
               </thead>
               <tbody>
-                {program.chronogram.map((item) => (
-                  <tr key={item.id} className="border-b">
-                    <td className="px-2 py-2">{item.label}</td>
-                    <td className="px-2 py-2">{fmtDate(item.date)}</td>
-                    <td className="px-2 py-2">{item.owner}</td>
+                {assignmentMeetings.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="px-2 py-3 text-xs text-[#5a7383]">
+                      Nenhuma reuniao em calendario para esta atribuicao no momento.
+                    </td>
                   </tr>
-                ))}
+                ) : (
+                  assignmentMeetings.map((item) => {
+                    const calendarEventLink = `/client/${clientSlug}/company?calendarEventId=${encodeURIComponent(item.id)}`;
+                    const portalProgramLink = `/client/${clientSlug}/programs/${encodeURIComponent(
+                      assignedFromApi.programId,
+                    )}?assignmentId=${encodeURIComponent(assignedFromApi.id)}`;
+                    return (
+                      <tr key={item.id} className="border-b">
+                        <td className="px-2 py-2">{item.title}</td>
+                        <td className="px-2 py-2">{fmtDateTime(item.startsAt)}</td>
+                        <td className="px-2 py-2">{fmtDuration(item.startsAt, item.endsAt)}</td>
+                        <td className="px-2 py-2">{item.status}</td>
+                        <td className="px-2 py-2">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Link
+                              href={calendarEventLink}
+                              className="rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
+                            >
+                              Abrir no calendario
+                            </Link>
+                            <Link
+                              href={portalProgramLink}
+                              className="rounded-full border border-[#c8c8c8] px-3 py-1 text-xs font-semibold text-[#1b2832]"
+                            >
+                              Ver no portal
+                            </Link>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
               </tbody>
             </table>
           </div>
         </section>
       ) : null}
 
-      {program ? (
+      {hasAssignment ? (
         <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
-          <h3 className="text-lg font-semibold text-[#141d24]">Materials</h3>
+          <h3 className="text-lg font-semibold text-[#141d24]">Materiais para download</h3>
           <ul className="mt-3 space-y-2 text-sm">
-            {program.materials.map((item) => (
-              <li key={item.id} className="flex items-center justify-between rounded-xl border border-[#e3edf3] px-3 py-2">
-                <span>
-                  {item.title} <span className="text-xs text-[#54707f]">({item.type})</span>
-                </span>
-                <a
-                  href={item.downloadUrl}
-                  className="rounded-full border border-[#c8c8c8] px-3 py-1 text-xs font-semibold text-[#1b2832]"
-                >
-                  Download
-                </a>
+            {materials.length === 0 ? (
+              <li className="rounded-xl border border-[#e3edf3] px-3 py-2 text-[#5a7383]">
+                Nenhum material disponivel para este programa.
               </li>
-            ))}
+            ) : (
+              materials.map((item) => (
+                <li key={item.id} className="flex items-center justify-between rounded-xl border border-[#e3edf3] px-3 py-2">
+                  <span>
+                    {item.title}{" "}
+                    <span className="text-xs text-[#54707f]">
+                      ({item.fileName} {item.sizeBytes > 0 ? `| ${formatBytes(item.sizeBytes)}` : ""})
+                    </span>
+                  </span>
+                  <a
+                    href={item.downloadUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="rounded-full border border-[#c8c8c8] px-3 py-1 text-xs font-semibold text-[#1b2832]"
+                  >
+                    Download
+                  </a>
+                </li>
+              ))
+            )}
           </ul>
         </section>
       ) : null}
 
-      {program ? (
+      {evaluationQuestions.length > 0 ? (
         <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
-          <h3 className="text-lg font-semibold text-[#141d24]">Short evaluation questionnaire</h3>
+          <h3 className="text-lg font-semibold text-[#141d24]">Questionario de avaliacao</h3>
           <form onSubmit={submitEvaluation} className="mt-3 space-y-4">
-            {program.evaluationQuestions.map((question, index) => (
+            {evaluationQuestions.map((question, index) => (
               <label key={question} className="block space-y-1">
                 <span className="text-sm text-[#475660]">{question}</span>
                 <select
@@ -1100,7 +1261,7 @@ export function ClientProgramDetailsSection({
         </section>
       ) : null}
 
-      {program ? (
+      {evaluationQuestions.length > 0 ? (
         <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
           <h3 className="text-lg font-semibold text-[#141d24]">Effectiveness metrics</h3>
           <p className="mt-1 text-sm text-[#475660]">Submissions: {entries.length}</p>
@@ -1108,7 +1269,7 @@ export function ClientProgramDetailsSection({
             Overall average: {entries.length ? overallAverage.toFixed(2) : "-"} / 5.00
           </p>
           <div className="mt-4 space-y-3">
-            {program.evaluationQuestions.map((question, index) => {
+            {evaluationQuestions.map((question, index) => {
               const avg = averageByQuestion[index] ?? 0;
               return (
                 <div key={question} className="space-y-1">

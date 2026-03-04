@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 type Campaign = {
@@ -59,24 +59,6 @@ type AssignedProgram = {
   scheduleAnchorDate: string | null;
 };
 
-type AvailabilitySlot = {
-  startsAt: string;
-  endsAt: string;
-};
-
-type AvailabilityRequest = {
-  id: string;
-  clientProgramId: string;
-  programId: string | null;
-  programTitle: string;
-  status: "pending" | "submitted" | "scheduled" | "closed";
-  requestedAt: string;
-  dueAt: string | null;
-  submittedAt: string | null;
-  suggestedSlots: AvailabilitySlot[];
-  selectedSlots: AvailabilitySlot[];
-};
-
 type MasterCalendarEvent = {
   id: string;
   clientId: string | null;
@@ -129,8 +111,6 @@ type Payload = {
   } | null;
   reports: Report[];
   assignedPrograms: AssignedProgram[];
-  availabilityRequests: AvailabilityRequest[];
-  availabilityRequestsUnavailable?: boolean;
   masterCalendar: {
     events: MasterCalendarEvent[];
     calendarEventsUnavailable: boolean;
@@ -157,12 +137,6 @@ function campaignCollectionStatus(status: Campaign["status"]) {
   if (status === "closed") return "Questionario fechado";
   if (status === "draft") return "Questionario em rascunho";
   return "Questionario arquivado";
-}
-
-function fmtTime(value: string) {
-  return new Intl.DateTimeFormat("pt-BR", { hour: "2-digit", minute: "2-digit", hour12: false }).format(
-    new Date(value),
-  );
 }
 
 function durationMinutesFromRange(
@@ -193,6 +167,7 @@ const WEEK = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sab"] as const;
 
 export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [payload, setPayload] = useState<Payload | null>(null);
   const [selectedCampaignId, setSelectedCampaignId] = useState("");
   const [error, setError] = useState("");
@@ -203,20 +178,15 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
   const [isLoadingLinksFor, setIsLoadingLinksFor] = useState<string | null>(null);
   const [copiedSectorId, setCopiedSectorId] = useState<string | null>(null);
   const [drpsActionError, setDrpsActionError] = useState("");
+  const [openProgramActionsFor, setOpenProgramActionsFor] = useState<string | null>(null);
   const [calendarMonth, setCalendarMonth] = useState(() => {
     const now = new Date();
     return new Date(now.getFullYear(), now.getMonth(), 1);
   });
-  const [availabilitySelection, setAvailabilitySelection] = useState<Record<string, string[]>>({});
-  const [activeAvailabilityRequestId, setActiveAvailabilityRequestId] = useState("");
-  const [submittingAvailabilityId, setSubmittingAvailabilityId] = useState<string | null>(null);
-  const [requestingRescheduleProgramId, setRequestingRescheduleProgramId] = useState<string | null>(
-    null,
-  );
   const [downloadingReportId, setDownloadingReportId] = useState<string | null>(null);
-  const [availabilityFeedback, setAvailabilityFeedback] = useState("");
   const [reportFeedback, setReportFeedback] = useState("");
   const [selectedCalendarEventId, setSelectedCalendarEventId] = useState<string | null>(null);
+  const [appliedCalendarDeepLinkId, setAppliedCalendarDeepLinkId] = useState<string | null>(null);
 
   const loadData = useCallback(
     async (campaignId?: string) => {
@@ -245,22 +215,6 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
   useEffect(() => {
     void loadData();
   }, [loadData]);
-
-  useEffect(() => {
-    if (!payload) return;
-    setAvailabilitySelection((previous) => {
-      const next = { ...previous };
-      for (const request of payload.availabilityRequests) {
-        if (request.status !== "pending") continue;
-        if (next[request.id] && next[request.id].length > 0) continue;
-        next[request.id] =
-          request.selectedSlots.length > 0
-            ? request.selectedSlots.map((slot) => slot.startsAt)
-            : request.suggestedSlots.slice(0, 2).map((slot) => slot.startsAt);
-      }
-      return next;
-    });
-  }, [payload]);
 
   const selectedCampaign = useMemo(
     () => payload?.campaigns.find((item) => item.id === selectedCampaignId) ?? payload?.selectedCampaign ?? null,
@@ -295,42 +249,6 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
     setSelectedCampaignId(resultsCampaign.id);
     void loadData(resultsCampaign.id);
   }, [loadData, payload, resultsCampaign]);
-
-  const pendingAvailabilityRequests = useMemo(
-    () => (payload?.availabilityRequests ?? []).filter((request) => request.status === "pending"),
-    [payload],
-  );
-  const openAvailabilityRequests = useMemo(
-    () =>
-      (payload?.availabilityRequests ?? []).filter(
-        (request) => request.status === "pending" || request.status === "submitted",
-      ),
-    [payload],
-  );
-  const openAvailabilityByProgramId = useMemo(
-    () => new Map(openAvailabilityRequests.map((request) => [request.clientProgramId, request.status])),
-    [openAvailabilityRequests],
-  );
-  const pendingByClientProgramId = useMemo(
-    () => new Set(openAvailabilityRequests.map((request) => request.clientProgramId)),
-    [openAvailabilityRequests],
-  );
-
-  useEffect(() => {
-    if (pendingAvailabilityRequests.length === 0) {
-      setActiveAvailabilityRequestId("");
-      return;
-    }
-    if (pendingAvailabilityRequests.some((request) => request.id === activeAvailabilityRequestId)) {
-      return;
-    }
-    setActiveAvailabilityRequestId(pendingAvailabilityRequests[0].id);
-  }, [activeAvailabilityRequestId, pendingAvailabilityRequests]);
-
-  const activeAvailabilityRequest = useMemo(
-    () => pendingAvailabilityRequests.find((request) => request.id === activeAvailabilityRequestId) ?? null,
-    [activeAvailabilityRequestId, pendingAvailabilityRequests],
-  );
 
   async function loadQuestionnaireLinks(campaign: Campaign) {
     setIsLoadingLinksFor(campaign.id);
@@ -398,41 +316,6 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
     setCopiedSectorId(null);
   }
 
-  async function requestRescheduleForProgram(assignment: AssignedProgram) {
-    setRequestingRescheduleProgramId(assignment.id);
-    setAvailabilityFeedback("");
-    try {
-      const response = await fetch(
-        `/api/client/portal/${clientSlug}/programs/${assignment.id}/reschedule`,
-        { method: "POST" },
-      );
-      const body = (await response.json().catch(() => ({}))) as {
-        error?: string;
-        request?: AvailabilityRequest;
-      };
-      if (!response.ok || !body.request) {
-        throw new Error(body.error ?? "Nao foi possivel abrir o reagendamento.");
-      }
-      await loadData(selectedCampaignId || undefined);
-      setActiveAvailabilityRequestId(body.request.id);
-      if (body.request.suggestedSlots.length > 0) {
-        const firstSlotDate = new Date(body.request.suggestedSlots[0].startsAt);
-        if (!Number.isNaN(firstSlotDate.getTime())) {
-          setCalendarMonth(new Date(firstSlotDate.getFullYear(), firstSlotDate.getMonth(), 1));
-        }
-      }
-      setAvailabilityFeedback("Reagendamento aberto. Escolha os horarios no calendario e envie.");
-    } catch (rescheduleError) {
-      setAvailabilityFeedback(
-        rescheduleError instanceof Error
-          ? rescheduleError.message
-          : "Nao foi possivel abrir o reagendamento.",
-      );
-    } finally {
-      setRequestingRescheduleProgramId(null);
-    }
-  }
-
   async function downloadReport(report: Report) {
     setDownloadingReportId(report.id);
     setReportFeedback("");
@@ -485,50 +368,6 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
       );
     } finally {
       setDownloadingReportId(null);
-    }
-  }
-
-  function toggleAvailabilitySlot(requestId: string, startsAt: string) {
-    setAvailabilitySelection((previous) => {
-      const current = previous[requestId] ?? [];
-      const exists = current.includes(startsAt);
-      if (exists) {
-        return { ...previous, [requestId]: current.filter((value) => value !== startsAt) };
-      }
-      return { ...previous, [requestId]: [...current, startsAt] };
-    });
-  }
-
-  async function submitAvailability(request: AvailabilityRequest) {
-    const selectedSlots = availabilitySelection[request.id] ?? [];
-    if (selectedSlots.length === 0) {
-      setAvailabilityFeedback("Selecione pelo menos um horario para enviar a disponibilidade.");
-      return;
-    }
-
-    setSubmittingAvailabilityId(request.id);
-    setAvailabilityFeedback("");
-    try {
-      const response = await fetch(
-                `/api/client/portal/${clientSlug}/availability/${request.id}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ selectedSlots }),
-        },
-      );
-      const body = (await response.json().catch(() => ({}))) as { error?: string };
-      if (!response.ok) {
-        throw new Error(body.error ?? "Nao foi possivel enviar disponibilidade.");
-      }
-      setAvailabilityFeedback("Reagendamento enviado como provisorio. O gestor precisa confirmar.");
-      await loadData(selectedCampaignId || undefined);
-    } catch (submitError) {
-      setAvailabilityFeedback(
-        submitError instanceof Error ? submitError.message : "Nao foi possivel enviar disponibilidade.",
-      );
-    } finally {
-      setSubmittingAvailabilityId(null);
     }
   }
 
@@ -598,28 +437,28 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
     });
   }, [calendarMonth, eventsByDay]);
 
-  const activeRequestSlotsByDay = useMemo(() => {
-    const map = new Map<string, AvailabilitySlot[]>();
-    if (!activeAvailabilityRequest) return map;
-    for (const slot of activeAvailabilityRequest.suggestedSlots) {
-      const date = new Date(slot.startsAt);
-      if (Number.isNaN(date.getTime())) continue;
-      const key = dayKey(date);
-      map.set(key, [...(map.get(key) ?? []), slot]);
-    }
-    return map;
-  }, [activeAvailabilityRequest]);
-
-  const activeSelectedSlots = useMemo(
-    () => (activeAvailabilityRequest ? availabilitySelection[activeAvailabilityRequest.id] ?? [] : []),
-    [activeAvailabilityRequest, availabilitySelection],
-  );
-
   useEffect(() => {
     if (!selectedCalendarEventId) return;
     if (calendarEvents.some((event) => event.id === selectedCalendarEventId)) return;
     setSelectedCalendarEventId(null);
   }, [calendarEvents, selectedCalendarEventId]);
+
+  const calendarEventIdParam = searchParams.get("calendarEventId");
+  useEffect(() => {
+    if (!calendarEventIdParam) {
+      setAppliedCalendarDeepLinkId(null);
+      return;
+    }
+    if (appliedCalendarDeepLinkId === calendarEventIdParam) return;
+    const targetEvent = calendarEvents.find((event) => event.id === calendarEventIdParam) ?? null;
+    if (!targetEvent) return;
+    const startsAt = new Date(targetEvent.startsAt);
+    if (!Number.isNaN(startsAt.getTime())) {
+      setCalendarMonth(new Date(startsAt.getFullYear(), startsAt.getMonth(), 1));
+    }
+    setSelectedCalendarEventId(targetEvent.id);
+    setAppliedCalendarDeepLinkId(calendarEventIdParam);
+  }, [appliedCalendarDeepLinkId, calendarEventIdParam, calendarEvents]);
 
   const selectedCalendarEvent = useMemo(
     () =>
@@ -666,68 +505,51 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
     return "Nenhuma preparacao obrigatoria registrada.";
   }, [selectedCalendarEvent]);
 
-  const selectedCalendarEventLink = useMemo(() => {
-    if (!selectedCalendarEvent || !payload) return null;
-
-    if (
-      selectedCalendarEvent.eventType === "drps_start" ||
-      selectedCalendarEvent.eventType === "drps_close"
-    ) {
-      const campaignId = extractCampaignIdFromCalendarEvent(selectedCalendarEvent);
-      if (!campaignId) return null;
-      return {
-        href: `/client/${clientSlug}/diagnostic/${campaignId}`,
-        label: "Abrir resultado DRPS",
-      };
-    }
-
-    if (
-      selectedCalendarEvent.eventType === "continuous_meeting" &&
-      selectedCalendarEvent.sourceClientProgramId
-    ) {
-      const assignment =
-        payload.assignedPrograms.find(
-          (program) => program.id === selectedCalendarEvent.sourceClientProgramId,
-        ) ?? null;
-      if (!assignment) return null;
-      return {
-        href: `/client/${clientSlug}/programs/${assignment.programId}`,
-        label: "Abrir detalhes do processo",
-      };
-    }
-
-    return null;
-  }, [clientSlug, payload, selectedCalendarEvent]);
-
-  const selectedCalendarEventAssignment = useMemo(() => {
-    if (!selectedCalendarEvent || !payload) return null;
-    if (
-      selectedCalendarEvent.eventType !== "continuous_meeting" ||
-      !selectedCalendarEvent.sourceClientProgramId
-    ) {
+  const calendarEventLinkFor = useCallback(
+    (event: {
+      id: string;
+      eventType: "drps_start" | "drps_close" | "continuous_meeting" | "blocked";
+      sourceClientProgramId: string | null;
+    }) => {
+      if (!payload) return null;
+      if (event.eventType === "drps_start" || event.eventType === "drps_close") {
+        const campaignId = extractCampaignIdFromCalendarEvent(event);
+        if (!campaignId) return null;
+        return {
+          href: `/client/${clientSlug}/diagnostic/${campaignId}`,
+          label: "Abrir resultado DRPS",
+        };
+      }
+      if (event.eventType === "continuous_meeting" && event.sourceClientProgramId) {
+        const assignment =
+          payload.assignedPrograms.find((program) => program.id === event.sourceClientProgramId) ?? null;
+        if (!assignment) return null;
+        return {
+          href: `/client/${clientSlug}/programs/${assignment.programId}`,
+          label: "Abrir detalhes do processo",
+        };
+      }
       return null;
-    }
-    return (
-      payload.assignedPrograms.find(
-        (program) => program.id === selectedCalendarEvent.sourceClientProgramId,
-      ) ?? null
-    );
-  }, [payload, selectedCalendarEvent]);
-
-  const canRequestRescheduleFromEvent = useMemo(
-    () =>
-      Boolean(
-        selectedCalendarEventAssignment &&
-          selectedCalendarEventAssignment.status !== "Completed" &&
-          !pendingByClientProgramId.has(selectedCalendarEventAssignment.id) &&
-          requestingRescheduleProgramId !== selectedCalendarEventAssignment.id,
-      ),
-    [
-      pendingByClientProgramId,
-      requestingRescheduleProgramId,
-      selectedCalendarEventAssignment,
-    ],
+    },
+    [clientSlug, payload],
   );
+
+  const selectedCalendarEventLink = useMemo(() => {
+    if (!selectedCalendarEvent) return null;
+    return calendarEventLinkFor(selectedCalendarEvent);
+  }, [calendarEventLinkFor, selectedCalendarEvent]);
+
+  const calendarEventLinkById = useMemo(() => {
+    const map = new Map<
+      string,
+      { href: string; label: "Abrir resultado DRPS" | "Abrir detalhes do processo" }
+    >();
+    for (const event of calendarEvents) {
+      const link = calendarEventLinkFor(event);
+      if (link) map.set(event.id, link);
+    }
+    return map;
+  }, [calendarEventLinkFor, calendarEvents]);
 
   if (isLoading) {
     return <p className="text-sm text-[#3d5a69]">Carregando portal...</p>;
@@ -838,68 +660,6 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
             </article>
           </div>
         ) : null}
-      </section>
-
-      <section className="rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
-        <h3 className="text-lg font-semibold text-[#123447]">Popup de reagendamento</h3>
-        <p className="mt-1 text-sm text-[#3d5a69]">
-          Inicie o reagendamento pelo detalhe de um evento no calendario.
-        </p>
-        <p className="mt-1 text-xs text-[#4f6977]">
-          As opcoes exibidas no calendario consideram a disponibilidade atual do gestor.
-        </p>
-        {payload.availabilityRequestsUnavailable ? (
-          <p className="mt-2 text-xs text-[#8a5b2d]">
-            Persistencia de solicitacoes indisponivel nesta base. Aplique a migration
-            20260302220000_master_calendar_availability.sql.
-          </p>
-        ) : null}
-        {pendingAvailabilityRequests.length === 0 ? (
-          <p className="mt-3 text-sm text-[#5a7383]">
-            Nenhum reagendamento em aberto. Se necessario, inicie pelo processo continuo abaixo.
-          </p>
-        ) : (
-          <div className="mt-3 space-y-3 rounded-xl border border-[#d8e4ee] bg-[#f8fbfd] p-4">
-            <label className="block text-xs text-[#4f6977]">
-              Processo com solicitacao pendente
-              <select
-                className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
-                value={activeAvailabilityRequestId}
-                onChange={(event) => setActiveAvailabilityRequestId(event.target.value)}
-              >
-                {pendingAvailabilityRequests.map((request) => (
-                  <option key={request.id} value={request.id}>
-                    {request.programTitle}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {activeAvailabilityRequest ? (
-              <>
-                <p className="text-xs text-[#4f6977]">
-                  Solicitado em {fmt(activeAvailabilityRequest.requestedAt)} | Prazo{" "}
-                  {fmt(activeAvailabilityRequest.dueAt)}
-                </p>
-                <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => void submitAvailability(activeAvailabilityRequest)}
-                    disabled={submittingAvailabilityId === activeAvailabilityRequest.id}
-                    className="rounded-full bg-[#0f5b73] px-4 py-2 text-xs font-semibold text-white disabled:opacity-50"
-                  >
-                    {submittingAvailabilityId === activeAvailabilityRequest.id
-                      ? "Enviando..."
-                      : "Enviar disponibilidade"}
-                  </button>
-                  <span className="text-xs text-[#4f6977]">
-                    Selecionados no calendario: {activeSelectedSlots.length}
-                  </span>
-                </div>
-              </>
-            ) : null}
-          </div>
-        )}
-        {availabilityFeedback ? <p className="mt-3 text-sm text-[#0f5b73]">{availabilityFeedback}</p> : null}
       </section>
 
       <section className="rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
@@ -1153,54 +913,52 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
                 {day.value.getDate()}
               </p>
               <div className="mt-1 space-y-1">
-                {day.events.slice(0, 2).map((event) => (
-                  <button
-                    type="button"
-                    key={event.id}
-                    onClick={() => setSelectedCalendarEventId(event.id)}
-                    title={`${event.title} (${fmt(event.startsAt)})`}
-                    className={`rounded px-1 py-0.5 text-[10px] ${
-                      event.type === "start"
-                        ? "bg-[#e2f4ea] text-[#1f5b38]"
-                        : event.type === "close"
-                          ? "bg-[#fff3df] text-[#7a4b00]"
-                          : event.type === "meeting"
-                            ? event.details.eventLifecycle === "committed"
-                              ? "bg-[#2f6f8d] text-white"
-                              : "bg-[#e6f3f8] text-[#1f5f79]"
-                            : "bg-[#fce6f1] text-[#7a2755]"
-                    } block w-full truncate text-left`}
-                  >
-                    {event.type === "meeting"
+                {day.events.slice(0, 2).map((event) => {
+                  const eventLink = calendarEventLinkById.get(event.id) ?? null;
+                  const commonClass = `rounded px-1 py-0.5 text-[10px] ${
+                    event.type === "start"
+                      ? "bg-[#e2f4ea] text-[#1f5b38]"
+                      : event.type === "close"
+                        ? "bg-[#fff3df] text-[#7a4b00]"
+                        : event.type === "meeting"
+                          ? event.details.eventLifecycle === "committed"
+                            ? "bg-[#2f6f8d] text-white"
+                            : "bg-[#e6f3f8] text-[#1f5f79]"
+                          : "bg-[#fce6f1] text-[#7a2755]"
+                  } block w-full truncate text-left`;
+                  const label =
+                    event.type === "meeting"
                       ? "Reuniao continua"
                       : event.type === "blocked"
                         ? "Bloqueio"
                         : event.type === "start"
                           ? "Inicio DRPS"
-                          : "Fim DRPS"}
-                  </button>
-                ))}
+                          : "Fim DRPS";
+                  if (eventLink) {
+                    return (
+                      <Link
+                        key={event.id}
+                        href={eventLink.href}
+                        title={`${event.title} (${fmt(event.startsAt)})`}
+                        className={`${commonClass} hover:opacity-90 hover:underline`}
+                      >
+                        {label}
+                      </Link>
+                    );
+                  }
+                  return (
+                    <button
+                      type="button"
+                      key={event.id}
+                      onClick={() => setSelectedCalendarEventId(event.id)}
+                      title={`${event.title} (${fmt(event.startsAt)})`}
+                      className={commonClass}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
                 {day.events.length > 2 ? <p className="text-[10px] text-[#527083]">+{day.events.length - 2}</p> : null}
-                {activeAvailabilityRequest
-                  ? (activeRequestSlotsByDay.get(day.key) ?? []).map((slot) => {
-                      const selected = activeSelectedSlots.includes(slot.startsAt);
-                      return (
-                        <button
-                          key={`${activeAvailabilityRequest.id}-${slot.startsAt}`}
-                          type="button"
-                          onClick={() => toggleAvailabilitySlot(activeAvailabilityRequest.id, slot.startsAt)}
-                          className={`block w-full rounded px-1 py-0.5 text-left text-[10px] ${
-                            selected
-                              ? "border border-[#0f5b73] bg-[#dceef6] text-[#0f5b73]"
-                              : "border border-[#b6d4e3] bg-[#eff7fb] text-[#24566b]"
-                          }`}
-                          title={`${fmt(slot.startsAt)} - ${fmt(slot.endsAt)}`}
-                        >
-                          {fmtTime(slot.startsAt)} disponivel
-                        </button>
-                      );
-                    })
-                  : null}
               </div>
             </div>
           ))}
@@ -1252,9 +1010,7 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
                 <p className="text-xs text-[#4d6a79]">Ciclo</p>
                 <p className="text-sm font-semibold text-[#123447]">
                   {selectedCalendarEvent.details.eventLifecycle === "provisory"
-                    ? selectedCalendarEvent.details.proposalKind === "reschedule"
-                      ? "Provisorio (reagendamento)"
-                      : "Provisorio (cadencia)"
+                    ? "Provisorio"
                     : "Commitado"}
                 </p>
               </div>
@@ -1282,27 +1038,6 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
                   className="rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
                 >
                   {selectedCalendarEventLink.label}
-                </button>
-              </div>
-            ) : null}
-            {selectedCalendarEventAssignment ? (
-              <div className="mt-3">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSelectedCalendarEventId(null);
-                    void requestRescheduleForProgram(selectedCalendarEventAssignment);
-                  }}
-                  disabled={!canRequestRescheduleFromEvent}
-                  className="rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73] disabled:opacity-50"
-                >
-                  {requestingRescheduleProgramId === selectedCalendarEventAssignment.id
-                    ? "Abrindo..."
-                    : openAvailabilityByProgramId.get(selectedCalendarEventAssignment.id) === "submitted"
-                      ? "Aguardando confirmacao"
-                      : pendingByClientProgramId.has(selectedCalendarEventAssignment.id)
-                        ? "Popup aberto"
-                      : "Solicitar reagendamento"}
                 </button>
               </div>
             ) : null}
@@ -1416,24 +1151,33 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
                     <td className="px-2 py-2">{fmt(assignment.deployedAt)}</td>
                     <td className="px-2 py-2">{assignment.scheduleFrequency}</td>
                     <td className="px-2 py-2">
-                      <button
-                        type="button"
-                        onClick={() => void requestRescheduleForProgram(assignment)}
-                        disabled={
-                          assignment.status === "Completed" ||
-                          pendingByClientProgramId.has(assignment.id) ||
-                          requestingRescheduleProgramId === assignment.id
-                        }
-                        className="rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73] disabled:opacity-50"
-                      >
-                        {requestingRescheduleProgramId === assignment.id
-                          ? "Abrindo..."
-                          : openAvailabilityByProgramId.get(assignment.id) === "submitted"
-                            ? "Aguardando confirmacao"
-                            : pendingByClientProgramId.has(assignment.id)
-                              ? "Popup aberto"
-                            : "Solicitar reagendamento"}
-                      </button>
+                      <div className="relative inline-flex">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setOpenProgramActionsFor((previous) =>
+                              previous === assignment.id ? null : assignment.id,
+                            );
+                          }}
+                          className="rounded-full border border-[#c8c8c8] px-3 py-1 text-xs font-semibold text-[#1b2832]"
+                        >
+                          ...
+                        </button>
+                        {openProgramActionsFor === assignment.id ? (
+                          <div className="absolute right-0 top-full z-20 mt-2 w-52 overflow-hidden rounded-xl border border-[#d8e4ee] bg-white shadow-lg">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setOpenProgramActionsFor(null);
+                                router.push(`/client/${clientSlug}/programs/${assignment.programId}`);
+                              }}
+                              className="block w-full px-3 py-2 text-left text-xs font-semibold text-[#123447] hover:bg-[#f4f9fc]"
+                            >
+                              Ver detalhes
+                            </button>
+                          </div>
+                        ) : null}
+                      </div>
                     </td>
                   </tr>
                 ))

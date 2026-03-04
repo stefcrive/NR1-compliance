@@ -5,9 +5,11 @@ import { z } from "zod";
 
 import {
   buildSuggestedAvailabilitySlots,
+  DEFAULT_ASSIGNMENT_CADENCE_SLOT_COUNT,
   type AvailabilitySlot,
 } from "@/lib/availability-scheduler";
 import { isAdminApiAuthorized } from "@/lib/admin-auth";
+import { DEFAULT_CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCY } from "@/lib/continuous-programs";
 import {
   buildDrpsCalendarEvents,
   extractCalendarEventDetails,
@@ -68,6 +70,10 @@ const cadenceFrequencyValues = [
   "custom",
 ] as const;
 
+function todayIsoDate(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
 const assignProgramSchema = z.object({
   programId: z.string().trim().min(1).max(120),
   status: z.enum(["Recommended", "Active", "Completed"]).optional(),
@@ -87,8 +93,8 @@ function mapAvailableProgram(program: PeriodicProgramRow) {
     description: program.description,
     targetRiskTopic: Number(program.target_risk_topic),
     triggerThreshold: Number(program.trigger_threshold),
-    scheduleFrequency: program.schedule_frequency ?? "monthly",
-    scheduleAnchorDate: program.schedule_anchor_date ?? null,
+    scheduleFrequency: DEFAULT_CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCY,
+    scheduleAnchorDate: program.schedule_anchor_date ?? todayIsoDate(),
   };
 }
 
@@ -103,9 +109,8 @@ function mapAssignedProgram(
 ) {
   const program = programById.get(assignment.program_id) ?? null;
   const scheduleFrequency =
-    assignment.schedule_frequency_override ?? program?.schedule_frequency ?? "monthly";
-  const scheduleAnchorDate =
-    assignment.schedule_anchor_date_override ?? program?.schedule_anchor_date ?? null;
+    assignment.schedule_frequency_override ?? DEFAULT_CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCY;
+  const scheduleAnchorDate = todayIsoDate();
   return {
     id: assignment.client_program_id,
     programId: assignment.program_id,
@@ -303,13 +308,11 @@ async function loadCommittedMeetingsByAssignment(
 
 function resolveCadenceForAssignment(
   assignment: ClientProgramRow,
-  program: PeriodicProgramRow | null,
 ): { scheduleFrequency: string; scheduleAnchorDate: string | null } {
   return {
     scheduleFrequency:
-      assignment.schedule_frequency_override ?? program?.schedule_frequency ?? "monthly",
-    scheduleAnchorDate:
-      assignment.schedule_anchor_date_override ?? program?.schedule_anchor_date ?? null,
+      assignment.schedule_frequency_override ?? DEFAULT_CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCY,
+    scheduleAnchorDate: todayIsoDate(),
   };
 }
 
@@ -416,22 +419,24 @@ export async function GET(
   return NextResponse.json({
     availablePrograms: (programsResult.data ?? []).map(mapAvailableProgram),
     assignedPrograms: assignments.map((item) => {
-      const program = programById.get(item.program_id) ?? null;
-      const cadence = resolveCadenceForAssignment(item, program);
-      const provisorySlots = provisoryByAssignment.get(item.client_program_id) ?? [];
+      const cadence = resolveCadenceForAssignment(item);
       const cadenceSuggestedSlots =
-        item.status === "Completed"
-          ? []
-          : provisorySlots.length > 0
-            ? provisorySlots
-            : buildSuggestedAvailabilitySlots({
+        item.status === "Active"
+          ? buildSuggestedAvailabilitySlots({
                 deployedAt: item.deployed_at ?? new Date().toISOString(),
                 scheduleFrequency: cadence.scheduleFrequency,
                 scheduleAnchorDate: cadence.scheduleAnchorDate,
                 existingEvents: clientMasterCalendarEvents.filter(
                   (event) => event.sourceClientProgramId !== item.client_program_id,
                 ),
-              });
+                maxSlots: DEFAULT_ASSIGNMENT_CADENCE_SLOT_COUNT,
+                enforceCadenceSeries: true,
+              })
+          : [];
+      const provisorySlots =
+        item.status === "Active"
+          ? cadenceSuggestedSlots
+          : provisoryByAssignment.get(item.client_program_id) ?? [];
 
       return mapAssignedProgram(item, programById, {
         cadenceSuggestedSlots,
@@ -530,11 +535,9 @@ export async function POST(
       status: parsed.status ?? "Active",
       deployed_at:
         parsed.deployedAt && parsed.deployedAt.length > 0 ? parsed.deployedAt : new Date().toISOString(),
-      schedule_frequency_override: parsed.scheduleFrequency ?? null,
-      schedule_anchor_date_override:
-        parsed.scheduleAnchorDate && parsed.scheduleAnchorDate.length > 0
-          ? parsed.scheduleAnchorDate
-          : null,
+      schedule_frequency_override:
+        parsed.scheduleFrequency ?? DEFAULT_CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCY,
+      schedule_anchor_date_override: todayIsoDate(),
     })
     .select(
       "client_program_id,program_id,status,deployed_at,schedule_frequency_override,schedule_anchor_date_override",
@@ -569,23 +572,27 @@ export async function POST(
 
   const programById = new Map([[programResult.data.program_id, programResult.data]]);
   let cadenceSuggestedSlots: AvailabilitySlot[] = [];
-  const cadence = resolveCadenceForAssignment(insertResult.data, programResult.data);
+  const cadence = resolveCadenceForAssignment(insertResult.data);
   let calendarUnavailable = false;
   try {
-    const masterEvents = await loadManagerMasterCalendarEvents();
-    cadenceSuggestedSlots = buildSuggestedAvailabilitySlots({
-      deployedAt: insertResult.data.deployed_at ?? new Date().toISOString(),
-      scheduleFrequency: cadence.scheduleFrequency,
-      scheduleAnchorDate: cadence.scheduleAnchorDate,
-      existingEvents: masterEvents,
-    });
-    const inserted = await insertProvisoryAssignmentEvents({
-      clientId,
-      assignmentId: insertResult.data.client_program_id,
-      programTitle: programResult.data.title,
-      slots: cadenceSuggestedSlots,
-    });
-    calendarUnavailable = inserted.unavailable;
+    if (insertResult.data.status === "Active") {
+      const masterEvents = await loadManagerMasterCalendarEvents();
+      cadenceSuggestedSlots = buildSuggestedAvailabilitySlots({
+        deployedAt: insertResult.data.deployed_at ?? new Date().toISOString(),
+        scheduleFrequency: cadence.scheduleFrequency,
+        scheduleAnchorDate: cadence.scheduleAnchorDate,
+        existingEvents: masterEvents,
+        maxSlots: DEFAULT_ASSIGNMENT_CADENCE_SLOT_COUNT,
+        enforceCadenceSeries: true,
+      });
+      const inserted = await insertProvisoryAssignmentEvents({
+        clientId,
+        assignmentId: insertResult.data.client_program_id,
+        programTitle: programResult.data.title,
+        slots: cadenceSuggestedSlots,
+      });
+      calendarUnavailable = inserted.unavailable;
+    }
   } catch {
     cadenceSuggestedSlots = [];
   }

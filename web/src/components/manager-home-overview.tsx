@@ -32,16 +32,6 @@ type ActiveContinuousProgram = {
   status: "Recommended" | "Active" | "Completed";
 };
 
-type ActiveRow = {
-  id: string;
-  kind: "drps" | "continuous";
-  title: string;
-  company: string;
-  startsAt: string | null;
-  endsAt: string | null;
-  href: string;
-};
-
 const COPY = {
   en: {
     pageTitle: "Home",
@@ -56,15 +46,16 @@ const COPY = {
     eventTypeDrpsClose: "DRPS close",
     eventTypeMeeting: "Continuous meeting",
     eventTypeBlocked: "Blocked time",
-    activeTableTitle: "Active DRPS and continuous programs",
-    tableType: "Type",
+    activeDrpsTableTitle: "Active DRPS diagnostics",
+    activeProgramsTableTitle: "Active continuous programs",
     tableName: "Name",
+    tableProgram: "Program",
     tableCompany: "Company",
     tableStart: "Start",
-    tableEnd: "Close / Since",
-    typeDrps: "DRPS",
-    typeContinuous: "Continuous",
-    noActiveRows: "No active DRPS diagnostics or continuous programs.",
+    tableClose: "Close",
+    tableSince: "Since",
+    noActiveCampaigns: "No active DRPS diagnostics.",
+    noActivePrograms: "No active continuous programs.",
     openItem: "Open",
     notPlanned: "not planned",
   },
@@ -81,15 +72,16 @@ const COPY = {
     eventTypeDrpsClose: "Fechamento DRPS",
     eventTypeMeeting: "Reuniao continua",
     eventTypeBlocked: "Bloqueio",
-    activeTableTitle: "DRPS e programas continuos ativos",
-    tableType: "Tipo",
+    activeDrpsTableTitle: "DRPS ativos",
+    activeProgramsTableTitle: "Programas continuos ativos",
     tableName: "Nome",
+    tableProgram: "Programa",
     tableCompany: "Empresa",
     tableStart: "Inicio",
-    tableEnd: "Fechamento / Ativo desde",
-    typeDrps: "DRPS",
-    typeContinuous: "Continuo",
-    noActiveRows: "Nenhum DRPS ativo ou programa continuo ativo.",
+    tableClose: "Fechamento",
+    tableSince: "Ativo desde",
+    noActiveCampaigns: "Nenhum diagnostico DRPS ativo.",
+    noActivePrograms: "Nenhum programa continuo ativo.",
     openItem: "Abrir",
     notPlanned: "nao planejado",
   },
@@ -180,37 +172,31 @@ export function ManagerHomeOverview() {
     [calendarEvents],
   );
 
-  const activeRows = useMemo(() => {
-    const liveCampaignRows: ActiveRow[] = campaigns
-      .filter((campaign) => campaign.status === "live")
-      .map((campaign) => ({
-        id: campaign.id,
-        kind: "drps",
-        title: campaign.name,
-        company: campaign.client_name ?? t.noCompany,
-        startsAt: campaign.starts_at ?? null,
-        endsAt: campaign.closes_at ?? null,
-        href: `/manager/programs/drps/${campaign.id}`,
-      }));
+  const liveCampaigns = useMemo(
+    () =>
+      campaigns
+        .filter((campaign) => campaign.status === "live")
+        .slice()
+        .sort((a, b) => {
+          const left = a.starts_at ? new Date(a.starts_at).getTime() : Number.MAX_SAFE_INTEGER;
+          const right = b.starts_at ? new Date(b.starts_at).getTime() : Number.MAX_SAFE_INTEGER;
+          return left - right;
+        }),
+    [campaigns],
+  );
 
-    const liveContinuousRows: ActiveRow[] = activeContinuousPrograms
-      .filter((program) => program.status === "Active")
-      .map((program) => ({
-        id: program.id,
-        kind: "continuous",
-        title: program.programTitle,
-        company: program.clientName ?? t.noCompany,
-        startsAt: program.deployedAt ?? null,
-        endsAt: null,
-        href: `/manager/clients/${program.clientId}/assigned-continuous/${program.id}`,
-      }));
-
-    return [...liveCampaignRows, ...liveContinuousRows].sort((a, b) => {
-      const left = a.startsAt ? new Date(a.startsAt).getTime() : Number.MAX_SAFE_INTEGER;
-      const right = b.startsAt ? new Date(b.startsAt).getTime() : Number.MAX_SAFE_INTEGER;
-      return left - right;
-    });
-  }, [activeContinuousPrograms, campaigns, t.noCompany]);
+  const liveContinuousPrograms = useMemo(
+    () =>
+      activeContinuousPrograms
+        .filter((program) => program.status === "Active")
+        .slice()
+        .sort((a, b) => {
+          const left = a.deployedAt ? new Date(a.deployedAt).getTime() : Number.MAX_SAFE_INTEGER;
+          const right = b.deployedAt ? new Date(b.deployedAt).getTime() : Number.MAX_SAFE_INTEGER;
+          return left - right;
+        }),
+    [activeContinuousPrograms],
+  );
 
   function eventTypeLabel(event: MasterCalendarEvent) {
     if (event.eventType === "drps_start") return t.eventTypeDrpsStart;
@@ -272,48 +258,92 @@ export function ManagerHomeOverview() {
       </section>
 
       <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm md:p-6">
-        <h4 className="text-lg font-semibold text-[#123447]">{t.activeTableTitle}</h4>
-        <div className="mt-3 overflow-x-auto rounded-lg border border-[#d8e4ee] bg-white">
-          <table className="min-w-full text-sm">
-            <thead>
-              <tr className="border-b bg-[#f5f8fb]">
-                <th className="px-2 py-2 text-left">{t.tableType}</th>
-                <th className="px-2 py-2 text-left">{t.tableName}</th>
-                <th className="px-2 py-2 text-left">{t.tableCompany}</th>
-                <th className="px-2 py-2 text-left">{t.tableStart}</th>
-                <th className="px-2 py-2 text-left">{t.tableEnd}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {activeRows.length === 0 ? (
-                <tr>
-                  <td colSpan={5} className="px-2 py-3 text-xs text-[#5a7383]">
-                    {t.noActiveRows}
-                  </td>
-                </tr>
-              ) : (
-                activeRows.map((row) => (
-                  <tr key={`${row.kind}-${row.id}`} className="border-b last:border-b-0">
-                    <td className="px-2 py-2 text-[#3e5a68]">
-                      {row.kind === "drps" ? t.typeDrps : t.typeContinuous}
-                    </td>
-                    <td className="px-2 py-2">
-                      <Link href={row.href} className="font-semibold text-[#123447] hover:text-[#0f5b73] hover:underline">
-                        {row.title}
-                      </Link>
-                    </td>
-                    <td className="px-2 py-2 text-[#3e5a68]">{row.company}</td>
-                    <td className="px-2 py-2 text-[#3e5a68]">
-                      {row.startsAt ? toDate(row.startsAt, locale) : t.notPlanned}
-                    </td>
-                    <td className="px-2 py-2 text-[#3e5a68]">
-                      {row.endsAt ? toDate(row.endsAt, locale) : t.notPlanned}
-                    </td>
+        <div className="grid gap-4 xl:grid-cols-2">
+          <section>
+            <h4 className="text-lg font-semibold text-[#123447]">{t.activeDrpsTableTitle}</h4>
+            <div className="mt-3 overflow-x-auto rounded-lg border border-[#d8e4ee] bg-white">
+              <table className="min-w-full text-sm">
+                <thead>
+                  <tr className="border-b bg-[#f5f8fb]">
+                    <th className="px-2 py-2 text-left">{t.tableName}</th>
+                    <th className="px-2 py-2 text-left">{t.tableCompany}</th>
+                    <th className="px-2 py-2 text-left">{t.tableStart}</th>
+                    <th className="px-2 py-2 text-left">{t.tableClose}</th>
                   </tr>
-                ))
-              )}
-            </tbody>
-          </table>
+                </thead>
+                <tbody>
+                  {liveCampaigns.length === 0 ? (
+                    <tr>
+                      <td colSpan={4} className="px-2 py-3 text-xs text-[#5a7383]">
+                        {t.noActiveCampaigns}
+                      </td>
+                    </tr>
+                  ) : (
+                    liveCampaigns.map((campaign) => (
+                      <tr key={campaign.id} className="border-b last:border-b-0">
+                        <td className="px-2 py-2">
+                          <Link
+                            href={`/manager/programs/drps/${campaign.id}`}
+                            className="font-semibold text-[#123447] hover:text-[#0f5b73] hover:underline"
+                          >
+                            {campaign.name}
+                          </Link>
+                        </td>
+                        <td className="px-2 py-2 text-[#3e5a68]">{campaign.client_name ?? t.noCompany}</td>
+                        <td className="px-2 py-2 text-[#3e5a68]">
+                          {campaign.starts_at ? toDate(campaign.starts_at, locale) : t.notPlanned}
+                        </td>
+                        <td className="px-2 py-2 text-[#3e5a68]">
+                          {campaign.closes_at ? toDate(campaign.closes_at, locale) : t.notPlanned}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section>
+            <h4 className="text-lg font-semibold text-[#123447]">{t.activeProgramsTableTitle}</h4>
+            <div className="mt-3 overflow-x-auto rounded-lg border border-[#d8e4ee] bg-white">
+              <table className="min-w-full text-sm">
+                <thead>
+                  <tr className="border-b bg-[#f5f8fb]">
+                    <th className="px-2 py-2 text-left">{t.tableProgram}</th>
+                    <th className="px-2 py-2 text-left">{t.tableCompany}</th>
+                    <th className="px-2 py-2 text-left">{t.tableSince}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {liveContinuousPrograms.length === 0 ? (
+                    <tr>
+                      <td colSpan={3} className="px-2 py-3 text-xs text-[#5a7383]">
+                        {t.noActivePrograms}
+                      </td>
+                    </tr>
+                  ) : (
+                    liveContinuousPrograms.map((program) => (
+                      <tr key={program.id} className="border-b last:border-b-0">
+                        <td className="px-2 py-2">
+                          <Link
+                            href={`/manager/clients/${program.clientId}/assigned-continuous/${program.id}`}
+                            className="font-semibold text-[#123447] hover:text-[#0f5b73] hover:underline"
+                          >
+                            {program.programTitle}
+                          </Link>
+                        </td>
+                        <td className="px-2 py-2 text-[#3e5a68]">{program.clientName ?? t.noCompany}</td>
+                        <td className="px-2 py-2 text-[#3e5a68]">
+                          {program.deployedAt ? toDate(program.deployedAt, locale) : t.notPlanned}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
         </div>
       </section>
     </div>
