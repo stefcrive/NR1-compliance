@@ -3,7 +3,9 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { getServerEnv } from "@/lib/env";
-import { createFormSessionToken } from "@/lib/form-session";
+import { createFormSessionToken, verifyFormSessionToken } from "@/lib/form-session";
+import { submittedCookieNameForSurvey } from "@/lib/public-form-submit-cookie";
+import { filterPublicSurveyGroups } from "@/lib/public-survey-groups";
 import { isMissingTableError } from "@/lib/supabase-errors";
 import { getLiveSurveyBySlug, getSurveyPublicBundle } from "@/lib/survey-repo";
 import { getSupabaseAdminClient } from "@/lib/supabase-admin";
@@ -23,6 +25,25 @@ const sessionRequestSchema = z.object({
 function toRiskParameter(value: number | string): number {
   const numeric = typeof value === "number" ? value : Number(value);
   return Number.isFinite(numeric) ? numeric : 1;
+}
+
+function canReuseSessionToken(params: {
+  hasSectorRestriction: boolean;
+  matchedSector: SectorConfigRow | null;
+  existingSectorId?: string;
+  existingSectorKey?: string;
+  existingSectorName?: string;
+}): boolean {
+  if (params.hasSectorRestriction) {
+    return (
+      !!params.matchedSector &&
+      params.existingSectorId === params.matchedSector.id &&
+      params.existingSectorKey === params.matchedSector.key &&
+      params.existingSectorName === params.matchedSector.name
+    );
+  }
+
+  return !params.existingSectorId && !params.existingSectorKey && !params.existingSectorName;
 }
 
 export async function POST(
@@ -89,7 +110,30 @@ export async function POST(
   }
 
   const env = getServerEnv();
+  const cookieStore = await cookies();
+  const existingToken = cookieStore.get("form_session")?.value;
+  const existingSessionPayload = existingToken
+    ? verifyFormSessionToken({
+        token: existingToken,
+        expectedSurveyId: survey.id,
+        secret: env.formSessionSecret,
+      })
+    : null;
+
+  const reusableSessionSid =
+    existingSessionPayload &&
+    canReuseSessionToken({
+      hasSectorRestriction,
+      matchedSector,
+      existingSectorId: existingSessionPayload.sectorId,
+      existingSectorKey: existingSessionPayload.sectorKey,
+      existingSectorName: existingSessionPayload.sectorName,
+    })
+      ? existingSessionPayload.sid
+      : undefined;
+
   const tokenData = createFormSessionToken({
+    sid: reusableSessionSid,
     surveyId: survey.id,
     sectorId: matchedSector?.id,
     sectorKey: matchedSector?.key,
@@ -99,7 +143,6 @@ export async function POST(
     secret: env.formSessionSecret,
   });
 
-  const cookieStore = await cookies();
   cookieStore.set({
     name: "form_session",
     value: tokenData.token,
@@ -110,9 +153,15 @@ export async function POST(
     maxAge: survey.session_ttl_minutes * 60,
   });
 
+  const submittedCookieName = submittedCookieNameForSurvey(survey.id);
+  const submittedSid = cookieStore.get(submittedCookieName)?.value;
+
   return NextResponse.json({
     surveyId: survey.id,
     slug: survey.public_slug,
+    sessionSid: tokenData.payload.sid,
+    linkType: matchedSector ? "sector" : "general",
+    alreadySubmitted: submittedSid === tokenData.payload.sid,
     title: survey.name,
     likert: {
       min: survey.likert_min,
@@ -128,7 +177,7 @@ export async function POST(
           riskParameter: toRiskParameter(matchedSector.risk_parameter),
         }
       : null,
-    groups: bundle.groups,
+    groups: filterPublicSurveyGroups(bundle.groups),
     questions: bundle.questions.map((question) => ({
       id: question.id,
       topicId: question.topic_id,

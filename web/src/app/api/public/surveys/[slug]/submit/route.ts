@@ -4,6 +4,8 @@ import { z } from "zod";
 import { getServerEnv } from "@/lib/env";
 import { verifyFormSessionToken } from "@/lib/form-session";
 import { extractTrustedIp, hashIp } from "@/lib/ip";
+import { submittedCookieMaxAgeSeconds, submittedCookieNameForSurvey } from "@/lib/public-form-submit-cookie";
+import { filterPublicSurveyGroups, sanitizePublicGroupValues } from "@/lib/public-survey-groups";
 import { correctedScore } from "@/lib/scoring";
 import { isMissingColumnError, isMissingTableError } from "@/lib/supabase-errors";
 import { getLiveSurveyBySlug, getSurveyPublicBundle } from "@/lib/survey-repo";
@@ -79,6 +81,34 @@ export async function POST(
     return NextResponse.json({ error: "Invalid or expired form session." }, { status: 401 });
   }
 
+  const submittedCookieName = submittedCookieNameForSurvey(survey.id);
+  const submittedSessionSid = request.cookies.get(submittedCookieName)?.value;
+  if (submittedSessionSid === formSession.sid) {
+    return NextResponse.json(
+      { error: "This form session has already been submitted." },
+      { status: 409 },
+    );
+  }
+
+  const supabase = getSupabaseAdminClient();
+  const { data: existingRows, error: existingRowsError } = await supabase
+    .from("responses")
+    .select("id")
+    .eq("survey_id", survey.id)
+    .eq("session_sid", formSession.sid)
+    .limit(1)
+    .returns<Array<{ id: string }>>();
+
+  if (existingRowsError && !isMissingTableError(existingRowsError, "responses")) {
+    return NextResponse.json({ error: "Could not verify submission state." }, { status: 500 });
+  }
+  if ((existingRows ?? []).length > 0) {
+    return NextResponse.json(
+      { error: "This form session has already been submitted." },
+      { status: 409 },
+    );
+  }
+
   const clientIp = extractTrustedIp(request.headers);
   const ipHash = hashIp(clientIp, env.ipHashSecret);
 
@@ -93,8 +123,6 @@ export async function POST(
       { status: 401 },
     );
   }
-
-  const supabase = getSupabaseAdminClient();
 
   let activeSectors: SectorSessionRow[] = [];
   const { data: activeSectorRows, error: activeSectorError } = await supabase
@@ -155,10 +183,11 @@ export async function POST(
   }
 
   const bundle = await getSurveyPublicBundle(survey.id);
+  const publicGroups = filterPublicSurveyGroups(bundle.groups);
   const questionById = new Map(bundle.questions.map((question) => [question.id, question]));
 
-  const groupValues = parsedBody.groups ?? {};
-  for (const groupDefinition of bundle.groups) {
+  const groupValues = sanitizePublicGroupValues(parsedBody.groups ?? {});
+  for (const groupDefinition of publicGroups) {
     const selected =
       groupDefinition.key === "sector" && matchedSector
         ? matchedSector.name
@@ -321,8 +350,18 @@ export async function POST(
     });
   }
 
-  return NextResponse.json({
+  const response = NextResponse.json({
     ok: true,
     submittedAt: responseInserted.submitted_at,
   });
+  response.cookies.set({
+    name: submittedCookieName,
+    value: formSession.sid,
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax",
+    path: "/",
+    maxAge: submittedCookieMaxAgeSeconds(survey.closes_at),
+  });
+  return response;
 }

@@ -40,6 +40,7 @@ function sign(input: string, secret: string): string {
 }
 
 export function createFormSessionToken(params: {
+  sid?: string;
   surveyId: string;
   sectorId?: string;
   sectorKey?: string;
@@ -50,7 +51,7 @@ export function createFormSessionToken(params: {
 }): { token: string; payload: FormSessionPayload } {
   const now = Math.floor(Date.now() / 1000);
   const payload: FormSessionPayload = {
-    sid: randomUUID(),
+    sid: params.sid ?? randomUUID(),
     surveyId: params.surveyId,
     sectorId: params.sectorId,
     sectorKey: params.sectorKey,

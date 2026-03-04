@@ -28,5 +28,7 @@ https://www.scielo.br/j/pe/a/sqhs5pPk4QBspW3DKXrmxnP
 Associação Brasileira de Psicologia Organizacional e do Trabalho (SBPOT)
 Publicações e boletins técnicos sobre práticas éticas em avaliação no trabalho
 
+about the access to the platform. Manager has a specific user and password, only the manager can send invitation links to client company that the company uses to create their credentials, the link brings to a quick onboarding page, where client set username password, insert data about the company.
+
 
 Chamelon12__

@@ -3,9 +3,16 @@
 import Script from "next/script";
 import { useEffect, useMemo, useState } from "react";
 
+const QUESTIONS_PER_PAGE = 5;
+const AUTO_SAVE_DEBOUNCE_MS = 450;
+const DRAFT_STORAGE_PREFIX = "nr1:drps:draft";
+
 type SessionPayload = {
   surveyId: string;
   slug: string;
+  sessionSid: string;
+  linkType: "general" | "sector";
+  alreadySubmitted: boolean;
   title: string;
   likert: { min: number; max: number };
   turnstileSiteKey: string;
@@ -32,10 +39,59 @@ type SessionPayload = {
   }>;
 };
 
+type DraftPayload = {
+  version: 1;
+  savedAt: string;
+  pageIndex: number;
+  answers: Record<string, number>;
+  groups: Record<string, string>;
+};
+
 declare global {
   interface Window {
     onTurnstileSuccess?: (token: string) => void;
   }
+}
+
+function pickPreselectedSector(session: SessionPayload): string | null {
+  const sectorGroup = session.groups.find((group) => group.key === "sector");
+  if (!sectorGroup || sectorGroup.options.length === 0) {
+    return null;
+  }
+
+  if (session.lockedSector) {
+    const matchedOption = sectorGroup.options.find(
+      (option) =>
+        option.value === session.lockedSector?.name || option.label === session.lockedSector?.name,
+    );
+    return matchedOption?.value ?? session.lockedSector.name;
+  }
+
+  if (session.linkType === "general") {
+    const preferredOption = sectorGroup.options.find((option) => {
+      const candidate = `${option.value} ${option.label}`.toLowerCase();
+      return candidate.includes("empresa geral") || candidate.includes("geral") || candidate.includes("general");
+    });
+    if (preferredOption) {
+      return preferredOption.value;
+    }
+  }
+
+  return sectorGroup.options[0]?.value ?? null;
+}
+
+function buildDraftStorageKey(params: {
+  surveyId: string;
+  sessionSid: string;
+  linkType: "general" | "sector";
+  sectorToken?: string;
+  lockedSectorId?: string;
+}): string {
+  const linkIdentity =
+    params.linkType === "sector"
+      ? `sector:${params.lockedSectorId ?? "unknown"}`
+      : `general:${params.sectorToken?.trim() || "open"}`;
+  return `${DRAFT_STORAGE_PREFIX}:${params.surveyId}:${linkIdentity}:${params.sessionSid}`;
 }
 
 export function PublicSurveyForm({
@@ -55,12 +111,24 @@ export function PublicSurveyForm({
   const [turnstileToken, setTurnstileToken] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [pageIndex, setPageIndex] = useState(0);
+  const [hydratedSessionSid, setHydratedSessionSid] = useState("");
+  const [restoredFromDraft, setRestoredFromDraft] = useState(false);
+  const [lastAutoSavedAt, setLastAutoSavedAt] = useState<string | null>(null);
 
   useEffect(() => {
     let ignore = false;
     async function loadSession() {
       setIsLoading(true);
       setLoadError("");
+      setSubmitted(false);
+      setSubmitError("");
+      setAnswers({});
+      setGroups({});
+      setTurnstileToken("");
+      setPageIndex(0);
+      setHydratedSessionSid("");
+      setRestoredFromDraft(false);
+      setLastAutoSavedAt(null);
       try {
         const response = await fetch(`/api/public/surveys/${slug}/session`, {
           method: "POST",
@@ -79,13 +147,6 @@ export function PublicSurveyForm({
         const payload = (await response.json()) as SessionPayload;
         if (!ignore) {
           setSession(payload);
-          setPageIndex(0);
-          if (payload.lockedSector) {
-            setGroups((previous) => ({
-              ...previous,
-              sector: payload.lockedSector?.name ?? "",
-            }));
-          }
         }
       } catch (error) {
         if (!ignore) {
@@ -113,6 +174,19 @@ export function PublicSurveyForm({
     };
   }, []);
 
+  const draftStorageKey = useMemo(() => {
+    if (!session) {
+      return null;
+    }
+    return buildDraftStorageKey({
+      surveyId: session.surveyId,
+      sessionSid: session.sessionSid,
+      linkType: session.linkType,
+      sectorToken,
+      lockedSectorId: session.lockedSector?.id,
+    });
+  }, [sectorToken, session]);
+
   const requiredQuestionCount = useMemo(() => {
     return session?.questions.filter((question) => question.required).length ?? 0;
   }, [session]);
@@ -125,8 +199,6 @@ export function PublicSurveyForm({
       .length;
   }, [answers, session]);
 
-  const QUESTIONS_PER_PAGE = 5;
-
   const questionPages = useMemo(() => {
     if (!session) {
       return [] as SessionPayload["questions"][];
@@ -137,6 +209,135 @@ export function PublicSurveyForm({
     }
     return pages;
   }, [session]);
+
+  useEffect(() => {
+    if (!session || !draftStorageKey) {
+      return;
+    }
+    if (hydratedSessionSid === session.sessionSid) {
+      return;
+    }
+
+    const validQuestionIds = new Set(session.questions.map((question) => question.id));
+    const groupsByKey = new Map(session.groups.map((group) => [group.key, group]));
+    const restoredAnswers: Record<string, number> = {};
+    const baseGroups: Record<string, string> = {};
+    const defaultSector = pickPreselectedSector(session);
+    if (defaultSector) {
+      baseGroups.sector = defaultSector;
+    }
+
+    let restoredGroups = { ...baseGroups };
+    let restoredPageIndex = 0;
+    let restored = false;
+    let restoredSavedAt: string | null = null;
+
+    try {
+      const rawDraft = window.localStorage.getItem(draftStorageKey);
+      if (rawDraft) {
+        const parsedDraft = JSON.parse(rawDraft) as Partial<DraftPayload>;
+        if (parsedDraft.answers && typeof parsedDraft.answers === "object") {
+          for (const [questionId, value] of Object.entries(parsedDraft.answers)) {
+            if (!validQuestionIds.has(questionId)) {
+              continue;
+            }
+            const numeric = Number(value);
+            if (
+              Number.isFinite(numeric) &&
+              numeric >= session.likert.min &&
+              numeric <= session.likert.max
+            ) {
+              restoredAnswers[questionId] = numeric;
+            }
+          }
+        }
+
+        if (parsedDraft.groups && typeof parsedDraft.groups === "object") {
+          for (const [groupKey, value] of Object.entries(parsedDraft.groups)) {
+            const groupDefinition = groupsByKey.get(groupKey);
+            if (!groupDefinition || typeof value !== "string") {
+              continue;
+            }
+            const knownValue = groupDefinition.options.some((option) => option.value === value);
+            if (knownValue) {
+              restoredGroups[groupKey] = value;
+            }
+          }
+        }
+
+        if (typeof parsedDraft.pageIndex === "number" && Number.isFinite(parsedDraft.pageIndex)) {
+          const maxPageIndex = Math.max(Math.ceil(session.questions.length / QUESTIONS_PER_PAGE) - 1, 0);
+          restoredPageIndex = Math.min(Math.max(Math.trunc(parsedDraft.pageIndex), 0), maxPageIndex);
+        }
+
+        if (typeof parsedDraft.savedAt === "string" && parsedDraft.savedAt.length > 0) {
+          restoredSavedAt = parsedDraft.savedAt;
+        }
+
+        restored = true;
+      }
+    } catch {
+      restored = false;
+      restoredSavedAt = null;
+    }
+
+    if (session.lockedSector) {
+      restoredGroups = {
+        ...restoredGroups,
+        sector: session.lockedSector.name,
+      };
+    } else if (!restoredGroups.sector) {
+      const fallbackSector = pickPreselectedSector(session);
+      if (fallbackSector) {
+        restoredGroups.sector = fallbackSector;
+      }
+    }
+
+    setAnswers(restoredAnswers);
+    setGroups(restoredGroups);
+    setPageIndex(restoredPageIndex);
+    setRestoredFromDraft(restored);
+    setLastAutoSavedAt(restoredSavedAt);
+    setHydratedSessionSid(session.sessionSid);
+  }, [draftStorageKey, hydratedSessionSid, session]);
+
+  useEffect(() => {
+    if (!session || !draftStorageKey || submitted) {
+      return;
+    }
+    if (hydratedSessionSid !== session.sessionSid) {
+      return;
+    }
+
+    const hasGroupValues = Object.values(groups).some((value) => value.trim().length > 0);
+    const shouldPersist = Object.keys(answers).length > 0 || hasGroupValues || pageIndex > 0;
+
+    const timeoutId = window.setTimeout(() => {
+      try {
+        if (!shouldPersist) {
+          window.localStorage.removeItem(draftStorageKey);
+          setLastAutoSavedAt(null);
+          return;
+        }
+
+        const nextDraft: DraftPayload = {
+          version: 1,
+          savedAt: new Date().toISOString(),
+          pageIndex,
+          answers,
+          groups: session.lockedSector ? { ...groups, sector: session.lockedSector.name } : groups,
+        };
+        window.localStorage.setItem(draftStorageKey, JSON.stringify(nextDraft));
+        setLastAutoSavedAt(nextDraft.savedAt);
+      } catch {
+        // Ignore local storage failures.
+      }
+    }, AUTO_SAVE_DEBOUNCE_MS);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [answers, draftStorageKey, groups, hydratedSessionSid, pageIndex, session, submitted]);
 
   const currentQuestions = questionPages[pageIndex] ?? [];
   const isLastPage = pageIndex >= questionPages.length - 1;
@@ -197,6 +398,15 @@ export function PublicSurveyForm({
         throw new Error(errorPayload.error ?? "Nao foi possivel enviar respostas.");
       }
 
+      if (draftStorageKey) {
+        try {
+          window.localStorage.removeItem(draftStorageKey);
+        } catch {
+          // Ignore local storage failures.
+        }
+      }
+      setLastAutoSavedAt(null);
+      setRestoredFromDraft(false);
       setSubmitted(true);
     } catch (error) {
       setSubmitError(error instanceof Error ? error.message : "Falha ao enviar respostas.");
@@ -221,6 +431,14 @@ export function PublicSurveyForm({
     );
   }
 
+  if (session.alreadySubmitted) {
+    return (
+      <div className="rounded-2xl border border-[#d4dbe3] bg-[#f2f5f8] p-4 text-[#314554]">
+        Este formulario ja foi enviado neste dispositivo.
+      </div>
+    );
+  }
+
   const likertValues = Array.from(
     { length: session.likert.max - session.likert.min + 1 },
     (_, index) => session.likert.min + index,
@@ -239,6 +457,13 @@ export function PublicSurveyForm({
   const visibleGroups = session.groups.filter(
     (group) => !(session.lockedSector && group.key === "sector"),
   );
+  let autoSaveLabel = "Salvamento automatico ativo neste dispositivo.";
+  if (lastAutoSavedAt) {
+    const savedAtDate = new Date(lastAutoSavedAt);
+    if (!Number.isNaN(savedAtDate.getTime())) {
+      autoSaveLabel = `Ultimo autosave: ${savedAtDate.toLocaleTimeString()}.`;
+    }
+  }
 
   return (
     <div className="space-y-6">
@@ -258,6 +483,10 @@ export function PublicSurveyForm({
             {session.lockedSector.riskParameter.toFixed(2)})
           </p>
         ) : null}
+        {restoredFromDraft ? (
+          <p className="text-xs text-[#2f5e79]">Rascunho restaurado automaticamente.</p>
+        ) : null}
+        <p className="text-xs text-[#5a6871]">{autoSaveLabel}</p>
         <p className="text-xs text-[#5a6871]">
           Respostas obrigatorias: {answeredRequiredCount}/{requiredQuestionCount}
         </p>
