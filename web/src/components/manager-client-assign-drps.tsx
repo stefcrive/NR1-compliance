@@ -317,12 +317,28 @@ export function ManagerClientAssignDrps({ clientId }: { clientId: string }) {
     });
   }
 
-  async function syncCampaignSectors(
-    campaignId: string,
-    selectedSectorName: string,
-    selectedRiskParameter: number,
-  ) {
-    const selectedKey = normalize(selectedSectorName);
+  async function syncCampaignSectors(campaignId: string, selectedAssignments: SectorAssignment[]) {
+    const selectedByKey = new Map<
+      string,
+      {
+        key: string;
+        name: string;
+        riskParameter: number;
+      }
+    >();
+    for (const assignment of selectedAssignments) {
+      const normalizedKey = normalize(assignment.sectorKey || assignment.sectorName);
+      if (!normalizedKey) continue;
+      selectedByKey.set(normalizedKey, {
+        key: normalizedKey,
+        name: assignment.sectorName.trim(),
+        riskParameter: assignment.sectorRiskParameter,
+      });
+    }
+    if (selectedByKey.size === 0) {
+      throw new Error("Selecione ao menos um setor para a campanha umbrella.");
+    }
+
     const sectorsRes = await fetch(`/api/admin/campaigns/${campaignId}/sectors`, { cache: "no-store" });
     if (!sectorsRes.ok) {
       const sectorsPayload = (await sectorsRes.json().catch(() => ({}))) as { error?: string };
@@ -330,17 +346,18 @@ export function ManagerClientAssignDrps({ clientId }: { clientId: string }) {
     }
     const payload = (await sectorsRes.json()) as { sectors: CampaignSector[] };
     const sectors = payload.sectors ?? [];
-    let hasSelected = false;
+    const syncedKeys = new Set<string>();
     for (const sector of sectors) {
-      const isSelected = sector.key === selectedKey || normalize(sector.name) === selectedKey;
-      if (isSelected) hasSelected = true;
+      const normalizedExistingKey = normalize(sector.key || sector.name);
+      const selected = selectedByKey.get(normalizedExistingKey) ?? null;
+      if (selected) syncedKeys.add(selected.key);
       const syncResponse = await fetch(`/api/admin/campaigns/${campaignId}/sectors`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          name: sector.name,
-          riskParameter: sector.riskParameter,
-          isActive: isSelected,
+          name: selected?.name || sector.name,
+          riskParameter: selected?.riskParameter ?? sector.riskParameter,
+          isActive: Boolean(selected),
         }),
       });
       if (!syncResponse.ok && syncResponse.status !== 207) {
@@ -348,13 +365,15 @@ export function ManagerClientAssignDrps({ clientId }: { clientId: string }) {
         throw new Error(syncPayload.error ?? "Falha ao sincronizar setores do diagnostico criado.");
       }
     }
-    if (!hasSelected && selectedSectorName.trim()) {
+
+    for (const selected of selectedByKey.values()) {
+      if (syncedKeys.has(selected.key)) continue;
       const createSelectedRes = await fetch(`/api/admin/campaigns/${campaignId}/sectors`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          name: selectedSectorName.trim(),
-          riskParameter: selectedRiskParameter,
+          name: selected.name,
+          riskParameter: selected.riskParameter,
           isActive: true,
         }),
       });
@@ -373,104 +392,100 @@ export function ManagerClientAssignDrps({ clientId }: { clientId: string }) {
     setError("");
     setSuccess("");
     try {
-      for (const assignment of assignments) {
-        const template = templateById.get(assignment.templateId) ?? null;
-        if (!template) {
-          throw new Error(`Template nao encontrado para o setor ${assignment.sectorName}.`);
-        }
-        if (template.source !== "surveys") {
-          throw new Error(`Template invalido para o setor ${assignment.sectorName}. Use um template Survey.`);
-        }
-
-        const campaignName = `${template.name} - ${client.companyName} - ${assignment.sectorName}`
-          .trim()
-          .slice(0, 120);
-        if (campaignName.length < 3) {
-          throw new Error(`Nome de diagnostico invalido para o setor ${assignment.sectorName}.`);
-        }
-
-        const publicSlugSeed = `${client.portalSlug || client.companyName}-${template.slug || template.name}-${assignment.sectorKey || assignment.sectorName}`;
-        const publicSlug = slugify(publicSlugSeed).slice(0, 120);
-
-        const assignRes = await fetch(`/api/admin/clients/${client.id}/assign-drps`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            campaignName,
-            publicSlug: publicSlug || undefined,
-            status: campaignStatus,
-            sourceSurveyId: template.id,
-          }),
-        });
-
-        const assignPayload = (await assignRes.json().catch(() => ({}))) as {
-          error?: string;
-          details?: string;
-          warning?: string;
-          campaign?: { id: string };
-        };
-
-        if (!assignRes.ok && assignRes.status !== 207) {
-          throw new Error(
-            assignPayload.error ||
-              assignPayload.details ||
-              `Falha ao atribuir diagnostico para o setor ${assignment.sectorName}.`,
-          );
-        }
-
-        if (assignRes.status === 207 && assignPayload.error) {
-          throw new Error(
-            assignPayload.error ||
-              assignPayload.details ||
-              `Falha ao atribuir diagnostico para o setor ${assignment.sectorName}.`,
-          );
-        }
-
-        const campaignId = assignPayload.campaign?.id;
-        if (!campaignId) {
-          throw new Error(`Resposta invalida ao atribuir diagnostico para o setor ${assignment.sectorName}.`);
-        }
-
-        if (template.source === "surveys") {
-          const templatePrompts =
-            questionsByTemplate[template.id] ?? (await loadTemplateQuestions(template.id));
-          const editedPrompts = normalizePrompts(assignment.promptsText);
-          const effectivePrompts = editedPrompts.length > 0 ? editedPrompts : templatePrompts;
-          const shouldUpdateQuestions = !areSamePrompts(effectivePrompts, templatePrompts);
-
-          if (shouldUpdateQuestions) {
-            if (effectivePrompts.some((item) => item.length < 3)) {
-              throw new Error(
-                `Setor ${assignment.sectorName}: cada pergunta editada precisa ter ao menos 3 caracteres.`,
-              );
-            }
-            const updateQuestionsRes = await fetch(
-              `/api/admin/campaigns/${campaignId}/questions`,
-              {
-                method: "PUT",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ prompts: effectivePrompts }),
-              },
-            );
-            if (!updateQuestionsRes.ok) {
-              const updatePayload = (await updateQuestionsRes.json().catch(() => ({}))) as {
-                error?: string;
-              };
-              throw new Error(
-                updatePayload.error ||
-                  `Falha ao atualizar perguntas do diagnostico para o setor ${assignment.sectorName}.`,
-              );
-            }
-          }
-        }
-        await syncCampaignSectors(
-          campaignId,
-          assignment.sectorName,
-          assignment.sectorRiskParameter,
+      const uniqueTemplateIds = Array.from(new Set(assignments.map((assignment) => assignment.templateId)));
+      if (uniqueTemplateIds.length !== 1) {
+        throw new Error(
+          "A campanha umbrella DRPS usa um template unico. Selecione o mesmo template para todos os setores.",
         );
       }
 
-      setSuccess("Diagnosticos DRPS atribuidos com sucesso para os setores selecionados.");
+      const template = templateById.get(uniqueTemplateIds[0]) ?? null;
+      if (!template) {
+        throw new Error("Template base nao encontrado.");
+      }
+      if (template.source !== "surveys") {
+        throw new Error("Template invalido. Use um template Survey para a campanha umbrella.");
+      }
+
+      const templatePrompts =
+        questionsByTemplate[template.id] ?? (await loadTemplateQuestions(template.id));
+      const effectivePromptsBySector = assignments.map((assignment) => {
+        const editedPrompts = normalizePrompts(assignment.promptsText);
+        const effectivePrompts = editedPrompts.length > 0 ? editedPrompts : templatePrompts;
+        if (effectivePrompts.some((item) => item.length < 3)) {
+          throw new Error(
+            `Setor ${assignment.sectorName}: cada pergunta editada precisa ter ao menos 3 caracteres.`,
+          );
+        }
+        return {
+          sectorName: assignment.sectorName,
+          prompts: effectivePrompts,
+        };
+      });
+
+      const referencePrompts = effectivePromptsBySector[0]?.prompts ?? templatePrompts;
+      for (const item of effectivePromptsBySector) {
+        if (!areSamePrompts(item.prompts, referencePrompts)) {
+          throw new Error(
+            "Neste fluxo umbrella, todos os setores compartilham o mesmo questionario base. Uniformize as perguntas antes de publicar.",
+          );
+        }
+      }
+
+      const campaignName = `${template.name} - ${client.companyName}`.trim().slice(0, 120);
+      if (campaignName.length < 3) {
+        throw new Error("Nome da campanha umbrella invalido.");
+      }
+      const publicSlugSeed = `${client.portalSlug || client.companyName}-${template.slug || template.name}-umbrella`;
+      const publicSlug = slugify(publicSlugSeed).slice(0, 120);
+
+      const assignRes = await fetch(`/api/admin/clients/${client.id}/assign-drps`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          campaignName,
+          publicSlug: publicSlug || undefined,
+          status: campaignStatus,
+          sourceSurveyId: template.id,
+        }),
+      });
+
+      const assignPayload = (await assignRes.json().catch(() => ({}))) as {
+        error?: string;
+        details?: string;
+        warning?: string;
+        campaign?: { id: string };
+      };
+
+      if (!assignRes.ok && assignRes.status !== 207) {
+        throw new Error(assignPayload.error || assignPayload.details || "Falha ao criar campanha umbrella DRPS.");
+      }
+      if (assignRes.status === 207 && assignPayload.error) {
+        throw new Error(assignPayload.error || assignPayload.details || "Falha ao criar campanha umbrella DRPS.");
+      }
+
+      const campaignId = assignPayload.campaign?.id;
+      if (!campaignId) {
+        throw new Error("Resposta invalida ao criar campanha umbrella DRPS.");
+      }
+
+      const shouldUpdateQuestions = !areSamePrompts(referencePrompts, templatePrompts);
+      if (shouldUpdateQuestions) {
+        const updateQuestionsRes = await fetch(`/api/admin/campaigns/${campaignId}/questions`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ prompts: referencePrompts }),
+        });
+        if (!updateQuestionsRes.ok) {
+          const updatePayload = (await updateQuestionsRes.json().catch(() => ({}))) as {
+            error?: string;
+          };
+          throw new Error(updatePayload.error || "Falha ao atualizar perguntas da campanha umbrella.");
+        }
+      }
+
+      await syncCampaignSectors(campaignId, assignments);
+      setSuccess("Campanha umbrella DRPS atribuida com sucesso. Setores foram vinculados como sub-questionarios.");
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "Erro ao atribuir diagnosticos.");
     } finally {
@@ -504,8 +519,8 @@ export function ManagerClientAssignDrps({ clientId }: { clientId: string }) {
       <section className="rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
         <h2 className="text-2xl font-semibold text-[#123447]">Atribuir diagnosticos DRPS</h2>
         <p className="mt-1 text-sm text-[#35515f]">
-          Selecione templates da base DRPS por setor, edite a lista de perguntas e publique os
-          diagnosticos em lote.
+          Crie uma campanha umbrella DRPS unica, vincule os setores como sub-questionarios e
+          publique a coleta em um unico pacote.
         </p>
         <div className="mt-4 grid gap-3 md:grid-cols-2">
           <div className="rounded-xl border border-[#d8e4ee] p-3">
@@ -513,7 +528,7 @@ export function ManagerClientAssignDrps({ clientId }: { clientId: string }) {
             <p className="mt-1 text-sm font-semibold text-[#133748]">{client.companyName}</p>
           </div>
           <label className="rounded-xl border border-[#d8e4ee] p-3">
-            <span className="text-xs text-[#4f6977]">Status inicial dos diagnosticos</span>
+            <span className="text-xs text-[#4f6977]">Status inicial da campanha umbrella</span>
             <select
               className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
               value={campaignStatus}
@@ -622,13 +637,17 @@ export function ManagerClientAssignDrps({ clientId }: { clientId: string }) {
       </section>
 
       <section className="flex flex-wrap gap-2">
+        <p className="w-full text-xs text-[#4f6977]">
+          Fluxo umbrella: todos os setores selecionados serao publicados dentro da mesma campanha DRPS.
+          No momento, o pacote usa um unico template/questionario base para todos os setores.
+        </p>
         <button
           type="button"
           disabled={!canSubmit || isSubmitting}
           onClick={() => void submitAssignments()}
           className="rounded-full bg-[#0f5b73] px-5 py-2 text-sm font-semibold text-white disabled:opacity-50"
         >
-          {isSubmitting ? "Atribuindo..." : "Atribuir diagnosticos DRPS"}
+          {isSubmitting ? "Atribuindo..." : "Atribuir campanha umbrella DRPS"}
         </button>
         <Link
           href={`/manager/clients/${client.id}`}

@@ -106,7 +106,7 @@ const updateClientSchema = z
   .object({
     companyName: z.string().trim().min(2).max(255).optional(),
     cnpj: z.string().trim().min(8).max(18).optional(),
-    totalEmployees: z.number().int().min(1).optional(),
+    totalEmployees: z.number().int().min(0).optional(),
     remoteEmployees: z.number().int().min(0).optional(),
     onsiteEmployees: z.number().int().min(0).optional(),
     hybridEmployees: z.number().int().min(0).optional(),
@@ -238,6 +238,30 @@ function mapSector(item: ClientSectorRow) {
   };
 }
 
+function sumSectorHeadcount(
+  sectors: Array<Pick<ClientSectorRow, "remote_workers" | "onsite_workers" | "hybrid_workers">>,
+) {
+  return sectors.reduce(
+    (totals, sector) => {
+      const remote = normalizeHeadcount(sector.remote_workers);
+      const onsite = normalizeHeadcount(sector.onsite_workers);
+      const hybrid = normalizeHeadcount(sector.hybrid_workers);
+      return {
+        totalEmployees: totals.totalEmployees + remote + onsite + hybrid,
+        remoteEmployees: totals.remoteEmployees + remote,
+        onsiteEmployees: totals.onsiteEmployees + onsite,
+        hybridEmployees: totals.hybridEmployees + hybrid,
+      };
+    },
+    {
+      totalEmployees: 0,
+      remoteEmployees: 0,
+      onsiteEmployees: 0,
+      hybridEmployees: 0,
+    },
+  );
+}
+
 function mapLegacyCampaignStatus(status: LegacyDrpsCampaignRow["status"]): SurveyRow["status"] {
   if (status === "Active") return "live";
   if (status === "Completed") return "closed";
@@ -335,6 +359,8 @@ export async function GET(
       .returns<SurveyRow[]>(),
     loadClientAccessSummary(supabase, clientId, origin),
   ]);
+  const derivedHeadcount =
+    sectorsResult.data.length > 0 ? sumSectorHeadcount(sectorsResult.data) : null;
 
   if (sectorsResult.error || campaignsResult.error) {
     if (
@@ -371,10 +397,10 @@ export async function GET(
           id: client.client_id,
           companyName: client.company_name,
           cnpj: client.cnpj,
-          totalEmployees: client.total_employees,
-          remoteEmployees: client.remote_employees,
-          onsiteEmployees: client.onsite_employees,
-          hybridEmployees: client.hybrid_employees,
+          totalEmployees: derivedHeadcount?.totalEmployees ?? client.total_employees,
+          remoteEmployees: derivedHeadcount?.remoteEmployees ?? client.remote_employees,
+          onsiteEmployees: derivedHeadcount?.onsiteEmployees ?? client.onsite_employees,
+          hybridEmployees: derivedHeadcount?.hybridEmployees ?? client.hybrid_employees,
           status: client.status,
           billingStatus: client.billing_status,
           portalSlug: client.portal_slug,
@@ -399,10 +425,10 @@ export async function GET(
       id: client.client_id,
       companyName: client.company_name,
       cnpj: client.cnpj,
-      totalEmployees: client.total_employees,
-      remoteEmployees: client.remote_employees,
-      onsiteEmployees: client.onsite_employees,
-      hybridEmployees: client.hybrid_employees,
+      totalEmployees: derivedHeadcount?.totalEmployees ?? client.total_employees,
+      remoteEmployees: derivedHeadcount?.remoteEmployees ?? client.remote_employees,
+      onsiteEmployees: derivedHeadcount?.onsiteEmployees ?? client.onsite_employees,
+      hybridEmployees: derivedHeadcount?.hybridEmployees ?? client.hybrid_employees,
       status: client.status,
       billingStatus: client.billing_status,
       portalSlug: client.portal_slug,
@@ -452,10 +478,39 @@ export async function PATCH(
     return NextResponse.json({ error: "Invalid payload." }, { status: 400 });
   }
 
-  const totalEmployees = parsed.totalEmployees ?? client.total_employees;
-  const remoteEmployees = normalizeHeadcount(parsed.remoteEmployees ?? client.remote_employees);
-  const onsiteEmployees = normalizeHeadcount(parsed.onsiteEmployees ?? client.onsite_employees);
-  const hybridEmployees = normalizeHeadcount(parsed.hybridEmployees ?? client.hybrid_employees);
+  const sectorHeadcountFromPayload = parsed.sectors
+    ? parsed.sectors.reduce(
+        (totals, sector) => {
+          const remote = normalizeHeadcount(sector.remoteWorkers);
+          const onsite = normalizeHeadcount(sector.onsiteWorkers);
+          const hybrid = normalizeHeadcount(sector.hybridWorkers);
+          return {
+            totalEmployees: totals.totalEmployees + remote + onsite + hybrid,
+            remoteEmployees: totals.remoteEmployees + remote,
+            onsiteEmployees: totals.onsiteEmployees + onsite,
+            hybridEmployees: totals.hybridEmployees + hybrid,
+          };
+        },
+        {
+          totalEmployees: 0,
+          remoteEmployees: 0,
+          onsiteEmployees: 0,
+          hybridEmployees: 0,
+        },
+      )
+    : null;
+  const totalEmployees =
+    sectorHeadcountFromPayload?.totalEmployees ??
+    normalizeHeadcount(parsed.totalEmployees ?? client.total_employees);
+  const remoteEmployees =
+    sectorHeadcountFromPayload?.remoteEmployees ??
+    normalizeHeadcount(parsed.remoteEmployees ?? client.remote_employees);
+  const onsiteEmployees =
+    sectorHeadcountFromPayload?.onsiteEmployees ??
+    normalizeHeadcount(parsed.onsiteEmployees ?? client.onsite_employees);
+  const hybridEmployees =
+    sectorHeadcountFromPayload?.hybridEmployees ??
+    normalizeHeadcount(parsed.hybridEmployees ?? client.hybrid_employees);
 
   if (remoteEmployees + onsiteEmployees + hybridEmployees > totalEmployees) {
     return NextResponse.json(
@@ -794,6 +849,8 @@ export async function PATCH(
     loadClientSectorsWithFallback(supabase, clientId),
     loadClientAccessSummary(supabase, clientId, resolveRequestOrigin(request)),
   ]);
+  const derivedUpdatedHeadcount =
+    sectorsResult.data.length > 0 ? sumSectorHeadcount(sectorsResult.data) : null;
 
   if (sectorsResult.error) {
     return NextResponse.json(
@@ -836,10 +893,10 @@ export async function PATCH(
       id: updatedClient.client_id,
       companyName: updatedClient.company_name,
       cnpj: updatedClient.cnpj,
-      totalEmployees: updatedClient.total_employees,
-      remoteEmployees: updatedClient.remote_employees,
-      onsiteEmployees: updatedClient.onsite_employees,
-      hybridEmployees: updatedClient.hybrid_employees,
+      totalEmployees: derivedUpdatedHeadcount?.totalEmployees ?? updatedClient.total_employees,
+      remoteEmployees: derivedUpdatedHeadcount?.remoteEmployees ?? updatedClient.remote_employees,
+      onsiteEmployees: derivedUpdatedHeadcount?.onsiteEmployees ?? updatedClient.onsite_employees,
+      hybridEmployees: derivedUpdatedHeadcount?.hybridEmployees ?? updatedClient.hybrid_employees,
       status: updatedClient.status,
       billingStatus: updatedClient.billing_status,
       portalSlug: updatedClient.portal_slug,

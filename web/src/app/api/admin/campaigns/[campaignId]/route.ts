@@ -45,6 +45,34 @@ function toDateOnly(value: string | undefined | null): string | null {
   return value.slice(0, 10);
 }
 
+function isForeignKeyViolation(error: { code?: string } | null | undefined): boolean {
+  return error?.code === "23503";
+}
+
+async function cleanupSurveyDependencies(
+  supabase: ReturnType<typeof getSupabaseAdminClient>,
+  surveyId: string,
+): Promise<{ message: string } | null> {
+  const dependentSurveyTables = [
+    "responses",
+    "rate_limit_buckets",
+    "drps_assessments",
+    "survey_sector_risk_factor_timeseries",
+    "survey_sectors",
+    "survey_group_dimensions",
+    "questions",
+  ];
+
+  for (const table of dependentSurveyTables) {
+    const result = await supabase.from(table).delete().eq("survey_id", surveyId);
+    if (result.error && !isMissingTableError(result.error, table)) {
+      return { message: result.error.message };
+    }
+  }
+
+  return null;
+}
+
 export async function PATCH(
   request: NextRequest,
   context: { params: Promise<{ campaignId: string }> },
@@ -128,4 +156,69 @@ export async function PATCH(
       created_at: new Date().toISOString(),
     },
   });
+}
+
+export async function DELETE(
+  request: NextRequest,
+  context: { params: Promise<{ campaignId: string }> },
+) {
+  if (!isAdminApiAuthorized(request)) {
+    return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
+  }
+
+  const { campaignId } = await context.params;
+  const supabase = getSupabaseAdminClient();
+
+  let surveyDelete = await supabase
+    .from("surveys")
+    .delete({ count: "exact" })
+    .eq("id", campaignId);
+
+  if (
+    surveyDelete.error &&
+    !isMissingTableError(surveyDelete.error, "surveys") &&
+    isForeignKeyViolation(surveyDelete.error)
+  ) {
+    const cleanupError = await cleanupSurveyDependencies(supabase, campaignId);
+    if (cleanupError) {
+      return NextResponse.json(
+        { error: "Could not delete diagnostic.", details: cleanupError.message },
+        { status: 500 },
+      );
+    }
+
+    surveyDelete = await supabase
+      .from("surveys")
+      .delete({ count: "exact" })
+      .eq("id", campaignId);
+  }
+
+  if (surveyDelete.error && !isMissingTableError(surveyDelete.error, "surveys")) {
+    return NextResponse.json(
+      { error: "Could not delete diagnostic.", details: surveyDelete.error.message },
+      { status: 500 },
+    );
+  }
+
+  if ((surveyDelete.count ?? 0) > 0) {
+    return NextResponse.json({ ok: true });
+  }
+
+  const legacyDelete = await supabase
+    .from("drps_campaigns")
+    .delete({ count: "exact" })
+    .eq("campaign_id", campaignId);
+
+  if (legacyDelete.error && !isMissingTableError(legacyDelete.error, "drps_campaigns")) {
+    return NextResponse.json(
+      { error: "Could not delete diagnostic.", details: legacyDelete.error.message },
+      { status: 500 },
+    );
+  }
+
+  if ((legacyDelete.count ?? 0) > 0) {
+    return NextResponse.json({ ok: true });
+  }
+
+  return NextResponse.json({ error: "Diagnostic not found." }, { status: 404 });
 }

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import { findProgramById } from "@/lib/programs-catalog";
 
@@ -82,6 +82,12 @@ type RiskFactorTrendSeries = {
     riskScore: number;
     responses: number;
   }>;
+};
+
+type TrendDetailsModalState = {
+  title: string;
+  subtitle: string;
+  rows: RiskFactorTrendSeries["points"];
 };
 
 type DatasetSortKey = "employee_id" | "sector" | "risk_factor" | "score" | "timestamp";
@@ -376,7 +382,12 @@ function csvEscape(value: string | number | null): string {
   return `"${String(value).replace(/"/g, '""')}"`;
 }
 
-function useClientPortalData(clientSlug: string, campaignId?: string, reloadToken = 0) {
+function useClientPortalData(
+  clientSlug: string,
+  campaignId?: string,
+  reloadToken = 0,
+  sectorFilter?: string,
+) {
   const [data, setData] = useState<ClientPortalPayload | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
@@ -387,7 +398,15 @@ function useClientPortalData(clientSlug: string, campaignId?: string, reloadToke
       setIsLoading(true);
       setError("");
       try {
-        const query = campaignId ? `?campaignId=${encodeURIComponent(campaignId)}` : "";
+        const queryParams = new URLSearchParams();
+        if (campaignId) {
+          queryParams.set("campaignId", campaignId);
+        }
+        const normalizedSectorFilter = (sectorFilter ?? "").trim();
+        if (normalizedSectorFilter.length > 0) {
+          queryParams.set("sector", normalizedSectorFilter);
+        }
+        const query = queryParams.size > 0 ? `?${queryParams.toString()}` : "";
         const response = await fetch(`/api/client/portal/${clientSlug}${query}`, {
           cache: "no-store",
         });
@@ -413,7 +432,7 @@ function useClientPortalData(clientSlug: string, campaignId?: string, reloadToke
     return () => {
       ignore = true;
     };
-  }, [campaignId, clientSlug, reloadToken]);
+  }, [campaignId, clientSlug, reloadToken, sectorFilter]);
 
   return { data, isLoading, error };
 }
@@ -474,12 +493,41 @@ function metricTone(
   return "border-rose-200 bg-rose-50 text-rose-700";
 }
 
+function metricBarTone(value: "low" | "moderate" | "medium" | "high" | "critical" | null | undefined) {
+  if (!value) return "bg-slate-400";
+  if (value === "low") return "bg-emerald-500";
+  if (value === "moderate" || value === "medium") return "bg-amber-500";
+  if (value === "high") return "bg-orange-500";
+  return "bg-rose-500";
+}
+
 function heatCellColor(meanExposure: number | null) {
   if (meanExposure === null) return "bg-slate-100 text-slate-500";
   if (meanExposure <= 2) return "bg-emerald-100 text-emerald-800";
   if (meanExposure <= 3) return "bg-amber-100 text-amber-800";
   if (meanExposure <= 4) return "bg-orange-100 text-orange-800";
   return "bg-rose-100 text-rose-800";
+}
+
+function riskScoreBand(score: number | null | undefined) {
+  if (score === null || score === undefined || Number.isNaN(score)) return null;
+  if (score < 1.5) return "low";
+  if (score < 2.5) return "moderate";
+  if (score < 3.5) return "high";
+  return "critical";
+}
+
+function riskScoreTone(score: number | null | undefined) {
+  return metricTone(riskScoreBand(score));
+}
+
+function riskScoreRowTone(score: number | null | undefined) {
+  const band = riskScoreBand(score);
+  if (band === "low") return "bg-emerald-50/40";
+  if (band === "moderate") return "bg-amber-50/40";
+  if (band === "high") return "bg-orange-50/40";
+  if (band === "critical") return "bg-rose-50/40";
+  return "";
 }
 
 function topicCode(topicId: number) {
@@ -531,6 +579,14 @@ function shortRiskName(label: string, topicId?: number) {
   return `${normalized.slice(0, 16)}...`;
 }
 
+function normalizeSectorLookupValue(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toLowerCase();
+}
+
 function parseTrendPeriodToUtcMs(period: string): number | null {
   const monthlyMatch = period.match(/^(\d{4})-(\d{2})$/);
   if (monthlyMatch) {
@@ -576,6 +632,136 @@ function formatTrendPeriodLabel(period: string): string {
   return period;
 }
 
+function roundMetricValue(value: number, decimals = 4): number {
+  const factor = 10 ** decimals;
+  return Math.round(value * factor) / factor;
+}
+
+function weightedAverage(entries: Array<{ value: number; weight: number }>): number | null {
+  const valid = entries.filter((entry) => Number.isFinite(entry.value) && Number.isFinite(entry.weight) && entry.weight > 0);
+  if (valid.length === 0) return null;
+  const totalWeight = valid.reduce((sum, entry) => sum + entry.weight, 0);
+  if (totalWeight <= 0) return null;
+  return valid.reduce((sum, entry) => sum + entry.value * entry.weight, 0) / totalWeight;
+}
+
+function weightedAverageNullable(entries: Array<{ value: number | null; weight: number }>): number | null {
+  return weightedAverage(
+    entries
+      .filter((entry): entry is { value: number; weight: number } => entry.value !== null)
+      .map((entry) => ({ value: entry.value, weight: entry.weight })),
+  );
+}
+
+function aggregateTrendSeriesForAllSectors(series: RiskFactorTrendSeries[]): RiskFactorTrendSeries[] {
+  if (series.length === 0) return [];
+
+  const topicBuckets = new Map<
+    number,
+    {
+      riskFactor: string;
+      periods: Map<string, RiskFactorTrendSeries["points"]>;
+    }
+  >();
+
+  for (const item of series) {
+    const topicBucket = topicBuckets.get(item.topicId) ?? {
+      riskFactor: item.riskFactor,
+      periods: new Map<string, RiskFactorTrendSeries["points"]>(),
+    };
+
+    for (const point of item.points) {
+      const list = topicBucket.periods.get(point.period) ?? [];
+      list.push(point);
+      topicBucket.periods.set(point.period, list);
+    }
+
+    topicBuckets.set(item.topicId, topicBucket);
+  }
+
+  return Array.from(topicBuckets.entries())
+    .map(([topicId, bucket]) => {
+      const points = Array.from(bucket.periods.entries())
+        .map(([period, entries]) => {
+          const totalResponses = entries.reduce((sum, entry) => sum + Math.max(entry.responses, 0), 0);
+          if (totalResponses <= 0) return null;
+
+          const meanExposure =
+            weightedAverage(
+              entries.map((entry) => ({
+                value: entry.meanExposure,
+                weight: entry.responses,
+              })),
+            ) ?? 0;
+
+          const varianceNumerator = entries.reduce((sum, entry) => {
+            const weight = Math.max(entry.responses, 0);
+            if (weight <= 0) return sum;
+            const within = entry.stdDevExposure ** 2;
+            const between = (entry.meanExposure - meanExposure) ** 2;
+            return sum + weight * (within + between);
+          }, 0);
+          const stdDevExposure = Math.sqrt(Math.max(0, varianceNumerator / totalResponses));
+
+          const prevalence = weightedAverageNullable(
+            entries.map((entry) => ({
+              value: entry.prevalence,
+              weight: entry.responses,
+            })),
+          );
+          const severityIndex =
+            weightedAverageNullable(
+              entries.map((entry) => ({
+                value: entry.severityIndex,
+                weight: entry.responses,
+              })),
+            ) ?? Math.min(1, Math.max(0, meanExposure / 5));
+
+          const severity = entries[0]?.severity ?? 3;
+          const probability =
+            weightedAverage(
+              entries.map((entry) => ({
+                value: entry.probability,
+                weight: entry.responses,
+              })),
+            ) ??
+            prevalence ??
+            Math.min(1, Math.max(0, (meanExposure - 1) / 4));
+          const riskScore = probability * severity;
+
+          return {
+            period,
+            meanExposure: roundMetricValue(meanExposure),
+            stdDevExposure: roundMetricValue(stdDevExposure),
+            prevalence: prevalence === null ? null : roundMetricValue(prevalence),
+            severityIndex: roundMetricValue(severityIndex),
+            probability: roundMetricValue(probability),
+            severity,
+            riskScore: roundMetricValue(riskScore),
+            responses: totalResponses,
+          };
+        })
+        .filter((point): point is NonNullable<typeof point> => point !== null)
+        .sort((left, right) => {
+          const leftTime = parseTrendPeriodToUtcMs(left.period);
+          const rightTime = parseTrendPeriodToUtcMs(right.period);
+          if (leftTime === null && rightTime === null) return left.period.localeCompare(right.period);
+          if (leftTime === null) return 1;
+          if (rightTime === null) return -1;
+          return leftTime - rightTime;
+        });
+
+      return {
+        topicId,
+        riskFactor: bucket.riskFactor,
+        sector: "Aggregate",
+        points,
+      } as RiskFactorTrendSeries;
+    })
+    .filter((item) => item.points.length > 0)
+    .sort((left, right) => left.topicId - right.topicId);
+}
+
 function riskGradientColorFromRatio(ratio: number): string {
   const clamped = Math.min(1, Math.max(0, ratio));
   const green = { r: 22, g: 163, b: 74 };
@@ -616,9 +802,11 @@ const PLOT_INFO_CONTENT: Record<
   matrix: {
     title: "Risk Matrix",
     whatItShows:
-      "Each bubble is one risk factor. X-axis is probability of occurrence, Y-axis is fixed severity weight, and bubble size represents affected employees.",
+      "Each bubble is one risk factor. X-axis is probability of occurrence, Y-axis is observed severity (from responses), bubble size represents affected employees, and color indicates gravity class.",
     howToUse: [
-      "Focus first on the upper-right quadrant, where probability and severity are both high.",
+      "Color (gravity) uses risk score = probability x fixed topic severity weight.",
+      "Y-axis (severity) uses observed mean exposure from responses.",
+      "Focus first on the upper-right quadrant, where probability and observed severity are both high.",
       "Use bubble size to prioritize actions with the largest exposed population.",
       "Track movement over time: right/up means deterioration, left/down means mitigation.",
     ],
@@ -650,7 +838,7 @@ const PLOT_INFO_CONTENT: Record<
       "Sorted list of risk factors by risk score (probability x severity), with prevalence context.",
     howToUse: [
       "Use the top risks as immediate priorities for executive action plans.",
-      "Cross-check with sector ranking to target interventions where each top risk is concentrated.",
+      "Cross-check with Heatmap Risk Index to target interventions where each top risk is concentrated.",
       "Use rank changes between cycles to evaluate intervention impact.",
     ],
   },
@@ -1007,13 +1195,14 @@ export function ClientDiagnosticStatusSection({ clientSlug }: { clientSlug: stri
   );
 }
 
-export function ClientDiagnosticResultsSection({
+export function ClientDiagnosticAggregateResultsSection({
   clientSlug,
   campaignId,
   fromHistory = false,
   managerClientId,
   managerClientName,
   managerFromHome = false,
+  sectorFilter,
 }: {
   clientSlug: string;
   campaignId: string;
@@ -1021,67 +1210,282 @@ export function ClientDiagnosticResultsSection({
   managerClientId?: string;
   managerClientName?: string | null;
   managerFromHome?: boolean;
+  sectorFilter?: string;
 }) {
-  const { data, isLoading, error } = useClientPortalData(clientSlug, campaignId);
+  const { data: aggregateData, isLoading: isLoadingAggregateMeta } = useClientPortalData(clientSlug, campaignId, 0);
+  const campaignLabel = aggregateData?.selectedCampaign?.name ?? "Resultados do diagnostico";
+  const sectorOptions = useMemo(() => {
+    const sectors = aggregateData?.dashboard?.sectors ?? [];
+    return sectors
+      .filter((sector) => sector.nResponses > 0 && !sector.suppressed)
+      .slice()
+      .sort((left, right) => left.sector.localeCompare(right.sector, "pt-BR"))
+      .map((sector) => sector.sector);
+  }, [aggregateData?.dashboard?.sectors]);
+  const [selectedPerSector, setSelectedPerSector] = useState(() => (sectorFilter ?? "").trim());
+  const pendingScrollRestoreY = useRef<number | null>(null);
+
+  function resolveSectorName(candidate: string): string | null {
+    const normalizedCandidate = candidate.trim();
+    if (!normalizedCandidate) return null;
+    const candidateLookup = normalizeSectorLookupValue(normalizedCandidate);
+    const matched =
+      sectorOptions.find((sectorName) => normalizeSectorLookupValue(sectorName) === candidateLookup) ?? null;
+    if (matched) return matched;
+    return sectorOptions.length === 0 ? normalizedCandidate : null;
+  }
+
+  const requestedPerSector = (sectorFilter ?? "").trim();
+  const effectivePerSector =
+    resolveSectorName(selectedPerSector) ??
+    resolveSectorName(requestedPerSector) ??
+    sectorOptions[0] ??
+    "";
+  const managerRawDataDownloadHref = managerClientId
+    ? `/api/admin/clients/${managerClientId}/campaigns/${campaignId}/responses/raw-download`
+    : null;
+
+  useEffect(() => {
+    if (pendingScrollRestoreY.current === null || typeof window === "undefined") return;
+    const restoreY = pendingScrollRestoreY.current;
+    pendingScrollRestoreY.current = null;
+    window.requestAnimationFrame(() => {
+      window.scrollTo({ top: restoreY, behavior: "auto" });
+    });
+  }, [selectedPerSector]);
+
+  return (
+    <div className="space-y-6">
+      <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-2xl font-semibold text-[#141d24]">DRPS Results Report</h2>
+          {managerRawDataDownloadHref ? (
+            <a
+              href={managerRawDataDownloadHref}
+              className="rounded-full border border-[#9ec8db] bg-white px-3 py-1.5 text-xs font-semibold text-[#0f5b73] hover:bg-[#f1f8fc]"
+            >
+              Download raw data
+            </a>
+          ) : null}
+        </div>
+        <p className="mt-1 text-sm text-[#475660]">
+          {campaignLabel} | Aggregate and per-sector views in a single page.
+        </p>
+        <div className="mt-4 flex flex-wrap items-center gap-2">
+          <a
+            href="#aggregate-results"
+            className="rounded-full border border-[#8ebad0] bg-[#eaf5fb] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
+          >
+            Aggregate results
+          </a>
+          <a
+            href="#per-sector-results"
+            className="rounded-full border border-[#b9cfdc] bg-white px-3 py-1 text-xs font-semibold text-[#24485a]"
+          >
+            Per-sector results
+          </a>
+        </div>
+      </section>
+
+      <section id="aggregate-results" className="scroll-mt-20 space-y-4">
+        <div className="rounded-[22px] border border-[#dde8ef] bg-white p-4 shadow-sm">
+          <h3 className="text-lg font-semibold text-[#123447]">Aggregate Results (all sectors)</h3>
+          <p className="mt-1 text-xs text-[#567180]">
+            Risk Heatmap, Sector Radar Profile, aggregate Risk Matrix, aggregate Risk Factors, Distribution Plots, and
+            Response Dataset Preview.
+          </p>
+        </div>
+        <ClientDiagnosticResultsSection
+          clientSlug={clientSlug}
+          campaignId={campaignId}
+          fromHistory={fromHistory}
+          managerClientId={managerClientId}
+          managerClientName={managerClientName}
+          managerFromHome={managerFromHome}
+          embeddedView
+        />
+      </section>
+
+      <section id="per-sector-results" className="scroll-mt-20 space-y-4">
+        <div className="rounded-[22px] border border-[#dde8ef] bg-white p-4 shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h3 className="text-lg font-semibold text-[#123447]">Per-Sector Results</h3>
+              <p className="mt-1 text-xs text-[#567180]">
+                Current report layout with data isolated by selected sector.
+              </p>
+            </div>
+            <a
+              href="#aggregate-results"
+              className="rounded-full border border-[#c6d8e4] bg-white px-3 py-1 text-xs font-semibold text-[#2b4d5f]"
+            >
+              Back to aggregate
+            </a>
+          </div>
+
+          {isLoadingAggregateMeta ? (
+            <p className="mt-3 text-xs text-[#567180]">Loading sector selector...</p>
+          ) : sectorOptions.length === 0 ? (
+            <p className="mt-3 text-xs text-[#567180]">
+              No sectors with eligible responses available for isolated per-sector results.
+            </p>
+          ) : (
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              {sectorOptions.map((sectorName) => (
+                <button
+                  key={`per-sector-nav-${sectorName}`}
+                  type="button"
+                  onClick={() => {
+                    if (typeof window !== "undefined") {
+                      pendingScrollRestoreY.current = window.scrollY;
+                    }
+                    setSelectedPerSector(sectorName);
+                  }}
+                  className={`rounded-full border px-3 py-1 text-xs font-semibold ${
+                    effectivePerSector === sectorName
+                      ? "border-[#0f5b73] bg-[#e8f4f9] text-[#0f5b73]"
+                      : "border-[#c7d8e2] bg-white text-[#274657]"
+                  }`}
+                >
+                  {sectorName}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {effectivePerSector ? (
+          <ClientDiagnosticResultsSection
+            clientSlug={clientSlug}
+            campaignId={campaignId}
+            fromHistory={fromHistory}
+            managerClientId={managerClientId}
+            managerClientName={managerClientName}
+            managerFromHome={managerFromHome}
+            sectorFilter={effectivePerSector}
+            embeddedView
+          />
+        ) : null}
+      </section>
+    </div>
+  );
+}
+
+export function ClientDiagnosticResultsSection({
+  clientSlug,
+  campaignId,
+  fromHistory = false,
+  managerClientId,
+  managerClientName,
+  managerFromHome = false,
+  sectorFilter,
+  embeddedView = false,
+}: {
+  clientSlug: string;
+  campaignId: string;
+  fromHistory?: boolean;
+  managerClientId?: string;
+  managerClientName?: string | null;
+  managerFromHome?: boolean;
+  sectorFilter?: string;
+  embeddedView?: boolean;
+}) {
+  const normalizedSectorFilter = (sectorFilter ?? "").trim();
+  const isPerSectorResults = normalizedSectorFilter.length > 0;
+  const { data, isLoading, error } = useClientPortalData(
+    clientSlug,
+    campaignId,
+    0,
+    normalizedSectorFilter.length > 0 ? normalizedSectorFilter : undefined,
+  );
 
   const campaign = data?.selectedCampaign ?? null;
   const managerBreadcrumbClientLabel = managerClientName?.trim() || data?.client.companyName || "Cliente";
   const dashboard = data?.dashboard ?? null;
   const metrics = dashboard?.metrics;
-  const ranking = (metrics?.ranking ?? []).slice(0, 5);
-  const topRisk = ranking[0] ?? null;
+  const participationSector = useMemo(() => {
+    if (!isPerSectorResults) return null;
+    const targetLookup = normalizeSectorLookupValue(normalizedSectorFilter);
+    return (
+      (dashboard?.sectors ?? []).find(
+        (sector) => normalizeSectorLookupValue(sector.sector) === targetLookup,
+      ) ?? null
+    );
+  }, [dashboard?.sectors, isPerSectorResults, normalizedSectorFilter]);
+  const participationResponses = dashboard?.totals.responses ?? 0;
+  const participationTotalEmployees = isPerSectorResults
+    ? Math.max(0, participationSector?.employeeCount ?? 0)
+    : Math.max(0, data?.client.totalEmployees ?? 0);
+  const participationRate =
+    participationTotalEmployees > 0 ? participationResponses / participationTotalEmployees : null;
+  const rankedRiskFactors = useMemo(
+    () =>
+      (metrics?.riskFactors ?? [])
+        .slice()
+        .sort((left, right) => {
+          const leftScore = left.riskScore ?? -1;
+          const rightScore = right.riskScore ?? -1;
+          if (rightScore !== leftScore) return rightScore - leftScore;
+          return left.topicId - right.topicId;
+        }),
+    [metrics?.riskFactors],
+  );
   const matrixPoints = (metrics?.riskMatrix ?? [])
     .filter((item) => item.probability !== null && item.riskScore !== null)
     .slice()
     .sort((a, b) => (b.riskScore ?? 0) - (a.riskScore ?? 0));
-  const sectorRanking = (metrics?.sectorRanking ?? []).slice(0, 5);
   const heatmap = metrics?.heatmap;
-  const trends = useMemo(() => metrics?.trends ?? [], [metrics?.trends]);
-  const [datasetSectorFilter, setDatasetSectorFilter] = useState("all");
+  const heatmapRows = useMemo(
+    () =>
+      (heatmap?.rows ?? [])
+        .slice()
+        .sort((left, right) => {
+          const leftIndex = left.sectorRiskIndex;
+          const rightIndex = right.sectorRiskIndex;
+          if (leftIndex === null && rightIndex === null) return left.sector.localeCompare(right.sector);
+          if (leftIndex === null) return 1;
+          if (rightIndex === null) return -1;
+          if (rightIndex !== leftIndex) return rightIndex - leftIndex;
+          return left.sector.localeCompare(right.sector);
+        }),
+    [heatmap?.rows],
+  );
+  const rawTrends = useMemo(() => metrics?.trends ?? [], [metrics?.trends]);
+  const trends = useMemo(
+    () => (isPerSectorResults ? rawTrends : aggregateTrendSeriesForAllSectors(rawTrends)),
+    [isPerSectorResults, rawTrends],
+  );
+  const [datasetSectorFilter, setDatasetSectorFilter] = useState(() =>
+    isPerSectorResults ? normalizedSectorFilter : "all",
+  );
   const [datasetSortKey, setDatasetSortKey] = useState<DatasetSortKey>("timestamp");
   const [datasetSortDirection, setDatasetSortDirection] = useState<"asc" | "desc">("desc");
   const [activePlotInfo, setActivePlotInfo] = useState<PlotInfoKey | null>(null);
+  const [trendDetailsModal, setTrendDetailsModal] = useState<TrendDetailsModalState | null>(null);
   const [isolatedRadarSector, setIsolatedRadarSector] = useState<string | null>(null);
-  const [selectedTrendTopicIdInput, setSelectedTrendTopicIdInput] = useState<number | null>(null);
-
-  const trendTopics = useMemo(
-    () =>
-      Array.from(
-        trends.reduce((map, series) => map.set(series.topicId, series.riskFactor), new Map<number, string>()),
-      )
-        .map(([topicId, riskFactor]) => ({ topicId, riskFactor }))
-        .sort((a, b) => a.topicId - b.topicId),
-    [trends],
-  );
-  const trendTopicIds = trendTopics.map((topic) => topic.topicId);
-  const defaultTrendTopicId =
-    topRisk?.topicId && trendTopicIds.includes(topRisk.topicId)
-      ? topRisk.topicId
-      : trendTopics[0]?.topicId ?? null;
-  const selectedTrendTopicId =
-    selectedTrendTopicIdInput !== null &&
-    trendTopics.some((topic) => topic.topicId === selectedTrendTopicIdInput)
-      ? selectedTrendTopicIdInput
-      : defaultTrendTopicId;
-
-  const selectedTrendTopic =
-    selectedTrendTopicId === null
-      ? null
-      : trendTopics.find((topic) => topic.topicId === selectedTrendTopicId) ?? null;
-  const selectedTrendRiskMetric =
-    selectedTrendTopicId === null
-      ? null
-      : (metrics?.riskFactors ?? []).find((risk) => risk.topicId === selectedTrendTopicId) ?? null;
+  const [selectedAggregateTrendTopicId, setSelectedAggregateTrendTopicId] = useState<number | null>(null);
+  const isPerSectorRefreshing = isPerSectorResults && isLoading && Boolean(data);
 
   const datasetSampleRows = useMemo(() => metrics?.dataset.sample ?? [], [metrics?.dataset.sample]);
   const datasetSectorOptions = useMemo(
     () => Array.from(new Set(datasetSampleRows.map((row) => row.sector))).sort((a, b) => a.localeCompare(b)),
     [datasetSampleRows],
   );
+  const resolvedPerSectorDatasetFilter = useMemo(() => {
+    if (!isPerSectorResults) return "all";
+    const targetLookup = normalizeSectorLookupValue(normalizedSectorFilter);
+    return (
+      datasetSectorOptions.find((sectorName) => normalizeSectorLookupValue(sectorName) === targetLookup) ??
+      normalizedSectorFilter
+    );
+  }, [datasetSectorOptions, isPerSectorResults, normalizedSectorFilter]);
+
+  const activeDatasetSectorFilter = isPerSectorResults ? resolvedPerSectorDatasetFilter : datasetSectorFilter;
+  const distributionScopeLabel = isPerSectorResults ? activeDatasetSectorFilter : "all sectors";
 
   const datasetRows = useMemo(() => {
     const filtered = datasetSampleRows.filter(
-      (row) => datasetSectorFilter === "all" || row.sector === datasetSectorFilter,
+      (row) => activeDatasetSectorFilter === "all" || row.sector === activeDatasetSectorFilter,
     );
     const sorted = filtered.slice().sort((left, right) => {
       if (datasetSortKey === "score") {
@@ -1094,7 +1498,7 @@ export function ClientDiagnosticResultsSection({
       return datasetSortDirection === "asc" ? diff : -diff;
     });
     return sorted;
-  }, [datasetSampleRows, datasetSectorFilter, datasetSortDirection, datasetSortKey]);
+  }, [activeDatasetSectorFilter, datasetSampleRows, datasetSortDirection, datasetSortKey]);
 
   function toggleDatasetSort(key: DatasetSortKey) {
     if (datasetSortKey === key) {
@@ -1114,34 +1518,191 @@ export function ClientDiagnosticResultsSection({
     const padding = { left: 58, right: 28, top: 24, bottom: 48 };
     const plotWidth = width - padding.left - padding.right;
     const plotHeight = height - padding.top - padding.bottom;
-    const maxAffected = Math.max(...matrixPoints.map((point) => point.affectedEmployees), 1);
+    const probabilityValues = matrixPoints.map((point) => point.probability ?? 0);
+    const severityValues = matrixPoints.map((point) => point.severity);
 
-    const points = matrixPoints.map((point, index) => {
+    const probabilityMinRaw = Math.min(...probabilityValues);
+    const probabilityMaxRaw = Math.max(...probabilityValues);
+    const severityMinRaw = Math.min(...severityValues);
+    const severityMaxRaw = Math.max(...severityValues);
+
+    const probabilityPad = Math.max(0.02, (probabilityMaxRaw - probabilityMinRaw) * 0.12);
+    let probabilityMin = Math.max(0, probabilityMinRaw - probabilityPad);
+    let probabilityMax = Math.min(1, probabilityMaxRaw + probabilityPad);
+    if (probabilityMax - probabilityMin < 0.08) {
+      const center = (probabilityMinRaw + probabilityMaxRaw) / 2;
+      probabilityMin = Math.max(0, center - 0.04);
+      probabilityMax = Math.min(1, center + 0.04);
+    }
+
+    const severityPad = Math.max(0.15, (severityMaxRaw - severityMinRaw) * 0.12);
+    let severityMin = Math.max(1, severityMinRaw - severityPad);
+    let severityMax = Math.min(5, severityMaxRaw + severityPad);
+    if (severityMax - severityMin < 0.6) {
+      const center = (severityMinRaw + severityMaxRaw) / 2;
+      severityMin = Math.max(1, center - 0.3);
+      severityMax = Math.min(5, center + 0.3);
+    }
+
+    const probabilitySpan = Math.max(probabilityMax - probabilityMin, Number.EPSILON);
+    const severitySpan = Math.max(severityMax - severityMin, Number.EPSILON);
+    const xScale = (value: number) =>
+      padding.left + ((Math.min(probabilityMax, Math.max(probabilityMin, value)) - probabilityMin) / probabilitySpan) * plotWidth;
+    const yScale = (value: number) =>
+      padding.top + (1 - (Math.min(severityMax, Math.max(severityMin, value)) - severityMin) / severitySpan) * plotHeight;
+
+    const buildTicks = (min: number, max: number, count = 5) =>
+      Array.from({ length: count }, (_, index) => min + ((max - min) * index) / Math.max(count - 1, 1));
+    const xTickValues = buildTicks(probabilityMin, probabilityMax, 5);
+    const yTickValues = buildTicks(severityMin, severityMax, 5);
+    const xTicks = xTickValues.map((value) => ({ value, x: xScale(value) }));
+    const yTicks = yTickValues.map((value) => ({ value, y: yScale(value) }));
+    const xTickDecimals = probabilitySpan < 0.2 ? 3 : 2;
+    const yTickDecimals = severitySpan < 1.2 ? 2 : 1;
+
+    const affectedValues = matrixPoints.map((point) => point.affectedEmployees);
+    const maxAffected = Math.max(...affectedValues, 1);
+    const minAffected = Math.min(...affectedValues, maxAffected);
+    const minRadius = 5;
+    const maxRadius = 24;
+    const sqrtMinAffected = Math.sqrt(minAffected);
+    const sqrtMaxAffected = Math.sqrt(maxAffected);
+    const sqrtAffectedSpan = Math.max(sqrtMaxAffected - sqrtMinAffected, Number.EPSILON);
+
+    const basePoints = matrixPoints.map((point, index) => {
       const probability = point.probability ?? 0;
-      const normalizedSeverity = (point.severity - 1) / 4;
-      const x = padding.left + probability * plotWidth;
-      const y = padding.top + (1 - normalizedSeverity) * plotHeight;
-      const radius = 4 + (point.affectedEmployees / maxAffected) * 12;
-      const horizontalDirection = index % 2 === 0 ? 1 : -1;
-      const verticalOffset = ((index % 3) - 1) * 10;
-      const labelX = Math.min(
-        width - padding.right - 2,
-        Math.max(padding.left + 2, x + horizontalDirection * (radius + 8)),
-      );
-      const labelY = Math.min(
-        height - padding.bottom - 6,
-        Math.max(padding.top + 12, y + verticalOffset),
-      );
-      const labelAnchor: "start" | "end" = horizontalDirection === 1 ? "start" : "end";
+      const x = xScale(probability);
+      const y = yScale(point.severity);
+      // Bubble area should represent affected employees; normalize by visible min/max to preserve contrast.
+      const normalizedAffected =
+        maxAffected === minAffected
+          ? 1
+          : (Math.sqrt(point.affectedEmployees) - sqrtMinAffected) / sqrtAffectedSpan;
+      const radius = minRadius + normalizedAffected * (maxRadius - minRadius);
       return {
         ...point,
+        matrixIndex: index,
         x,
         y,
         radius,
         label: shortRiskName(point.riskFactor, point.topicId),
-        labelX,
-        labelY,
-        labelAnchor,
+      };
+    });
+
+    type LabelAnchor = "start" | "middle" | "end";
+    type LabelBox = { x1: number; x2: number; y1: number; y2: number };
+    type LabelPlacement = {
+      labelX: number;
+      labelY: number;
+      labelAnchor: LabelAnchor;
+      box: LabelBox;
+      score: number;
+    };
+    const labelLeftBound = padding.left + 4;
+    const labelRightBound = width - padding.right - 4;
+    const labelTopBound = padding.top + 8;
+    const labelBottomBound = height - padding.bottom - 6;
+
+    const estimateLabelBox = (labelX: number, labelY: number, labelAnchor: LabelAnchor, label: string): LabelBox => {
+      const labelWidth = Math.max(40, Math.min(180, label.length * 7.2));
+      const x1 =
+        labelAnchor === "start" ? labelX : labelAnchor === "end" ? labelX - labelWidth : labelX - labelWidth / 2;
+      return {
+        x1,
+        x2: x1 + labelWidth,
+        y1: labelY - 12,
+        y2: labelY + 4,
+      };
+    };
+
+    const boxIntersects = (left: LabelBox, right: LabelBox): boolean =>
+      !(left.x2 + 2 < right.x1 || left.x1 > right.x2 + 2 || left.y2 + 2 < right.y1 || left.y1 > right.y2 + 2);
+
+    const circleIntersectsBox = (cx: number, cy: number, r: number, box: LabelBox): boolean => {
+      const closestX = Math.max(box.x1, Math.min(cx, box.x2));
+      const closestY = Math.max(box.y1, Math.min(cy, box.y2));
+      const dx = cx - closestX;
+      const dy = cy - closestY;
+      return dx * dx + dy * dy <= r * r;
+    };
+
+    const placementOrder = basePoints
+      .slice()
+      .sort((left, right) => right.radius - left.radius || left.y - right.y || left.x - right.x);
+    const placedBoxes: LabelBox[] = [];
+    const placements = new Map<number, LabelPlacement>();
+
+    for (const point of placementOrder) {
+      const baseOffset = point.radius + 10;
+      const farOffset = baseOffset + 16;
+      const verticalStep = Math.max(10, point.radius * 0.75);
+      const candidates: Array<{ dx: number; dy: number; anchor: LabelAnchor }> = [
+        { dx: baseOffset, dy: 0, anchor: "start" },
+        { dx: -baseOffset, dy: 0, anchor: "end" },
+        { dx: baseOffset, dy: -verticalStep, anchor: "start" },
+        { dx: baseOffset, dy: verticalStep, anchor: "start" },
+        { dx: -baseOffset, dy: -verticalStep, anchor: "end" },
+        { dx: -baseOffset, dy: verticalStep, anchor: "end" },
+        { dx: farOffset, dy: -verticalStep * 1.3, anchor: "start" },
+        { dx: farOffset, dy: verticalStep * 1.3, anchor: "start" },
+        { dx: -farOffset, dy: -verticalStep * 1.3, anchor: "end" },
+        { dx: -farOffset, dy: verticalStep * 1.3, anchor: "end" },
+        { dx: 0, dy: -(point.radius + 14), anchor: "middle" },
+        { dx: 0, dy: point.radius + 14, anchor: "middle" },
+      ];
+
+      let bestPlacement: LabelPlacement | null = null;
+
+      for (const candidate of candidates) {
+        const labelX = point.x + candidate.dx;
+        const labelY = point.y + candidate.dy;
+        const box = estimateLabelBox(labelX, labelY, candidate.anchor, point.label);
+
+        let score = Math.abs(candidate.dx) * 0.02 + Math.abs(candidate.dy) * 0.04;
+        if (candidate.anchor === "middle") score += 4;
+
+        if (box.x1 < labelLeftBound) score += (labelLeftBound - box.x1) * 5;
+        if (box.x2 > labelRightBound) score += (box.x2 - labelRightBound) * 5;
+        if (box.y1 < labelTopBound) score += (labelTopBound - box.y1) * 4;
+        if (box.y2 > labelBottomBound) score += (box.y2 - labelBottomBound) * 4;
+
+        for (const placedBox of placedBoxes) {
+          if (boxIntersects(box, placedBox)) score += 320;
+        }
+        for (const bubble of basePoints) {
+          const bubblePadding = bubble.matrixIndex === point.matrixIndex ? bubble.radius * 0.35 : bubble.radius + 2;
+          if (circleIntersectsBox(bubble.x, bubble.y, bubblePadding, box)) score += bubble.matrixIndex === point.matrixIndex ? 90 : 140;
+        }
+
+        if (!bestPlacement || score < bestPlacement.score) {
+          bestPlacement = { labelX, labelY, labelAnchor: candidate.anchor, box, score };
+        }
+      }
+
+      const fallbackAnchor: LabelAnchor = point.x < padding.left + plotWidth / 2 ? "start" : "end";
+      const fallbackLabelX = point.x + (fallbackAnchor === "start" ? baseOffset : -baseOffset);
+      const fallbackLabelY = point.y;
+      const fallbackBox = estimateLabelBox(fallbackLabelX, fallbackLabelY, fallbackAnchor, point.label);
+      const resolvedPlacement =
+        bestPlacement ?? {
+          labelX: fallbackLabelX,
+          labelY: fallbackLabelY,
+          labelAnchor: fallbackAnchor,
+          box: fallbackBox,
+          score: Number.POSITIVE_INFINITY,
+        };
+
+      placements.set(point.matrixIndex, resolvedPlacement);
+      placedBoxes.push(resolvedPlacement.box);
+    }
+
+    const points = basePoints.map((point) => {
+      const placement = placements.get(point.matrixIndex);
+      return {
+        ...point,
+        labelX: placement?.labelX ?? point.x,
+        labelY: placement?.labelY ?? point.y,
+        labelAnchor: placement?.labelAnchor ?? "start",
       };
     });
 
@@ -1151,6 +1712,10 @@ export function ClientDiagnosticResultsSection({
       padding,
       plotWidth,
       plotHeight,
+      xTicks,
+      yTicks,
+      xTickDecimals,
+      yTickDecimals,
       points,
     };
   }, [matrixPoints]);
@@ -1290,23 +1855,16 @@ export function ClientDiagnosticResultsSection({
     return radarModel.sectorPolygons.filter((series) => series.sector === effectiveIsolatedRadarSector);
   }, [effectiveIsolatedRadarSector, radarModel]);
 
-  const trendDashboardModel = (() => {
-    const trendSeriesForTopic =
-      selectedTrendTopicId === null
-        ? ([] as RiskFactorTrendSeries[])
-        : trends.filter((series) => series.topicId === selectedTrendTopicId);
-    if (trendSeriesForTopic.length === 0) return null;
+  const aggregateTrendScoreModel = useMemo(() => {
     const chartWidth = 420;
     const chartHeight = 246;
     const chartPadding = { left: 44, right: 16, top: 20, bottom: 42 };
     const plotWidth = chartWidth - chartPadding.left - chartPadding.right;
     const plotHeight = chartHeight - chartPadding.top - chartPadding.bottom;
     const periodLabelByTime = new Map<number, string>();
-    const dashPatterns = ["", "7 4", "3 3", "10 4", "2 5", "12 4 3 4"];
 
-    const parsedSeries = trendSeriesForTopic
-      .map((series, index) => {
-        const dashPattern = dashPatterns[index % dashPatterns.length];
+    const parsedSeries = trends
+      .map((series) => {
         const points = series.points
           .reduce<
             Array<{
@@ -1332,10 +1890,9 @@ export function ClientDiagnosticResultsSection({
             return acc;
           }, [])
           .sort((a, b) => a.timeMs - b.timeMs);
-
         return {
-          sector: series.sector,
-          dashPattern,
+          topicId: series.topicId,
+          riskFactor: series.riskFactor,
           points,
         };
       })
@@ -1347,6 +1904,116 @@ export function ClientDiagnosticResultsSection({
     ).sort((a, b) => a - b);
     if (allTimes.length === 0) return null;
 
+    const minX = allTimes[0];
+    const maxX = allTimes[allTimes.length - 1];
+    const xSpan = Math.max(maxX - minX, 1);
+    const xScale = (value: number) => chartPadding.left + ((value - minX) / xSpan) * plotWidth;
+    const yMin = 0;
+    const yMax = 5;
+    const yScale = (value: number) => chartPadding.top + (1 - (value - yMin) / Math.max(yMax - yMin, 1)) * plotHeight;
+
+    const xTickTarget = Math.min(6, allTimes.length);
+    const rawXTicks = Array.from({ length: xTickTarget }, (_, index) => {
+      if (allTimes.length === 1) return allTimes[0];
+      const sourceIndex = Math.round((index * (allTimes.length - 1)) / Math.max(xTickTarget - 1, 1));
+      return allTimes[sourceIndex];
+    });
+    const xTicks = Array.from(new Set(rawXTicks))
+      .map((timeMs) => ({
+        timeMs,
+        x: xScale(timeMs),
+        label: formatTrendPeriodLabel(periodLabelByTime.get(timeMs) ?? new Date(timeMs).toISOString()),
+      }))
+      .sort((a, b) => a.timeMs - b.timeMs);
+
+    const yTicks = [0, 1, 2, 3, 4, 5].map((value) => ({
+      value,
+      y: yScale(value),
+      label: value.toFixed(0),
+    }));
+
+    const cards = parsedSeries
+      .map((series) => {
+        const points = series.points.map((point) => {
+          const score = Math.min(5, Math.max(0, point.riskScore));
+          return {
+            ...point,
+            score,
+            x: xScale(point.timeMs),
+            y: yScale(score),
+          };
+        });
+        if (points.length === 0) return null;
+
+        const avgScore = points.reduce((sum, point) => sum + point.score, 0) / points.length;
+        const strokeColor = riskGradientColorFromRatio(avgScore / 5);
+        const latestPoint = points[points.length - 1] ?? null;
+
+        return {
+          topicId: series.topicId,
+          riskFactor: series.riskFactor,
+          shortRiskLabel: shortRiskName(series.riskFactor, series.topicId),
+          strokeColor,
+          latestScore: latestPoint?.score ?? null,
+          points,
+          polyline: points.map((point) => `${point.x},${point.y}`).join(" "),
+        };
+      })
+      .filter((card): card is NonNullable<typeof card> => card !== null)
+      .sort((left, right) => left.topicId - right.topicId);
+
+    if (cards.length === 0) return null;
+
+    return {
+      width: chartWidth,
+      height: chartHeight,
+      padding: chartPadding,
+      xAxisY: chartHeight - chartPadding.bottom,
+      yAxisX: chartPadding.left,
+      xTicks,
+      yTicks,
+      cards,
+    };
+  }, [trends]);
+
+  const trendDetailsModalChartModel = useMemo(() => {
+    if (!trendDetailsModal) return null;
+
+    const chartWidth = 420;
+    const chartHeight = 246;
+    const chartPadding = { left: 44, right: 16, top: 20, bottom: 42 };
+    const plotWidth = chartWidth - chartPadding.left - chartPadding.right;
+    const plotHeight = chartHeight - chartPadding.top - chartPadding.bottom;
+    const periodLabelByTime = new Map<number, string>();
+
+    const parsedPoints = trendDetailsModal.rows
+      .reduce<
+        Array<{
+          period: string;
+          meanExposure: number;
+          stdDevExposure: number;
+          prevalence: number | null;
+          severityIndex: number | null;
+          probability: number;
+          severity: number;
+          riskScore: number;
+          responses: number;
+          timeMs: number;
+        }>
+      >((acc, point) => {
+        const timeMs = parseTrendPeriodToUtcMs(point.period);
+        if (timeMs === null) return acc;
+        periodLabelByTime.set(timeMs, point.period);
+        acc.push({
+          ...point,
+          timeMs,
+        });
+        return acc;
+      }, [])
+      .sort((a, b) => a.timeMs - b.timeMs);
+    if (parsedPoints.length === 0) return null;
+
+    const allTimes = parsedPoints.map((point) => point.timeMs);
     const minX = allTimes[0];
     const maxX = allTimes[allTimes.length - 1];
     const xSpan = Math.max(maxX - minX, 1);
@@ -1366,13 +2033,9 @@ export function ClientDiagnosticResultsSection({
       }))
       .sort((a, b) => a.timeMs - b.timeMs);
 
-    const baseSeries = parsedSeries.map((series) => ({
-      sector: series.sector,
-      dashPattern: series.dashPattern,
-      points: series.points.map((point) => ({
-        ...point,
-        x: xScale(point.timeMs),
-      })),
+    const basePoints = parsedPoints.map((point) => ({
+      ...point,
+      x: xScale(point.timeMs),
     }));
 
     const metricDefinitions = [
@@ -1385,7 +2048,7 @@ export function ClientDiagnosticResultsSection({
     ] as const;
 
     function pointMetricValue(
-      point: (typeof baseSeries)[number]["points"][number],
+      point: (typeof basePoints)[number],
       key: (typeof metricDefinitions)[number]["key"],
     ): number | null {
       if (key === "meanExposure") return point.meanExposure;
@@ -1406,48 +2069,36 @@ export function ClientDiagnosticResultsSection({
           return {
             value,
             y: yScale(value),
-            label: metric.percent
-              ? `${Math.round(value * 100)}%`
-              : value.toFixed(metric.decimals),
+            label: metric.percent ? `${Math.round(value * 100)}%` : value.toFixed(metric.decimals),
           };
         });
 
-        const series = baseSeries.map((item) => {
-          const plotted = item.points
-            .map((point) => {
-              const value = pointMetricValue(point, metric.key);
-              if (value === null || value === undefined || !Number.isFinite(value)) return null;
-              const clamped = Math.min(metric.max, Math.max(metric.min, value));
-              return {
-                ...point,
-                value: clamped,
-                y: yScale(clamped),
-                yUpper:
-                  metric.showBand
-                    ? yScale(Math.min(metric.max, Math.max(metric.min, point.meanExposure + point.stdDevExposure)))
-                    : null,
-                yLower:
-                  metric.showBand
-                    ? yScale(Math.min(metric.max, Math.max(metric.min, point.meanExposure - point.stdDevExposure)))
-                    : null,
-              };
-            })
-            .filter((point): point is NonNullable<typeof point> => point !== null);
-          return {
-            sector: item.sector,
-            dashPattern: item.dashPattern,
-            points: plotted,
-            polyline: plotted.map((point) => `${point.x},${point.y}`).join(" "),
-            bandPolygon:
-              metric.showBand && plotted.length > 0
-                ? `${plotted.map((point) => `${point.x},${point.yUpper}`).join(" ")} ${plotted
-                    .slice()
-                    .reverse()
-                    .map((point) => `${point.x},${point.yLower}`)
-                    .join(" ")}`
-                : null,
-          };
-        });
+        const points = basePoints
+          .map((point) => {
+            const value = pointMetricValue(point, metric.key);
+            if (value === null || value === undefined || !Number.isFinite(value)) return null;
+            const clamped = Math.min(metric.max, Math.max(metric.min, value));
+            return {
+              ...point,
+              value: clamped,
+              y: yScale(clamped),
+              yUpper:
+                metric.showBand
+                  ? yScale(Math.min(metric.max, Math.max(metric.min, point.meanExposure + point.stdDevExposure)))
+                  : null,
+              yLower:
+                metric.showBand
+                  ? yScale(Math.min(metric.max, Math.max(metric.min, point.meanExposure - point.stdDevExposure)))
+                  : null,
+            };
+          })
+          .filter((point): point is NonNullable<typeof point> => point !== null);
+        if (points.length === 0) return null;
+
+        const avgRatio =
+          points.reduce((sum, point) => sum + (point.value - metric.min) / Math.max(metric.max - metric.min, 1), 0) /
+          points.length;
+        const strokeColor = riskGradientColorFromRatio(avgRatio);
 
         return {
           key: metric.key,
@@ -1462,75 +2113,105 @@ export function ClientDiagnosticResultsSection({
           yAxisX: chartPadding.left,
           xTicks,
           yTicks,
-          series,
+          strokeColor,
+          points,
+          polyline: points.map((point) => `${point.x},${point.y}`).join(" "),
+          bandPolygon:
+            metric.showBand && points.length > 0
+              ? `${points.map((point) => `${point.x},${point.yUpper}`).join(" ")} ${points
+                  .slice()
+                  .reverse()
+                  .map((point) => `${point.x},${point.yLower}`)
+                  .join(" ")}`
+              : null,
         };
       })
-      .filter((chart) => chart.series.some((series) => series.points.length > 0));
+      .filter((chart): chart is NonNullable<typeof chart> => chart !== null);
+    if (charts.length === 0) return null;
 
-    return {
-      charts,
-      legend: baseSeries.map((series) => ({ sector: series.sector, dashPattern: series.dashPattern })),
-    };
-  })();
+    return { charts };
+  }, [trendDetailsModal]);
 
-  if (isLoading) return <p className="text-sm text-[#49697a]">Carregando resultados do diagnostico...</p>;
-  if (error || !data) return <p className="text-sm text-red-600">{error || "Resultados indisponiveis."}</p>;
+  if (isLoading && !data) return <p className="text-sm text-[#49697a]">Carregando resultados do diagnostico...</p>;
+  if ((error && !data) || !data) return <p className="text-sm text-red-600">{error || "Resultados indisponiveis."}</p>;
 
   return (
-    <div className="space-y-6">
-      <nav className="text-xs text-[#4f6977]">
-        {managerClientId ? (
-          managerFromHome ? (
-            <>
-              <Link href="/manager" className="text-[#0f5b73]">
-                Home
-              </Link>{" "}
-              / <span>{campaign?.name ?? "Diagnostico"}</span> / <span>Resultados</span>
-            </>
-          ) : (
-            <>
-              <Link href="/manager/clients" className="text-[#0f5b73]">
-                Client area
-              </Link>{" "}
-              /{" "}
-              <Link href={`/manager/clients/${managerClientId}`} className="text-[#0f5b73]">
-                {managerBreadcrumbClientLabel}
-              </Link>{" "}
-              / <span>{campaign?.name ?? "Diagnostico"}</span> / <span>Resultados</span>
-            </>
-          )
-        ) : fromHistory ? (
-          <>
-            <Link href={`/client/${clientSlug}/history`} className="text-[#1b2832]">
-              Historico
-            </Link>{" "}
-            / <span>{campaign?.name ?? "Diagnostico"}</span>
-          </>
-        ) : (
-          <>
-            <Link href={`/client/${clientSlug}/company`} className="text-[#1b2832]">
-              Home
-            </Link>{" "}
-            / <span>{campaign?.name ?? "Diagnostico"}</span> / <span>Resultados</span>
-          </>
-        )}
-      </nav>
+    <div className="relative space-y-6">
+      {isPerSectorRefreshing ? (
+        <div className="pointer-events-none absolute inset-0 z-40">
+          <div className="h-full w-full rounded-[26px] bg-white/55 backdrop-blur-[1px]" />
+          <div className="absolute inset-x-4 top-4">
+            <span className="inline-flex items-center gap-2 rounded-full border border-[#b9d2df] bg-white/90 px-3 py-1 text-xs font-semibold text-[#1a4a60] shadow-sm">
+              <span className="inline-block h-2.5 w-2.5 animate-ping rounded-full bg-[#0f5b73]" />
+              Updating sector charts...
+            </span>
+          </div>
+        </div>
+      ) : null}
+      {!embeddedView ? (
+        <>
+          <nav className="text-xs text-[#4f6977]">
+            {managerClientId ? (
+              managerFromHome ? (
+                <>
+                  <Link href="/manager" className="text-[#0f5b73]">
+                    Home
+                  </Link>{" "}
+                  / <span>{campaign?.name ?? "Diagnostico"}</span> / <span>Resultados</span>
+                </>
+              ) : (
+                <>
+                  <Link href="/manager/clients" className="text-[#0f5b73]">
+                    Client area
+                  </Link>{" "}
+                  /{" "}
+                  <Link href={`/manager/clients/${managerClientId}`} className="text-[#0f5b73]">
+                    {managerBreadcrumbClientLabel}
+                  </Link>{" "}
+                  / <span>{campaign?.name ?? "Diagnostico"}</span> / <span>Resultados</span>
+                </>
+              )
+            ) : fromHistory ? (
+              <>
+                <Link href={`/client/${clientSlug}/history`} className="text-[#1b2832]">
+                  Historico
+                </Link>{" "}
+                / <span>{campaign?.name ?? "Diagnostico"}</span>
+              </>
+            ) : (
+              <>
+                <Link href={`/client/${clientSlug}/company`} className="text-[#1b2832]">
+                  Home
+                </Link>{" "}
+                / <span>{campaign?.name ?? "Diagnostico"}</span> / <span>Resultados</span>
+              </>
+            )}
+          </nav>
 
-      <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
-        <h2 className="text-2xl font-semibold text-[#141d24]">{campaign?.name ?? "Resultados do diagnostico"}</h2>
-        <p className="mt-1 text-sm text-[#475660]">
-          Responses {dashboard?.totals.responses ?? 0} | Risks {dashboard?.totals.topics ?? 0} |
-          Setores ativos {dashboard?.totals.activeSectors ?? 0}
-        </p>
-      </section>
+          <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+            <h2 className="text-2xl font-semibold text-[#141d24]">{campaign?.name ?? "Resultados do diagnostico"}</h2>
+            <p className="mt-1 text-sm text-[#475660]">
+              Responses {dashboard?.totals.responses ?? 0} | Risks {dashboard?.totals.topics ?? 0} |
+              Setores ativos {dashboard?.totals.activeSectors ?? 0}
+            </p>
+          </section>
+        </>
+      ) : null}
 
-      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
         <article className="rounded-[20px] border border-[#dfdfdf] bg-[#f8f8f8] p-4 shadow-sm">
           <p className="text-xs uppercase tracking-[0.12em] text-[#516b79]">Global Risk Index</p>
           <p className="mt-2 text-2xl font-semibold text-[#14384a]">
             {metrics?.global.riskIndex !== null && metrics?.global.riskIndex !== undefined
               ? metrics.global.riskIndex.toFixed(2)
               : "-"}
+          </p>
+        </article>
+        <article className="rounded-[20px] border border-[#dfdfdf] bg-[#f8f8f8] p-4 shadow-sm">
+          <p className="text-xs uppercase tracking-[0.12em] text-[#516b79]">Participation rate</p>
+          <p className="mt-2 text-2xl font-semibold text-[#14384a]">{fmtPercent(participationRate)}</p>
+          <p className="mt-1 text-xs text-[#587282]">
+            {participationResponses}/{participationTotalEmployees} colaboradores
           </p>
         </article>
         <article className="rounded-[20px] border border-[#dfdfdf] bg-[#f8f8f8] p-4 shadow-sm">
@@ -1561,6 +2242,65 @@ export function ClientDiagnosticResultsSection({
         </article>
       </section>
 
+      <section className="grid gap-4">
+        <article className="flex min-h-[420px] w-full flex-col rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+          <h3 className="text-lg font-semibold text-[#141d24]">Risk Factors (core metrics)</h3>
+          <p className="mt-1 text-xs text-[#55707f]">Ordered by risk ranking (highest score first).</p>
+          <div className="mt-3 flex-1 overflow-auto rounded-xl border border-[#dce8ee] bg-white">
+            <table className="min-w-full text-xs">
+              <thead>
+                <tr className="border-b bg-[#f5fafc]">
+                  <th className="px-2 py-2 text-left">#</th>
+                  <th className="px-2 py-2 text-left">Risk</th>
+                  <th className="px-2 py-2 text-left">Mean</th>
+                  <th className="px-2 py-2 text-left">Prevalence</th>
+                  <th className="px-2 py-2 text-left">Severity idx</th>
+                  <th className="px-2 py-2 text-left">Prob.</th>
+                  <th className="px-2 py-2 text-left">Sev.</th>
+                  <th className="px-2 py-2 text-left">Score</th>
+                  <th className="px-2 py-2 text-left">Ranking</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rankedRiskFactors.map((risk, index) => (
+                  <tr key={`${risk.topicId}-${risk.riskFactor}`} className={`border-b ${riskScoreRowTone(risk.riskScore)}`}>
+                    <td className="px-2 py-2 font-semibold text-[#334e5c]">#{index + 1}</td>
+                    <td className="px-2 py-2">
+                      {topicCode(risk.topicId)} {risk.riskFactor}
+                    </td>
+                    <td className="px-2 py-2">{risk.meanExposure !== null ? risk.meanExposure.toFixed(2) : "-"}</td>
+                    <td className="px-2 py-2">{fmtPercent(risk.prevalence)}</td>
+                    <td className="px-2 py-2">{risk.severityIndex !== null ? risk.severityIndex.toFixed(2) : "-"}</td>
+                    <td className="px-2 py-2">{risk.probability !== null ? risk.probability.toFixed(2) : "-"}</td>
+                    <td className="px-2 py-2">{risk.severity}</td>
+                    <td className="px-2 py-2">
+                      <span
+                        className={`inline-flex min-w-[56px] justify-center rounded-full border px-2 py-0.5 font-semibold ${riskScoreTone(risk.riskScore)}`}
+                      >
+                        {risk.riskScore !== null ? risk.riskScore.toFixed(2) : "-"}
+                      </span>
+                    </td>
+                    <td className="px-2 py-2">
+                      <div className="flex min-w-[220px] items-center gap-2">
+                        <div className="h-2 flex-1 rounded-full bg-[#ecf3f7]">
+                          <div
+                            className={`h-2 rounded-full ${metricBarTone(risk.riskCategory)}`}
+                            style={{ width: `${((risk.riskScore ?? 0) / 5) * 100}%` }}
+                          />
+                        </div>
+                        <span className={`rounded-full border px-2 py-0.5 ${metricTone(risk.riskCategory)}`}>
+                          {normalizeMetricLabel(risk.riskCategory)}
+                        </span>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </article>
+      </section>
+
       <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
         <div className="flex items-center justify-between gap-2">
           <h3 className="text-lg font-semibold text-[#141d24]">Risk Heatmap (sector x factor)</h3>
@@ -1579,6 +2319,7 @@ export function ClientDiagnosticResultsSection({
               <tr className="border-b">
                 <th className="px-2 py-2 text-left">Sector</th>
                 <th className="px-2 py-2 text-left">Responses</th>
+                <th className="px-2 py-2 text-left">Risk Index</th>
                 {(heatmap?.columns ?? []).map((column) => (
                   <th key={column.topicId} className="px-2 py-2 text-left">
                     <span title={column.riskFactor}>{shortRiskName(column.riskFactor, column.topicId)}</span>
@@ -1587,10 +2328,17 @@ export function ClientDiagnosticResultsSection({
               </tr>
             </thead>
             <tbody>
-              {(heatmap?.rows ?? []).map((row) => (
+              {heatmapRows.map((row) => (
                 <tr key={row.sector} className="border-b">
                   <td className="px-2 py-2 font-medium text-[#1e3947]">{row.sector}</td>
                   <td className="px-2 py-2 text-[#496879]">{row.nResponses}</td>
+                  <td className="px-2 py-2">
+                    <span
+                      className={`inline-flex min-w-[58px] justify-center rounded-md border px-2 py-0.5 text-xs font-semibold ${riskScoreTone(row.sectorRiskIndex)}`}
+                    >
+                      {row.sectorRiskIndex !== null ? row.sectorRiskIndex.toFixed(2) : "n/a"}
+                    </span>
+                  </td>
                   {row.cells.map((cell) => (
                     <td key={`${row.sector}-${cell.topicId}`} className="px-2 py-2">
                       {row.suppressed ? (
@@ -1613,8 +2361,8 @@ export function ClientDiagnosticResultsSection({
         </div>
       </section>
 
-      <section className="grid items-start gap-4 xl:grid-cols-2">
-        <article className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+      <section className="grid gap-4 xl:grid-cols-2">
+        <article className="flex h-full flex-col rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
           <div className="flex items-center justify-between gap-2">
             <h3 className="text-lg font-semibold text-[#141d24]">Risk Matrix</h3>
             <button
@@ -1626,34 +2374,53 @@ export function ClientDiagnosticResultsSection({
               i
             </button>
           </div>
-          <p className="mt-1 text-xs text-[#55707f]">x: probability | y: severity | bubble: affected employees</p>
-          <div className="mt-3 overflow-x-auto">
+          <div className="mt-1 space-y-1">
+            <p className="text-xs text-[#55707f]">x: probability | y: severity (observed from responses) | bubble: affected employees</p>
+            <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-[#4b6472]">
+              <span className="font-semibold text-[#223845]">Gravidade (color):</span>
+              <span className="inline-flex items-center gap-1 rounded-full border border-[#d8e5ec] bg-white px-2 py-0.5">
+                <span className="inline-block h-2.5 w-2.5 rounded-full bg-[#86efac]" />
+                low (&lt;1.5)
+              </span>
+              <span className="inline-flex items-center gap-1 rounded-full border border-[#d8e5ec] bg-white px-2 py-0.5">
+                <span className="inline-block h-2.5 w-2.5 rounded-full bg-[#fde68a]" />
+                moderate (1.5-2.49)
+              </span>
+              <span className="inline-flex items-center gap-1 rounded-full border border-[#d8e5ec] bg-white px-2 py-0.5">
+                <span className="inline-block h-2.5 w-2.5 rounded-full bg-[#fdba74]" />
+                high (2.5-3.49)
+              </span>
+              <span className="inline-flex items-center gap-1 rounded-full border border-[#d8e5ec] bg-white px-2 py-0.5">
+                <span className="inline-block h-2.5 w-2.5 rounded-full bg-[#fca5a5]" />
+                critical (&gt;=3.5)
+              </span>
+              <span className="text-[#5f7785]">gravity score = probability x fixed topic severity weight</span>
+            </div>
+          </div>
+          <div className="mt-3 flex-1 overflow-x-auto">
             {matrixModel ? (
               <svg viewBox={`0 0 ${matrixModel.width} ${matrixModel.height}`} className="h-[380px] w-full min-w-[520px]">
-                {[0, 0.25, 0.5, 0.75, 1].map((step) => {
-                  const x = matrixModel.padding.left + step * matrixModel.plotWidth;
+                {matrixModel.xTicks.map((tick) => {
                   return (
                     <line
-                      key={`x-${step}`}
-                      x1={x}
+                      key={`x-${tick.value}`}
+                      x1={tick.x}
                       y1={matrixModel.padding.top}
-                      x2={x}
+                      x2={tick.x}
                       y2={matrixModel.height - matrixModel.padding.bottom}
                       stroke="#dce7ee"
                       strokeDasharray="4 6"
                     />
                   );
                 })}
-                {[1, 2, 3, 4, 5].map((severity) => {
-                  const normalized = (severity - 1) / 4;
-                  const y = matrixModel.padding.top + (1 - normalized) * matrixModel.plotHeight;
+                {matrixModel.yTicks.map((tick) => {
                   return (
                     <line
-                      key={`y-${severity}`}
+                      key={`y-${tick.value}`}
                       x1={matrixModel.padding.left}
-                      y1={y}
+                      y1={tick.y}
                       x2={matrixModel.width - matrixModel.padding.right}
-                      y2={y}
+                      y2={tick.y}
                       stroke="#dce7ee"
                       strokeDasharray="4 6"
                     />
@@ -1675,32 +2442,29 @@ export function ClientDiagnosticResultsSection({
                   stroke="#64748b"
                   strokeWidth="1.2"
                 />
-                {[0, 0.25, 0.5, 0.75, 1].map((step) => {
-                  const x = matrixModel.padding.left + step * matrixModel.plotWidth;
+                {matrixModel.xTicks.map((tick) => {
                   return (
                     <text
-                      key={`xt-${step}`}
-                      x={x}
+                      key={`xt-${tick.value}`}
+                      x={tick.x}
                       y={matrixModel.height - matrixModel.padding.bottom + 14}
                       textAnchor="middle"
                       className="fill-[#475569] text-[12px]"
                     >
-                      {step.toFixed(2)}
+                      {tick.value.toFixed(matrixModel.xTickDecimals)}
                     </text>
                   );
                 })}
-                {[1, 2, 3, 4, 5].map((severity) => {
-                  const normalized = (severity - 1) / 4;
-                  const y = matrixModel.padding.top + (1 - normalized) * matrixModel.plotHeight;
+                {matrixModel.yTicks.map((tick) => {
                   return (
                     <text
-                      key={`yt-${severity}`}
+                      key={`yt-${tick.value}`}
                       x={matrixModel.padding.left - 8}
-                      y={y + 3}
+                      y={tick.y + 3}
                       textAnchor="end"
                       className="fill-[#475569] text-[12px]"
                     >
-                      {severity}
+                      {tick.value.toFixed(matrixModel.yTickDecimals)}
                     </text>
                   );
                 })}
@@ -1719,7 +2483,7 @@ export function ClientDiagnosticResultsSection({
                   transform={`rotate(-90 12 ${matrixModel.height / 2})`}
                   className="fill-[#334155] text-[14px] font-semibold"
                 >
-                  Severity
+                  Severity (observed)
                 </text>
                 {matrixModel.points.map((point) => (
                   <g key={`${point.topicId}-${point.riskFactor}`}>
@@ -1756,29 +2520,9 @@ export function ClientDiagnosticResultsSection({
               <p className="text-sm text-[#5b7482]">No matrix data available.</p>
             )}
           </div>
-          <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] text-[#4b6472]">
-            <span className="font-semibold text-[#223845]">Legend:</span>
-            <span className="inline-flex items-center gap-1 rounded-full border border-[#d8e5ec] px-2 py-0.5">
-              <span className="inline-block h-2.5 w-2.5 rounded-full bg-[#86efac]" />
-              low
-            </span>
-            <span className="inline-flex items-center gap-1 rounded-full border border-[#d8e5ec] px-2 py-0.5">
-              <span className="inline-block h-2.5 w-2.5 rounded-full bg-[#fde68a]" />
-              moderate
-            </span>
-            <span className="inline-flex items-center gap-1 rounded-full border border-[#d8e5ec] px-2 py-0.5">
-              <span className="inline-block h-2.5 w-2.5 rounded-full bg-[#fdba74]" />
-              high
-            </span>
-            <span className="inline-flex items-center gap-1 rounded-full border border-[#d8e5ec] px-2 py-0.5">
-              <span className="inline-block h-2.5 w-2.5 rounded-full bg-[#fca5a5]" />
-              critical
-            </span>
-            <span className="rounded-full border border-[#d8e5ec] px-2 py-0.5">bubble size = affected employees</span>
-          </div>
         </article>
 
-        <article className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+        <article className="flex h-full flex-col rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
           <div className="flex items-center justify-between gap-2">
             <h3 className="text-lg font-semibold text-[#141d24]">Sector Radar Profile</h3>
             <button
@@ -1802,7 +2546,7 @@ export function ClientDiagnosticResultsSection({
                 : "Click a legend item to isolate one sector on the radar."}
             </p>
           ) : null}
-          <div className="mt-3 overflow-x-auto">
+          <div className="mt-3 flex-1 overflow-x-auto">
             {radarModel ? (
               <svg viewBox={`0 0 ${radarModel.size} ${radarModel.size}`} className="mx-auto h-[420px] w-[420px]">
                 {radarModel.rings.map((ring, index) => (
@@ -1897,10 +2641,10 @@ export function ClientDiagnosticResultsSection({
         </article>
       </section>
 
-      <section className="grid gap-4 xl:grid-cols-[1fr_1fr]">
+      <section className="grid gap-4">
         <article className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
           <div className="flex items-center justify-between gap-2">
-            <h3 className="text-lg font-semibold text-[#141d24]">Distribution Plots (all risks)</h3>
+            <h3 className="text-lg font-semibold text-[#141d24]">{`Distribution Plots (${distributionScopeLabel})`}</h3>
             <button
               type="button"
               onClick={() => setActivePlotInfo("distribution")}
@@ -1910,7 +2654,7 @@ export function ClientDiagnosticResultsSection({
               i
             </button>
           </div>
-          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             {(metrics?.riskFactors ?? []).map((risk) => {
               const maxCount = Math.max(
                 risk.distribution[1],
@@ -1957,46 +2701,6 @@ export function ClientDiagnosticResultsSection({
             })}
           </div>
         </article>
-
-        <article className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
-          <div className="flex items-center justify-between gap-2">
-            <h3 className="text-lg font-semibold text-[#141d24]">Critical Risk Ranking</h3>
-            <button
-              type="button"
-              onClick={() => setActivePlotInfo("ranking")}
-              className="rounded-full border border-[#b8cfdb] px-2 py-0.5 text-xs font-semibold text-[#17465b]"
-              aria-label="Ranking info"
-            >
-              i
-            </button>
-          </div>
-          <div className="mt-3 space-y-3">
-            {ranking.map((item, index) => (
-              <div key={`${item.topicId}-${item.riskFactor}`} className="space-y-1">
-                <div className="flex items-center justify-between text-sm">
-                  <span className="text-[#334e5c]">
-                    #{index + 1} {item.riskFactor}
-                  </span>
-                  <span className="font-semibold text-[#132f3d]">
-                    {item.riskScore !== null ? item.riskScore.toFixed(2) : "-"}
-                  </span>
-                </div>
-                <div className="h-2 rounded-full bg-[#ecf3f7]">
-                  <div
-                    className="h-2 rounded-full bg-[#f97316]"
-                    style={{ width: `${((item.riskScore ?? 0) / 5) * 100}%` }}
-                  />
-                </div>
-                <div className="flex items-center gap-2 text-[11px] text-[#617a88]">
-                  <span className={`rounded-full border px-2 py-0.5 ${metricTone(item.riskCategory)}`}>
-                    {normalizeMetricLabel(item.riskCategory)}
-                  </span>
-                  <span>prevalence {fmtPercent(item.prevalence)}</span>
-                </div>
-              </div>
-            ))}
-          </div>
-        </article>
       </section>
 
       <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
@@ -2011,124 +2715,65 @@ export function ClientDiagnosticResultsSection({
             i
           </button>
         </div>
-        <div className="mt-2 grid gap-2 md:grid-cols-1">
-          <label className="text-xs text-[#4f6977]">
-            Risk factor
-            <select
-              className="mt-1 w-full rounded border border-[#cddde7] bg-white px-2 py-1 text-xs"
-              value={selectedTrendTopicId ?? ""}
-              onChange={(event) => {
-                if (!event.target.value) {
-                  setSelectedTrendTopicIdInput(null);
-                  return;
-                }
-                const parsed = Number(event.target.value);
-                setSelectedTrendTopicIdInput(Number.isFinite(parsed) ? parsed : null);
-              }}
-              disabled={trendTopics.length === 0}
-            >
-              {trendTopics.map((topic) => (
-                <option key={`trend-topic-${topic.topicId}`} value={topic.topicId}>
-                  {shortRiskName(topic.riskFactor, topic.topicId)}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
         <p className="mt-2 text-xs text-[#5b7482]">
-          {trendDashboardModel
-            ? `${selectedTrendTopic?.riskFactor ?? "Selected risk factor"} | parameters over time`
-            : "No trend series available for selected filters."}
+          {isPerSectorResults
+            ? "Per-sector view: score timeseries for all risks. Use `Details` on a chart to open the parameter gridcharts."
+            : "Aggregate view: score timeseries for all risks. Use `Details` on a chart to open the parameter gridcharts."}
         </p>
-        {selectedTrendRiskMetric ? (
-          <div className="mt-3 overflow-x-auto rounded-xl border border-[#dce8ee] bg-white">
-            <table className="min-w-full text-xs">
-              <thead>
-                <tr className="border-b bg-[#f5fafc]">
-                  <th className="px-2 py-2 text-left">Risk</th>
-                  <th className="px-2 py-2 text-left">Mean</th>
-                  <th className="px-2 py-2 text-left">Prevalence</th>
-                  <th className="px-2 py-2 text-left">Severity idx</th>
-                  <th className="px-2 py-2 text-left">Prob.</th>
-                  <th className="px-2 py-2 text-left">Sev.</th>
-                  <th className="px-2 py-2 text-left">Score</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr className="border-b">
-                  <td className="px-2 py-2">
-                    {topicCode(selectedTrendRiskMetric.topicId)} {selectedTrendRiskMetric.riskFactor}
-                  </td>
-                  <td className="px-2 py-2">
-                    {selectedTrendRiskMetric.meanExposure !== null ? selectedTrendRiskMetric.meanExposure.toFixed(2) : "-"}
-                  </td>
-                  <td className="px-2 py-2">{fmtPercent(selectedTrendRiskMetric.prevalence)}</td>
-                  <td className="px-2 py-2">
-                    {selectedTrendRiskMetric.severityIndex !== null ? selectedTrendRiskMetric.severityIndex.toFixed(2) : "-"}
-                  </td>
-                  <td className="px-2 py-2">
-                    {selectedTrendRiskMetric.probability !== null ? selectedTrendRiskMetric.probability.toFixed(2) : "-"}
-                  </td>
-                  <td className="px-2 py-2">{selectedTrendRiskMetric.severity}</td>
-                  <td className="px-2 py-2">
-                    {selectedTrendRiskMetric.riskScore !== null ? selectedTrendRiskMetric.riskScore.toFixed(2) : "-"}
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        ) : null}
-        {trendDashboardModel ? (
-          <div className="mt-2 flex flex-wrap gap-2 text-sm text-[#4f6977]">
-            {trendDashboardModel.legend.map((series) => (
-              <span
-                key={`trend-legend-${series.sector}`}
-                className="inline-flex items-center gap-1.5 rounded-full border border-[#d5e2ea] bg-white px-2 py-1"
-              >
-                <span className="relative inline-block h-2.5 w-4">
-                  <span
-                    className="absolute inset-x-0 top-1/2 h-0 border-t-2 border-[#425b69]"
-                    style={series.dashPattern ? { borderTopStyle: "dashed" } : undefined}
-                  />
-                </span>
-                {series.sector}
-              </span>
-            ))}
-          </div>
-        ) : null}
-        {trendDashboardModel ? (
+        {aggregateTrendScoreModel ? (
           <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-            {trendDashboardModel.charts.map((chart) => (
-              <article key={`trend-chart-${chart.key}`} className="rounded-xl border border-[#dce8ee] bg-white p-2.5">
-                <p className="text-sm font-semibold text-[#274353]">{chart.title}</p>
+            {aggregateTrendScoreModel.cards.map((card) => (
+              <article
+                key={`aggregate-trend-${card.topicId}`}
+                className={`rounded-xl border bg-white p-2.5 ${
+                  selectedAggregateTrendTopicId === card.topicId ? "border-[#7fb6cd]" : "border-[#dce8ee]"
+                }`}
+                onClick={() => setSelectedAggregateTrendTopicId(card.topicId)}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <p className="truncate text-sm font-semibold text-[#274353]" title={card.riskFactor}>
+                    {card.shortRiskLabel}
+                  </p>
+                  <div className="flex items-center gap-1.5">
+                    <span className="rounded-full border border-[#d8e5ec] bg-[#f5fafc] px-2 py-0.5 text-[11px] font-semibold text-[#315364]">
+                      score {card.latestScore !== null ? card.latestScore.toFixed(2) : "-"}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setSelectedAggregateTrendTopicId(card.topicId);
+                        setTrendDetailsModal({
+                          title: card.riskFactor,
+                          subtitle: isPerSectorResults
+                            ? `${activeDatasetSectorFilter} | risk parameters over time`
+                            : "Aggregate risk parameters over time",
+                          rows: card.points,
+                        });
+                      }}
+                      className="rounded-full border border-[#b8cfdb] px-2 py-0.5 text-[11px] font-semibold text-[#17465b]"
+                    >
+                      Details
+                    </button>
+                  </div>
+                </div>
                 <div className="mt-2 overflow-x-auto">
-                  <svg viewBox={`0 0 ${chart.width} ${chart.height}`} className="h-[220px] w-full min-w-[360px]">
-                    <defs>
-                      <linearGradient
-                        id={`trend-risk-gradient-${chart.key}`}
-                        x1="0"
-                        y1={chart.xAxisY}
-                        x2="0"
-                        y2={chart.padding.top}
-                        gradientUnits="userSpaceOnUse"
-                      >
-                        <stop offset="0%" stopColor="#16a34a" />
-                        <stop offset="50%" stopColor="#f59e0b" />
-                        <stop offset="100%" stopColor="#dc2626" />
-                      </linearGradient>
-                    </defs>
-                    {chart.yTicks.map((tick) => (
-                      <g key={`trend-${chart.key}-y-${tick.value}`}>
+                  <svg
+                    viewBox={`0 0 ${aggregateTrendScoreModel.width} ${aggregateTrendScoreModel.height}`}
+                    className="h-[220px] w-full min-w-[360px]"
+                  >
+                    {aggregateTrendScoreModel.yTicks.map((tick) => (
+                      <g key={`aggregate-trend-${card.topicId}-y-${tick.value}`}>
                         <line
-                          x1={chart.padding.left}
+                          x1={aggregateTrendScoreModel.padding.left}
                           y1={tick.y}
-                          x2={chart.width - chart.padding.right}
+                          x2={aggregateTrendScoreModel.width - aggregateTrendScoreModel.padding.right}
                           y2={tick.y}
                           stroke="#dce7ee"
                           strokeDasharray="4 6"
                         />
                         <text
-                          x={chart.padding.left - 6}
+                          x={aggregateTrendScoreModel.padding.left - 6}
                           y={tick.y + 4}
                           textAnchor="end"
                           className="fill-[#5d7482] text-[11px]"
@@ -2137,61 +2782,55 @@ export function ClientDiagnosticResultsSection({
                         </text>
                       </g>
                     ))}
-                    {chart.xTicks.map((tick) => (
-                      <g key={`trend-${chart.key}-x-${tick.timeMs}`}>
+                    {aggregateTrendScoreModel.xTicks.map((tick) => (
+                      <g key={`aggregate-trend-${card.topicId}-x-${tick.timeMs}`}>
                         <line
                           x1={tick.x}
-                          y1={chart.padding.top}
+                          y1={aggregateTrendScoreModel.padding.top}
                           x2={tick.x}
-                          y2={chart.xAxisY}
+                          y2={aggregateTrendScoreModel.xAxisY}
                           stroke="#eef4f8"
                           strokeDasharray="2 6"
                         />
-                        <text x={tick.x} y={chart.height - 24} textAnchor="middle" className="fill-[#415564] text-[11px]">
+                        <text
+                          x={tick.x}
+                          y={aggregateTrendScoreModel.height - 24}
+                          textAnchor="middle"
+                          className="fill-[#415564] text-[11px]"
+                        >
                           {tick.label}
                         </text>
                       </g>
                     ))}
                     <line
-                      x1={chart.padding.left}
-                      y1={chart.xAxisY}
-                      x2={chart.width - chart.padding.right}
-                      y2={chart.xAxisY}
+                      x1={aggregateTrendScoreModel.padding.left}
+                      y1={aggregateTrendScoreModel.xAxisY}
+                      x2={aggregateTrendScoreModel.width - aggregateTrendScoreModel.padding.right}
+                      y2={aggregateTrendScoreModel.xAxisY}
                       stroke="#93a9b5"
                       strokeWidth="1.2"
                     />
                     <line
-                      x1={chart.yAxisX}
-                      y1={chart.padding.top}
-                      x2={chart.yAxisX}
-                      y2={chart.xAxisY}
+                      x1={aggregateTrendScoreModel.yAxisX}
+                      y1={aggregateTrendScoreModel.padding.top}
+                      x2={aggregateTrendScoreModel.yAxisX}
+                      y2={aggregateTrendScoreModel.xAxisY}
                       stroke="#93a9b5"
                       strokeWidth="1.2"
                     />
-                    {chart.series.map((series) => (
-                      <g key={`trend-${chart.key}-${series.sector}`}>
-                        {series.bandPolygon ? <polygon points={series.bandPolygon} fill="#94a3b81f" /> : null}
-                        <polyline
-                          fill="none"
-                          stroke={`url(#trend-risk-gradient-${chart.key})`}
-                          strokeWidth="3.2"
-                          strokeDasharray={series.dashPattern || undefined}
-                          points={series.polyline}
-                        />
-                        {series.points.map((point) => (
-                          <circle
-                            key={`trend-${chart.key}-${series.sector}-${point.timeMs}`}
-                            cx={point.x}
-                            cy={point.y}
-                            r={4}
-                            fill={riskGradientColorFromRatio((point.value - chart.min) / Math.max(chart.max - chart.min, 1))}
-                          />
-                        ))}
-                      </g>
+                    <polyline fill="none" stroke={card.strokeColor} strokeWidth="3.2" points={card.polyline} />
+                    {card.points.map((point) => (
+                      <circle
+                        key={`aggregate-trend-${card.topicId}-${point.timeMs}`}
+                        cx={point.x}
+                        cy={point.y}
+                        r={4}
+                        fill={card.strokeColor}
+                      />
                     ))}
                     <text
-                      x={(chart.padding.left + chart.width - chart.padding.right) / 2}
-                      y={chart.height - 6}
+                      x={(aggregateTrendScoreModel.padding.left + aggregateTrendScoreModel.width - aggregateTrendScoreModel.padding.right) / 2}
+                      y={aggregateTrendScoreModel.height - 6}
                       textAnchor="middle"
                       className="fill-[#4b6674] text-[12px] font-semibold"
                     >
@@ -2199,12 +2838,12 @@ export function ClientDiagnosticResultsSection({
                     </text>
                     <text
                       x={11}
-                      y={chart.padding.top + (chart.xAxisY - chart.padding.top) / 2}
+                      y={aggregateTrendScoreModel.padding.top + (aggregateTrendScoreModel.xAxisY - aggregateTrendScoreModel.padding.top) / 2}
                       textAnchor="middle"
                       className="fill-[#4b6674] text-[12px] font-semibold"
-                      transform={`rotate(-90 11 ${chart.padding.top + (chart.xAxisY - chart.padding.top) / 2})`}
+                      transform={`rotate(-90 11 ${aggregateTrendScoreModel.padding.top + (aggregateTrendScoreModel.xAxisY - aggregateTrendScoreModel.padding.top) / 2})`}
                     >
-                      {chart.yLabel}
+                      Score
                     </text>
                   </svg>
                 </div>
@@ -2216,83 +2855,33 @@ export function ClientDiagnosticResultsSection({
         )}
       </section>
 
-      <section className="grid gap-4 xl:grid-cols-2">
-        <article className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
-          <h3 className="text-lg font-semibold text-[#141d24]">Top Sectors by Risk Index</h3>
-          <div className="mt-3 space-y-2">
-            {sectorRanking.map((sector) => (
-              <div key={sector.sector} className="rounded-xl border border-[#e3edf3] bg-white p-3">
-                <div className="flex items-center justify-between">
-                  <p className="font-semibold text-[#1e3947]">{sector.sector}</p>
-                  <span className={`rounded-full border px-2 py-0.5 text-xs font-semibold ${metricTone(sector.category)}`}>
-                    {normalizeMetricLabel(sector.category)}
-                  </span>
-                </div>
-                <p className="mt-1 text-xs text-[#56707e]">
-                  Index {sector.sectorRiskIndex !== null ? sector.sectorRiskIndex.toFixed(2) : "-"} | Responses{" "}
-                  {sector.responses}
-                </p>
-              </div>
-            ))}
-          </div>
-        </article>
-
-        <article className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
-          <h3 className="text-lg font-semibold text-[#141d24]">Risk Factors (core metrics)</h3>
-          <div className="mt-3 max-h-[320px] overflow-auto rounded-xl border border-[#dce8ee] bg-white">
-            <table className="min-w-full text-xs">
-              <thead>
-                <tr className="border-b bg-[#f5fafc]">
-                  <th className="px-2 py-2 text-left">Risk</th>
-                  <th className="px-2 py-2 text-left">Mean</th>
-                  <th className="px-2 py-2 text-left">Prevalence</th>
-                  <th className="px-2 py-2 text-left">Severity idx</th>
-                  <th className="px-2 py-2 text-left">Prob.</th>
-                  <th className="px-2 py-2 text-left">Sev.</th>
-                  <th className="px-2 py-2 text-left">Score</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(metrics?.riskFactors ?? []).map((risk) => (
-                  <tr key={`${risk.topicId}-${risk.riskFactor}`} className="border-b">
-                    <td className="px-2 py-2">
-                      {topicCode(risk.topicId)} {risk.riskFactor}
-                    </td>
-                    <td className="px-2 py-2">{risk.meanExposure !== null ? risk.meanExposure.toFixed(2) : "-"}</td>
-                    <td className="px-2 py-2">{fmtPercent(risk.prevalence)}</td>
-                    <td className="px-2 py-2">{risk.severityIndex !== null ? risk.severityIndex.toFixed(2) : "-"}</td>
-                    <td className="px-2 py-2">{risk.probability !== null ? risk.probability.toFixed(2) : "-"}</td>
-                    <td className="px-2 py-2">{risk.severity}</td>
-                    <td className="px-2 py-2">{risk.riskScore !== null ? risk.riskScore.toFixed(2) : "-"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </article>
-      </section>
-
       <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
         <h3 className="text-lg font-semibold text-[#141d24]">Response Dataset Preview</h3>
         <p className="mt-1 text-xs text-[#55707f]">
           rows: {datasetRows.length} (sample up to 120 rows, anonymized employee id)
         </p>
         <div className="mt-3 flex flex-wrap items-center gap-3 text-xs">
-          <label className="flex items-center gap-2 text-[#466271]">
-            <span>Filter sector</span>
-            <select
-              value={datasetSectorFilter}
-              onChange={(event) => setDatasetSectorFilter(event.target.value)}
-              className="rounded-lg border border-[#c9dbe6] bg-white px-2 py-1 text-xs text-[#1f3a48]"
-            >
-              <option value="all">All sectors</option>
-              {datasetSectorOptions.map((sector) => (
-                <option key={`filter-${sector}`} value={sector}>
-                  {sector}
-                </option>
-              ))}
-            </select>
-          </label>
+          {!isPerSectorResults ? (
+            <label className="flex items-center gap-2 text-[#466271]">
+              <span>Filter sector</span>
+              <select
+                value={datasetSectorFilter}
+                onChange={(event) => setDatasetSectorFilter(event.target.value)}
+                className="rounded-lg border border-[#c9dbe6] bg-white px-2 py-1 text-xs text-[#1f3a48]"
+              >
+                <option value="all">All sectors</option>
+                {datasetSectorOptions.map((sector) => (
+                  <option key={`filter-${sector}`} value={sector}>
+                    {sector}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : (
+            <span className="rounded-full border border-[#d3e2eb] bg-white px-2 py-1 text-[#4c6675]">
+              Sector: {activeDatasetSectorFilter}
+            </span>
+          )}
           <span className="rounded-full border border-[#d3e2eb] bg-white px-2 py-1 text-[#4c6675]">
             Sort: {datasetSortKey} ({datasetSortDirection})
           </span>
@@ -2342,6 +2931,128 @@ export function ClientDiagnosticResultsSection({
           </table>
         </div>
       </section>
+
+      {trendDetailsModal ? (
+        <div
+          className="fixed inset-0 z-[55] flex items-center justify-center bg-black/35 p-4"
+          onClick={() => setTrendDetailsModal(null)}
+        >
+          <div
+            className="w-full max-w-4xl rounded-2xl border border-[#d8e5ec] bg-white p-5 shadow-xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h4 className="text-xl font-semibold text-[#163447]">{trendDetailsModal.title}</h4>
+                <p className="mt-1 text-sm text-[#3f5f6f]">{trendDetailsModal.subtitle}</p>
+              </div>
+              <button
+                type="button"
+                className="rounded-full border border-[#bfd4df] px-3 py-1 text-xs font-semibold text-[#20495d]"
+                onClick={() => setTrendDetailsModal(null)}
+              >
+                Close
+              </button>
+            </div>
+            {trendDetailsModalChartModel ? (
+              <div className="mt-4 max-h-[70vh] overflow-auto pr-1">
+                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                  {trendDetailsModalChartModel.charts.map((chart) => (
+                    <article key={`trend-details-chart-${chart.key}`} className="rounded-xl border border-[#dce8ee] bg-white p-2.5">
+                      <p className="text-sm font-semibold text-[#274353]">{chart.title}</p>
+                      <div className="mt-2 overflow-x-auto">
+                        <svg viewBox={`0 0 ${chart.width} ${chart.height}`} className="h-[220px] w-full min-w-[360px]">
+                          {chart.yTicks.map((tick) => (
+                            <g key={`trend-details-${chart.key}-y-${tick.value}`}>
+                              <line
+                                x1={chart.padding.left}
+                                y1={tick.y}
+                                x2={chart.width - chart.padding.right}
+                                y2={tick.y}
+                                stroke="#dce7ee"
+                                strokeDasharray="4 6"
+                              />
+                              <text
+                                x={chart.padding.left - 6}
+                                y={tick.y + 4}
+                                textAnchor="end"
+                                className="fill-[#5d7482] text-[11px]"
+                              >
+                                {tick.label}
+                              </text>
+                            </g>
+                          ))}
+                          {chart.xTicks.map((tick) => (
+                            <g key={`trend-details-${chart.key}-x-${tick.timeMs}`}>
+                              <line
+                                x1={tick.x}
+                                y1={chart.padding.top}
+                                x2={tick.x}
+                                y2={chart.xAxisY}
+                                stroke="#eef4f8"
+                                strokeDasharray="2 6"
+                              />
+                              <text x={tick.x} y={chart.height - 24} textAnchor="middle" className="fill-[#415564] text-[11px]">
+                                {tick.label}
+                              </text>
+                            </g>
+                          ))}
+                          <line
+                            x1={chart.padding.left}
+                            y1={chart.xAxisY}
+                            x2={chart.width - chart.padding.right}
+                            y2={chart.xAxisY}
+                            stroke="#93a9b5"
+                            strokeWidth="1.2"
+                          />
+                          <line
+                            x1={chart.yAxisX}
+                            y1={chart.padding.top}
+                            x2={chart.yAxisX}
+                            y2={chart.xAxisY}
+                            stroke="#93a9b5"
+                            strokeWidth="1.2"
+                          />
+                          {chart.bandPolygon ? <polygon points={chart.bandPolygon} fill="#94a3b81f" /> : null}
+                          <polyline fill="none" stroke={chart.strokeColor} strokeWidth="3.2" points={chart.polyline} />
+                          {chart.points.map((point) => (
+                            <circle
+                              key={`trend-details-${chart.key}-${point.timeMs}`}
+                              cx={point.x}
+                              cy={point.y}
+                              r={4}
+                              fill={chart.strokeColor}
+                            />
+                          ))}
+                          <text
+                            x={(chart.padding.left + chart.width - chart.padding.right) / 2}
+                            y={chart.height - 6}
+                            textAnchor="middle"
+                            className="fill-[#4b6674] text-[12px] font-semibold"
+                          >
+                            Time
+                          </text>
+                          <text
+                            x={11}
+                            y={chart.padding.top + (chart.xAxisY - chart.padding.top) / 2}
+                            textAnchor="middle"
+                            className="fill-[#4b6674] text-[12px] font-semibold"
+                            transform={`rotate(-90 11 ${chart.padding.top + (chart.xAxisY - chart.padding.top) / 2})`}
+                          >
+                            {chart.yLabel}
+                          </text>
+                        </svg>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <p className="mt-4 text-sm text-[#5b7482]">No trend data available for modal charts.</p>
+            )}
+          </div>
+        </div>
+      ) : null}
 
       {activePlotInfoContent ? (
         <div

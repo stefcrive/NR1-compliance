@@ -7,6 +7,30 @@ const QUESTIONS_PER_PAGE = 5;
 const AUTO_SAVE_DEBOUNCE_MS = 450;
 const DRAFT_STORAGE_PREFIX = "nr1:drps:draft";
 
+const TOPIC_LABELS_PT: Record<number, string> = {
+  1: "Assedio de qualquer natureza",
+  2: "Falta de suporte e apoio",
+  3: "Ma gestao de mudancas",
+  4: "Baixa clareza de papel",
+  5: "Baixas recompensas e reconhecimento",
+  6: "Baixo controle e falta de autonomia",
+  7: "Baixa justica organizacional",
+  8: "Eventos violentos e traumaticos",
+  9: "Baixa demanda",
+  10: "Excesso de demandas",
+  11: "Maus relacionamentos",
+  12: "Dificil comunicacao",
+  13: "Trabalho remoto e isolado",
+};
+
+const ANSWER_GUIDE_BY_VALUE: Record<number, string> = {
+  1: "Nunca",
+  2: "Muito raramente",
+  3: "As vezes",
+  4: "Frequentemente",
+  5: "Muito frequentemente",
+};
+
 type SessionPayload = {
   surveyId: string;
   slug: string;
@@ -92,6 +116,14 @@ function buildDraftStorageKey(params: {
       ? `sector:${params.lockedSectorId ?? "unknown"}`
       : `general:${params.sectorToken?.trim() || "open"}`;
   return `${DRAFT_STORAGE_PREFIX}:${params.surveyId}:${linkIdentity}:${params.sessionSid}`;
+}
+
+function topicLabel(topicId: number): string {
+  return TOPIC_LABELS_PT[topicId] ?? `Topico ${topicId}`;
+}
+
+function topicCode(topicId: number): string {
+  return `T${String(topicId).padStart(2, "0")}`;
 }
 
 export function PublicSurveyForm({
@@ -339,7 +371,22 @@ export function PublicSurveyForm({
     };
   }, [answers, draftStorageKey, groups, hydratedSessionSid, pageIndex, session, submitted]);
 
-  const currentQuestions = questionPages[pageIndex] ?? [];
+  const currentQuestions = useMemo(() => questionPages[pageIndex] ?? [], [pageIndex, questionPages]);
+  const currentQuestionsByTopic = useMemo(() => {
+    const groups = new Map<number, SessionPayload["questions"]>();
+    for (const question of currentQuestions) {
+      const list = groups.get(question.topicId) ?? [];
+      list.push(question);
+      groups.set(question.topicId, list);
+    }
+
+    return Array.from(groups.entries())
+      .sort((left, right) => left[0] - right[0])
+      .map(([topicId, questions]) => ({
+        topicId,
+        questions: [...questions].sort((left, right) => left.position - right.position),
+      }));
+  }, [currentQuestions]);
   const isLastPage = pageIndex >= questionPages.length - 1;
   const pageRequiredCount = currentQuestions.filter((question) => question.required).length;
   const pageAnsweredRequired = currentQuestions.filter(
@@ -522,29 +569,66 @@ export function PublicSurveyForm({
       )}
 
       <section className="space-y-4">
-        {currentQuestions.map((question) => (
-          <article key={question.id} className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
-            <p className="text-sm font-semibold text-[#141d24]">
-              {question.position}. {question.prompt}
-            </p>
-            <div className="mt-3 flex flex-wrap gap-3">
-              {likertValues.map((value) => (
-                <label
-                  key={`${question.id}-${value}`}
-                  className="flex items-center gap-2 rounded-xl border border-[#c8c8c8] bg-white px-3 py-2 text-sm text-[#1f2b34]"
-                >
-                  <input
-                    type="radio"
-                    name={question.id}
-                    value={value}
-                    checked={answers[question.id] === value}
-                    onChange={() => setAnswer(question.id, value)}
-                  />
-                  {value}
-                </label>
-              ))}
-            </div>
-          </article>
+        {currentQuestionsByTopic.map((topicGroup) => (
+          <section
+            key={`topic-${topicGroup.topicId}`}
+            className="space-y-3 rounded-[26px] border border-[#d6dfe4] bg-[#f6f9fb] p-4 shadow-sm"
+          >
+            <header className="flex flex-wrap items-center gap-2">
+              <span className="rounded-full border border-[#c5d8e2] bg-white px-3 py-1 text-xs font-semibold text-[#244656]">
+                {topicCode(topicGroup.topicId)}
+              </span>
+              <h2 className="text-xl font-bold text-[#17323f]">{topicLabel(topicGroup.topicId)}</h2>
+            </header>
+
+            {topicGroup.questions.map((question) => (
+              <article
+                key={question.id}
+                className="rounded-[22px] border border-[#d3d9de] bg-white p-5 shadow-[0_1px_0_rgba(0,0,0,0.02)]"
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="rounded-full border border-[#c3d4dd] bg-[#f4f8fa] px-2.5 py-1 text-xs font-semibold text-[#2d4c5b]">
+                    Pergunta {question.position}
+                  </span>
+                  <span className="text-xs font-medium text-[#56707e]">{question.code}</span>
+                </div>
+
+                <p className="mt-3 text-lg font-semibold leading-relaxed text-[#0d1c26]">{question.prompt}</p>
+
+                <div className="mt-4 flex flex-nowrap gap-2 overflow-x-auto pb-1">
+                  {likertValues.map((value) => {
+                    const selected = answers[question.id] === value;
+                    const answerGuide = ANSWER_GUIDE_BY_VALUE[value];
+                    return (
+                      <label
+                        key={`${question.id}-${value}`}
+                        className={`flex min-w-[150px] shrink-0 cursor-pointer items-start gap-2 rounded-xl border px-3 py-2 text-sm transition-colors ${
+                          selected
+                            ? "border-[#1e5266] bg-[#eaf4f8] text-[#103243]"
+                            : "border-[#c8cfd4] bg-white text-[#1f2b34]"
+                        }`}
+                      >
+                        <input
+                          type="radio"
+                          name={question.id}
+                          value={value}
+                          checked={selected}
+                          onChange={() => setAnswer(question.id, value)}
+                          className="mt-0.5"
+                        />
+                        <span className="space-y-0.5">
+                          <span className="block font-semibold">{value}</span>
+                          <span className="block text-xs text-[#51636d]">
+                            {answerGuide ?? `Escala ${value}`}
+                          </span>
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </article>
+            ))}
+          </section>
         ))}
       </section>
 

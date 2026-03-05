@@ -1,4 +1,4 @@
-import { ClientDiagnosticResultsSection } from "@/components/client-portal-sections";
+import { ClientDiagnosticAggregateResultsSection } from "@/components/client-portal-sections";
 import { getSupabaseAdminClient } from "@/lib/supabase-admin";
 
 type ClientPortalLookup = {
@@ -11,7 +11,7 @@ export default async function ManagerClientDiagnosticResultsPage({
   searchParams,
 }: {
   params: Promise<{ clientId: string; campaignId: string }>;
-  searchParams?: Promise<{ from?: string }>;
+  searchParams?: Promise<{ from?: string; sector?: string }>;
 }) {
   const { clientId, campaignId } = await params;
   const resolvedSearchParams = (await searchParams) ?? {};
@@ -28,12 +28,13 @@ export default async function ManagerClientDiagnosticResultsPage({
   }
 
   return (
-    <ClientDiagnosticResultsSection
+    <ClientDiagnosticAggregateResultsSection
       clientSlug={data.portal_slug}
       campaignId={campaignId}
       managerClientId={clientId}
       managerClientName={data.company_name}
       managerFromHome={resolvedSearchParams.from === "home"}
+      sectorFilter={resolvedSearchParams.sector}
     />
   );
 }

@@ -20,6 +20,7 @@ type SurveyRow = {
   name: string;
   starts_at: string | null;
   closes_at: string | null;
+  created_at: string | null;
 };
 
 type ClientRow = {
@@ -186,7 +187,7 @@ async function loadSurveyRows() {
   const supabase = getSupabaseAdminClient();
   const surveysResult = await supabase
     .from("surveys")
-    .select("id,client_id,name,starts_at,closes_at")
+    .select("id,client_id,name,starts_at,closes_at,created_at")
     .returns<SurveyRow[]>();
 
   if (

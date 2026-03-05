@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 
 import { ManagerHistory } from "@/components/manager-history";
 
@@ -115,7 +115,9 @@ type PortalSnapshot = {
 
 type SectorLink = {
   id: string;
+  key?: string;
   name: string;
+  riskParameter?: number;
   accessLink: string;
   isActive: boolean;
   submissionCount: number;
@@ -356,9 +358,55 @@ function createSectorProfileForm(): SectorProfileForm {
   };
 }
 
+function sumSectorHeadcountFromForms(sectors: SectorProfileForm[]) {
+  return sectors.reduce(
+    (totals, sector) => {
+      const remote = Math.max(0, sector.remoteWorkers);
+      const onsite = Math.max(0, sector.onsiteWorkers);
+      const hybrid = Math.max(0, sector.hybridWorkers);
+      return {
+        totalEmployees: totals.totalEmployees + remote + onsite + hybrid,
+        remoteEmployees: totals.remoteEmployees + remote,
+        onsiteEmployees: totals.onsiteEmployees + onsite,
+        hybridEmployees: totals.hybridEmployees + hybrid,
+      };
+    },
+    {
+      totalEmployees: 0,
+      remoteEmployees: 0,
+      onsiteEmployees: 0,
+      hybridEmployees: 0,
+    },
+  );
+}
+
 function csvEscape(value: string | number | null): string {
   if (value === null) return "";
   return `"${String(value).replace(/"/g, '""')}"`;
+}
+
+async function copyTextToClipboard(value: string): Promise<boolean> {
+  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(value);
+      return true;
+    } catch {
+      // Fallback below.
+    }
+  }
+
+  if (typeof document === "undefined") return false;
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.setAttribute("readonly", "true");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  const copied = document.execCommand("copy");
+  document.body.removeChild(textarea);
+  return copied;
 }
 
 function EditIcon() {
@@ -390,8 +438,18 @@ export function ManagerClientFicha({
   const [linksPayload, setLinksPayload] = useState<SectorPayload | null>(null);
   const [isLinksModalOpen, setIsLinksModalOpen] = useState(false);
   const [copiedSectorId, setCopiedSectorId] = useState<string | null>(null);
+  const [expandedCampaignId, setExpandedCampaignId] = useState<string | null>(null);
+  const [expandedCampaignSectorsById, setExpandedCampaignSectorsById] = useState<
+    Record<string, SectorLink[]>
+  >({});
+  const [loadingExpandedCampaignId, setLoadingExpandedCampaignId] = useState<string | null>(null);
   const [accessInviteCopied, setAccessInviteCopied] = useState(false);
   const [isLoadingLinksFor, setIsLoadingLinksFor] = useState<string | null>(null);
+  const [openCampaignActionsFor, setOpenCampaignActionsFor] = useState<string | null>(null);
+  const [openCampaignSectorActionsFor, setOpenCampaignSectorActionsFor] = useState<string | null>(
+    null,
+  );
+  const [drpsActionNotice, setDrpsActionNotice] = useState("");
   const [openAssignedProgramActionsFor, setOpenAssignedProgramActionsFor] = useState<string | null>(
     null,
   );
@@ -414,6 +472,9 @@ export function ManagerClientFicha({
     contractEndDate: "",
   });
   const [sectorForms, setSectorForms] = useState<SectorProfileForm[]>([]);
+  const [isSectorModalOpen, setIsSectorModalOpen] = useState(false);
+  const [sectorModalMode, setSectorModalMode] = useState<"add" | "edit">("add");
+  const [sectorModalForm, setSectorModalForm] = useState<SectorProfileForm>(createSectorProfileForm());
   const [availablePrograms, setAvailablePrograms] = useState<ContinuousProgramOption[]>([]);
   const [assignedPrograms, setAssignedPrograms] = useState<AssignedContinuousProgram[]>([]);
   const [continuousError, setContinuousError] = useState("");
@@ -436,26 +497,28 @@ export function ManagerClientFicha({
   });
 
   const selectedCampaign = useMemo(
-    () => client?.campaigns.find((campaign) => campaign.id === selectedCampaignId) ?? null,
+    () => client?.campaigns?.find((campaign) => campaign.id === selectedCampaignId) ?? null,
     [client, selectedCampaignId],
   );
   const openCampaigns = useMemo(
-    () => client?.campaigns.filter((campaign) => campaign.status === "live") ?? [],
+    () => client?.campaigns?.filter((campaign) => campaign.status === "live") ?? [],
     [client],
   );
   const resultsCampaign = useMemo(() => {
-    if (!client) return null;
+    const campaigns = client?.campaigns ?? [];
     if (selectedCampaign && (selectedCampaign.status === "live" || selectedCampaign.status === "closed")) {
       return selectedCampaign;
     }
     return (
-      client.campaigns.find((campaign) => campaign.status === "live") ??
-      client.campaigns.find((campaign) => campaign.status === "closed") ??
+      campaigns.find((campaign) => campaign.status === "live") ??
+      campaigns.find((campaign) => campaign.status === "closed") ??
       null
     );
   }, [client, selectedCampaign]);
   const linksActionCampaign =
     selectedCampaign?.status === "live" ? selectedCampaign : openCampaigns[0] ?? null;
+  const isDrpsActionsMenuOpen =
+    openCampaignActionsFor !== null || openCampaignSectorActionsFor !== null;
 
   const assignedProgramIds = useMemo(
     () => new Set(assignedPrograms.map((assignment) => assignment.programId)),
@@ -482,6 +545,10 @@ export function ManagerClientFicha({
       return sameMonthsSelection(base, draft) ? count : count + 1;
     }, 0);
   }, [annualPlanBaseByAssignment, annualPlanDraftByAssignment, assignedPrograms]);
+  const companyHeadcountFromSectors = useMemo(
+    () => sumSectorHeadcountFromForms(sectorForms),
+    [sectorForms],
+  );
 
   const loadContinuousPrograms = useCallback(async (targetClientId: string) => {
     const response = await fetch(`/api/admin/clients/${targetClientId}/programs`, { cache: "no-store" });
@@ -611,6 +678,10 @@ export function ManagerClientFicha({
   useEffect(() => {
     if (activeTab === "assigned-drps") return;
     setIsLinksModalOpen(false);
+    setExpandedCampaignId(null);
+    setOpenCampaignActionsFor(null);
+    setOpenCampaignSectorActionsFor(null);
+    setDrpsActionNotice("");
   }, [activeTab]);
 
   useEffect(() => {
@@ -631,17 +702,23 @@ export function ManagerClientFicha({
     setIsBusy(false);
   }
 
+  async function fetchCampaignSectorPayload(campaignId: string): Promise<SectorPayload> {
+    const response = await fetch(`/api/admin/campaigns/${campaignId}/sectors`, { cache: "no-store" });
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new Error(payload.error ?? "Falha ao carregar links.");
+    }
+    return (await response.json()) as SectorPayload;
+  }
+
   async function loadQuestionnaireLinks(campaign: Diagnostic) {
     setIsLoadingLinksFor(campaign.id);
     setLinksPayload(null);
     setIsLinksModalOpen(false);
+    setDrpsActionNotice("");
     try {
-      const response = await fetch(`/api/admin/campaigns/${campaign.id}/sectors`, { cache: "no-store" });
-      if (!response.ok) {
-        setError("Falha ao carregar links.");
-        return;
-      }
-      setLinksPayload((await response.json()) as SectorPayload);
+      const payload = await fetchCampaignSectorPayload(campaign.id);
+      setLinksPayload(payload);
       setCopiedSectorId(null);
       setIsLinksModalOpen(true);
     } catch {
@@ -651,23 +728,295 @@ export function ManagerClientFicha({
     }
   }
 
+  async function toggleCampaignPackage(campaignId: string) {
+    if (expandedCampaignId === campaignId) {
+      setExpandedCampaignId(null);
+      return;
+    }
+
+    setExpandedCampaignId(campaignId);
+    if (expandedCampaignSectorsById[campaignId]) return;
+
+    setLoadingExpandedCampaignId(campaignId);
+    try {
+      const payload = await fetchCampaignSectorPayload(campaignId);
+      setExpandedCampaignSectorsById((previous) => ({
+        ...previous,
+        [campaignId]: payload.sectors ?? [],
+      }));
+    } catch {
+      setError("Falha ao carregar setores do pacote DRPS.");
+    } finally {
+      setLoadingExpandedCampaignId((previous) => (previous === campaignId ? null : previous));
+    }
+  }
+
+  async function refreshExpandedCampaignSectors(campaignId: string) {
+    const payload = await fetchCampaignSectorPayload(campaignId);
+    setExpandedCampaignSectorsById((previous) => ({
+      ...previous,
+      [campaignId]: payload.sectors ?? [],
+    }));
+  }
+
+  function openCampaignResults(campaign: Diagnostic, sectorName?: string) {
+    if (!client) return;
+    const search = sectorName ? `?sector=${encodeURIComponent(sectorName)}` : "";
+    router.push(`/manager/clients/${client.id}/diagnostic/${campaign.id}${search}`);
+  }
+
+  async function ensureSectorPresentInCompanyRecord(sectorName: string): Promise<ClientSector | null> {
+    if (!client) return null;
+    const normalizedTarget = sectorName.trim().toLowerCase();
+    const existing = client.sectors.find((sector) => sector.name.trim().toLowerCase() === normalizedTarget);
+    if (existing) return existing;
+
+    const shouldCreate = window.confirm(
+      `O setor "${sectorName}" nao existe no cadastro da empresa. Deseja adicionar este setor no registro da empresa agora?`,
+    );
+    if (!shouldCreate) return null;
+
+    const sectorsPayload = [
+      ...client.sectors.map((sector) => ({
+        name: sector.name,
+        isActive: sector.isActive ?? true,
+        remoteWorkers: sector.remoteWorkers,
+        onsiteWorkers: sector.onsiteWorkers,
+        hybridWorkers: sector.hybridWorkers,
+        functions: sector.functions ?? "",
+        workersInRole: sector.workersInRole,
+        shifts: sector.shifts ?? "",
+        vulnerableGroups: sector.vulnerableGroups ?? "",
+        mainContactName: sector.mainContactName ?? "",
+        mainContactEmail: sector.mainContactEmail ?? "",
+        mainContactPhone: sector.mainContactPhone ?? "",
+        possibleMentalHealthHarms: sector.possibleMentalHealthHarms ?? "",
+        existingControlMeasures: sector.existingControlMeasures ?? "",
+        elaborationDate: sector.elaborationDate ?? "",
+        riskParameter: sector.riskParameter,
+      })),
+      {
+        name: sectorName,
+        isActive: true,
+        remoteWorkers: 0,
+        onsiteWorkers: 0,
+        hybridWorkers: 0,
+        functions: "",
+        workersInRole: 0,
+        shifts: "",
+        vulnerableGroups: "",
+        mainContactName: "",
+        mainContactEmail: "",
+        mainContactPhone: "",
+        possibleMentalHealthHarms: "",
+        existingControlMeasures: "",
+        elaborationDate: "",
+        riskParameter: 1,
+      },
+    ];
+
+    const response = await fetch(`/api/admin/clients/${client.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sectors: sectorsPayload }),
+    });
+    const payload = (await response.json().catch(() => ({}))) as {
+      error?: string;
+      warning?: string;
+      client?: ClientDetail;
+    };
+
+    if (!response.ok || !payload.client) {
+      setError(payload.error ?? "Nao foi possivel adicionar o setor ao cadastro da empresa.");
+      return null;
+    }
+
+    const matchedSector =
+      payload.client.sectors.find((sector) => sector.name.trim().toLowerCase() === normalizedTarget) ?? null;
+    await loadBase();
+    if (payload.warning) {
+      setError(payload.warning);
+    } else {
+      setError("");
+    }
+    return matchedSector;
+  }
+
+  async function addSectorToCampaign(campaign: Diagnostic) {
+    const typedName = window.prompt("Nome do setor para adicionar ao pacote:", "");
+    const sectorName = typedName?.trim() ?? "";
+    if (!sectorName) return;
+
+    const companySector = await ensureSectorPresentInCompanyRecord(sectorName);
+    if (!companySector) {
+      setError("Setor nao adicionado ao pacote DRPS.");
+      return;
+    }
+    const response = await fetch(`/api/admin/campaigns/${campaign.id}/sectors`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: sectorName,
+        riskParameter: companySector.riskParameter ?? 1,
+        isActive: true,
+      }),
+    });
+    const payload = (await response.json().catch(() => ({}))) as { error?: string };
+    if (!response.ok && response.status !== 207) {
+      setError(payload.error ?? "Falha ao adicionar setor ao pacote DRPS.");
+      return;
+    }
+
+    await refreshExpandedCampaignSectors(campaign.id);
+    setExpandedCampaignId(campaign.id);
+  }
+
+  async function toggleSectorSubitemActive(campaign: Diagnostic, sector: SectorLink) {
+    setError("");
+    setDrpsActionNotice("");
+    try {
+      const response = await fetch(`/api/admin/campaigns/${campaign.id}/sectors`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: sector.name,
+          riskParameter: sector.riskParameter ?? 1,
+          isActive: !sector.isActive,
+        }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as { error?: string };
+      if (!response.ok && response.status !== 207) {
+        setError(payload.error ?? "Falha ao atualizar status do sub-questionario.");
+        return;
+      }
+      await refreshExpandedCampaignSectors(campaign.id);
+      setDrpsActionNotice(
+        !sector.isActive
+          ? `Sub-questionario ativado: ${sector.name}.`
+          : `Sub-questionario desativado: ${sector.name}.`,
+      );
+    } catch {
+      setError("Falha ao atualizar status do sub-questionario.");
+    }
+  }
+
+  async function deleteCampaign(campaign: Diagnostic) {
+    if (!window.confirm(`Excluir o pacote DRPS \"${campaign.name}\"?`)) return;
+    setError("");
+    setDrpsActionNotice("");
+    const response = await fetch(`/api/admin/campaigns/${campaign.id}`, { method: "DELETE" });
+    const payload = (await response.json().catch(() => ({}))) as { error?: string; details?: string };
+    if (!response.ok) {
+      setError(payload.details ?? payload.error ?? "Falha ao excluir campanha DRPS.");
+      return;
+    }
+    setExpandedCampaignId((previous) => (previous === campaign.id ? null : previous));
+    setOpenCampaignActionsFor((previous) => (previous === campaign.id ? null : previous));
+    await loadBase();
+  }
+
+  async function updateCampaignLifecycle(
+    campaign: Diagnostic,
+    nextStatus: "live" | "draft" | "archived",
+  ) {
+    setError("");
+    setDrpsActionNotice("");
+    const response = await fetch(`/api/admin/campaigns/${campaign.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: nextStatus }),
+    });
+    const payload = (await response.json().catch(() => ({}))) as { error?: string; details?: string };
+    if (!response.ok) {
+      setError(payload.details ?? payload.error ?? "Falha ao atualizar status do pacote DRPS.");
+      return;
+    }
+    await loadBase();
+    setDrpsActionNotice(
+      nextStatus === "live"
+        ? `Pacote ativado: ${campaign.name}.`
+        : nextStatus === "draft"
+          ? `Pacote pausado: ${campaign.name}.`
+          : `Pacote arquivado: ${campaign.name}.`,
+    );
+  }
+
+  async function deleteSectorSubitem(campaign: Diagnostic, sector: SectorLink) {
+    if (!window.confirm(`Remover o sub-questionario do setor \"${sector.name}\"?`)) return;
+    setError("");
+    setDrpsActionNotice("");
+    try {
+      const response = await fetch(`/api/admin/campaigns/${campaign.id}/sectors`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: sector.name,
+          riskParameter: sector.riskParameter ?? 1,
+          isActive: false,
+        }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as { error?: string };
+      if (!response.ok && response.status !== 207) {
+        setError(payload.error ?? "Falha ao remover sub-questionario.");
+        return;
+      }
+      await refreshExpandedCampaignSectors(campaign.id);
+      setError("");
+      setDrpsActionNotice(`Sub-questionario removido (inativado): ${sector.name}.`);
+    } catch {
+      setError("Falha ao remover sub-questionario.");
+    }
+  }
+
+  function openSingleSectorLinkModal(campaign: Diagnostic, sector: SectorLink) {
+    setError("");
+    setDrpsActionNotice("");
+    setCopiedSectorId(null);
+    setLinksPayload({
+      campaign: {
+        id: campaign.id,
+        name: campaign.name,
+        slug: campaign.public_slug,
+      },
+      sectors: [sector],
+    });
+    setIsLinksModalOpen(true);
+  }
+
   async function copySectorLink(sector: SectorLink) {
     if (!sector.isActive) {
       return;
     }
-    await navigator.clipboard.writeText(sector.accessLink);
+    setDrpsActionNotice("");
+    const link = sector.accessLink?.trim();
+    if (!link) {
+      setError("Link do setor indisponivel.");
+      return;
+    }
+    const copied = await copyTextToClipboard(link);
+    if (!copied) {
+      window.prompt("Copie o link do setor:", link);
+    }
     setCopiedSectorId(sector.id);
+    setError("");
+    setDrpsActionNotice(`Link copiado para o setor ${sector.name}.`);
     window.setTimeout(() => setCopiedSectorId(null), 1200);
   }
 
   async function copyAllLinks() {
     if (!linksPayload) return;
+    setDrpsActionNotice("");
     const lines = linksPayload.sectors.filter((sector) => sector.isActive).map((sector) => `${sector.name}: ${sector.accessLink}`);
     if (lines.length === 0) {
       setError("Nenhum setor ativo para copiar.");
       return;
     }
-    await navigator.clipboard.writeText(lines.join("\n"));
+    const copied = await copyTextToClipboard(lines.join("\n"));
+    if (!copied) {
+      window.prompt("Copie os links dos setores:", lines.join("\n"));
+    }
+    setError("");
+    setDrpsActionNotice("Links dos setores copiados.");
   }
 
   async function copyAccessInvitationLink() {
@@ -683,8 +1032,36 @@ export function ManagerClientFicha({
     );
   }
 
-  function addSectorForm() {
-    setSectorForms((previous) => [...previous, createSectorProfileForm()]);
+  function updateSectorModalForm(patch: Partial<SectorProfileForm>) {
+    setSectorModalForm((previous) => ({ ...previous, ...patch }));
+  }
+
+  function openAddSectorModal() {
+    setSectorModalMode("add");
+    setSectorModalForm(createSectorProfileForm());
+    setIsSectorModalOpen(true);
+  }
+
+  function openEditSectorModal(id: string) {
+    const selected = sectorForms.find((sector) => sector.id === id);
+    if (!selected) return;
+    setSectorModalMode("edit");
+    setSectorModalForm({ ...selected });
+    setIsSectorModalOpen(true);
+  }
+
+  function saveSectorModal() {
+    if (sectorModalForm.name.trim().length < 2) {
+      setError("Nome do setor precisa ter pelo menos 2 caracteres.");
+      return;
+    }
+    setError("");
+    if (sectorModalMode === "add") {
+      setSectorForms((previous) => [...previous, { ...sectorModalForm }]);
+    } else {
+      updateSectorForm(sectorModalForm.id, { ...sectorModalForm });
+    }
+    setIsSectorModalOpen(false);
   }
 
   function removeSectorForm(id: string) {
@@ -704,12 +1081,6 @@ export function ManagerClientFicha({
       return;
     }
 
-    const totalEmployees = toNonNegativeInt(companyForm.totalEmployees, client.totalEmployees);
-    if (totalEmployees < 1) {
-      setError("Total de colaboradores precisa ser maior que zero.");
-      return;
-    }
-
     setIsSavingCompanyProfile(true);
     setError("");
 
@@ -718,10 +1089,10 @@ export function ManagerClientFicha({
       cnpj: companyForm.cnpj.trim(),
       status: companyForm.status,
       billingStatus: companyForm.billingStatus,
-      totalEmployees,
-      remoteEmployees: toNonNegativeInt(companyForm.remoteEmployees, client.remoteEmployees),
-      onsiteEmployees: toNonNegativeInt(companyForm.onsiteEmployees, client.onsiteEmployees),
-      hybridEmployees: toNonNegativeInt(companyForm.hybridEmployees, client.hybridEmployees),
+      totalEmployees: companyHeadcountFromSectors.totalEmployees,
+      remoteEmployees: companyHeadcountFromSectors.remoteEmployees,
+      onsiteEmployees: companyHeadcountFromSectors.onsiteEmployees,
+      hybridEmployees: companyHeadcountFromSectors.hybridEmployees,
       contactName: companyForm.contactName.trim(),
       contactEmail: companyForm.contactEmail.trim(),
       contactPhone: companyForm.contactPhone.trim(),
@@ -797,8 +1168,7 @@ export function ManagerClientFicha({
   }
 
   function focusResults(campaign: Diagnostic) {
-    if (!client) return;
-    router.push(`/manager/clients/${client.id}/diagnostic/${campaign.id}`);
+    openCampaignResults(campaign);
   }
 
   function openAssignedProgramDetails(assignment: AssignedContinuousProgram) {
@@ -1158,12 +1528,11 @@ export function ManagerClientFicha({
                   Total employees
                   <input
                     type="number"
-                    min={1}
+                    min={0}
                     className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
-                    value={companyForm.totalEmployees}
-                    onChange={(event) =>
-                      setCompanyForm((previous) => ({ ...previous, totalEmployees: event.target.value }))
-                    }
+                    value={companyHeadcountFromSectors.totalEmployees}
+                    readOnly
+                    disabled
                   />
                 </label>
                 <label className="text-xs text-[#4f6977]">
@@ -1172,10 +1541,9 @@ export function ManagerClientFicha({
                     type="number"
                     min={0}
                     className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
-                    value={companyForm.remoteEmployees}
-                    onChange={(event) =>
-                      setCompanyForm((previous) => ({ ...previous, remoteEmployees: event.target.value }))
-                    }
+                    value={companyHeadcountFromSectors.remoteEmployees}
+                    readOnly
+                    disabled
                   />
                 </label>
                 <label className="text-xs text-[#4f6977]">
@@ -1184,10 +1552,9 @@ export function ManagerClientFicha({
                     type="number"
                     min={0}
                     className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
-                    value={companyForm.onsiteEmployees}
-                    onChange={(event) =>
-                      setCompanyForm((previous) => ({ ...previous, onsiteEmployees: event.target.value }))
-                    }
+                    value={companyHeadcountFromSectors.onsiteEmployees}
+                    readOnly
+                    disabled
                   />
                 </label>
                 <label className="text-xs text-[#4f6977]">
@@ -1196,10 +1563,9 @@ export function ManagerClientFicha({
                     type="number"
                     min={0}
                     className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
-                    value={companyForm.hybridEmployees}
-                    onChange={(event) =>
-                      setCompanyForm((previous) => ({ ...previous, hybridEmployees: event.target.value }))
-                    }
+                    value={companyHeadcountFromSectors.hybridEmployees}
+                    readOnly
+                    disabled
                   />
                 </label>
                 <label className="text-xs text-[#4f6977]">
@@ -1260,217 +1626,59 @@ export function ManagerClientFicha({
                   <p className="text-sm font-semibold text-[#123447]">Setores e detalhes do levantamento</p>
                   <button
                     type="button"
-                    onClick={addSectorForm}
+                    onClick={openAddSectorModal}
                     className="rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
                   >
                     Add setor
                   </button>
                 </div>
-                <div className="mt-3 space-y-3">
+                <div className="mt-3 overflow-x-auto rounded-xl border border-[#d8e4ee] bg-white">
                   {sectorForms.length === 0 ? (
-                    <p className="text-xs text-[#5a7383]">Nenhum setor cadastrado.</p>
+                    <p className="px-3 py-3 text-xs text-[#5a7383]">Nenhum setor cadastrado.</p>
                   ) : (
-                    sectorForms.map((sector) => (
-                      <article key={sector.id} className="rounded-xl border border-[#d8e4ee] bg-white p-3">
-                        <div className="grid gap-3 md:grid-cols-3">
-                          <label className="text-xs text-[#4f6977] md:col-span-2">
-                            Setor
-                            <input
-                              className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
-                              value={sector.name}
-                              onChange={(event) => updateSectorForm(sector.id, { name: event.target.value })}
-                            />
-                          </label>
-                          <label className="text-xs text-[#4f6977]">
-                            Contact name
-                            <input
-                              className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
-                              value={sector.mainContactName}
-                              onChange={(event) =>
-                                updateSectorForm(sector.id, { mainContactName: event.target.value })
-                              }
-                            />
-                          </label>
-                          <label className="text-xs text-[#4f6977]">
-                            Status
-                            <select
-                              className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
-                              value={sector.isActive ? "active" : "inactive"}
-                              onChange={(event) =>
-                                updateSectorForm(sector.id, { isActive: event.target.value === "active" })
-                              }
-                            >
-                              <option value="active">Ativo</option>
-                              <option value="inactive">Inativo</option>
-                            </select>
-                          </label>
-                          <label className="text-xs text-[#4f6977]">
-                            Risk parameter
-                            <input
-                              type="number"
-                              min={0.5}
-                              max={2}
-                              step={0.01}
-                              className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
-                              value={sector.riskParameter}
-                              onChange={(event) =>
-                                updateSectorForm(sector.id, { riskParameter: event.target.value })
-                              }
-                            />
-                          </label>
-                          <label className="text-xs text-[#4f6977]">
-                            Shifts
-                            <input
-                              className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
-                              value={sector.shifts}
-                              onChange={(event) => updateSectorForm(sector.id, { shifts: event.target.value })}
-                            />
-                          </label>
-                          <label className="text-xs text-[#4f6977]">
-                            Remote workers in this sector
-                            <input
-                              type="number"
-                              min={0}
-                              className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
-                              value={sector.remoteWorkers}
-                              onChange={(event) =>
-                                updateSectorForm(sector.id, {
-                                  remoteWorkers: toNonNegativeInt(event.target.value, sector.remoteWorkers),
-                                })
-                              }
-                            />
-                          </label>
-                          <label className="text-xs text-[#4f6977]">
-                            On-site workers in this sector
-                            <input
-                              type="number"
-                              min={0}
-                              className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
-                              value={sector.onsiteWorkers}
-                              onChange={(event) =>
-                                updateSectorForm(sector.id, {
-                                  onsiteWorkers: toNonNegativeInt(event.target.value, sector.onsiteWorkers),
-                                })
-                              }
-                            />
-                          </label>
-                          <label className="text-xs text-[#4f6977]">
-                            Hybrid workers in this sector
-                            <input
-                              type="number"
-                              min={0}
-                              className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
-                              value={sector.hybridWorkers}
-                              onChange={(event) =>
-                                updateSectorForm(sector.id, {
-                                  hybridWorkers: toNonNegativeInt(event.target.value, sector.hybridWorkers),
-                                })
-                              }
-                            />
-                          </label>
-                          <label className="text-xs text-[#4f6977]">
-                            Workers in role
-                            <input
-                              type="number"
-                              min={0}
-                              className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
-                              value={sector.workersInRole}
-                              onChange={(event) =>
-                                updateSectorForm(sector.id, {
-                                  workersInRole: toNonNegativeInt(event.target.value, sector.workersInRole),
-                                })
-                              }
-                            />
-                          </label>
-                          <label className="text-xs text-[#4f6977]">
-                            Assessment date
-                            <input
-                              type="date"
-                              className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
-                              value={sector.elaborationDate}
-                              onChange={(event) =>
-                                updateSectorForm(sector.id, { elaborationDate: event.target.value })
-                              }
-                            />
-                            <span className="mt-1 block text-[11px] leading-4 text-[#5a7383]">
-                              Date this sector assessment was prepared.
-                            </span>
-                          </label>
-                          <label className="text-xs text-[#4f6977] md:col-span-2">
-                            Contact email
-                            <input
-                              type="email"
-                              className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
-                              value={sector.mainContactEmail}
-                              onChange={(event) =>
-                                updateSectorForm(sector.id, { mainContactEmail: event.target.value })
-                              }
-                            />
-                          </label>
-                          <label className="text-xs text-[#4f6977]">
-                            Contact phone
-                            <input
-                              className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
-                              value={sector.mainContactPhone}
-                              onChange={(event) =>
-                                updateSectorForm(sector.id, { mainContactPhone: event.target.value })
-                              }
-                            />
-                          </label>
-                          <div className="flex items-end justify-end">
-                            <button
-                              type="button"
-                              onClick={() => removeSectorForm(sector.id)}
-                              className="rounded-full border border-[#e9c0c0] px-3 py-1 text-xs font-semibold text-[#8f2a2a]"
-                            >
-                              Delete
-                            </button>
-                          </div>
-                          <label className="text-xs text-[#4f6977] md:col-span-3">
-                            Roles / functions
-                            <input
-                              className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
-                              value={sector.functions}
-                              onChange={(event) => updateSectorForm(sector.id, { functions: event.target.value })}
-                            />
-                          </label>
-                          <label className="text-xs text-[#4f6977] md:col-span-3">
-                            Vulnerable groups
-                            <textarea
-                              className="mt-1 min-h-20 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
-                              value={sector.vulnerableGroups}
-                              onChange={(event) =>
-                                updateSectorForm(sector.id, { vulnerableGroups: event.target.value })
-                              }
-                            />
-                          </label>
-                          <label className="text-xs text-[#4f6977] md:col-span-3">
-                            Stress, harassment, overload and other harms
-                            <textarea
-                              className="mt-1 min-h-20 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
-                              value={sector.possibleMentalHealthHarms}
-                              onChange={(event) =>
-                                updateSectorForm(sector.id, {
-                                  possibleMentalHealthHarms: event.target.value,
-                                })
-                              }
-                            />
-                          </label>
-                          <label className="text-xs text-[#4f6977] md:col-span-3">
-                            Existing control measures
-                            <textarea
-                              className="mt-1 min-h-20 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
-                              value={sector.existingControlMeasures}
-                              onChange={(event) =>
-                                updateSectorForm(sector.id, {
-                                  existingControlMeasures: event.target.value,
-                                })
-                              }
-                            />
-                          </label>
-                        </div>
-                      </article>
-                    ))
+                    <table className="min-w-full text-sm">
+                      <thead>
+                        <tr className="border-b bg-[#f8fbfd]">
+                          <th className="px-3 py-2 text-left text-xs font-semibold text-[#4f6977]">Setor</th>
+                          <th className="px-3 py-2 text-left text-xs font-semibold text-[#4f6977]">Status</th>
+                          <th className="px-3 py-2 text-left text-xs font-semibold text-[#4f6977]">Contato</th>
+                          <th className="px-3 py-2 text-left text-xs font-semibold text-[#4f6977]">Email</th>
+                          <th className="px-3 py-2 text-left text-xs font-semibold text-[#4f6977]">Telefone</th>
+                          <th className="px-3 py-2 text-left text-xs font-semibold text-[#4f6977]">Risco</th>
+                          <th className="px-3 py-2 text-left text-xs font-semibold text-[#4f6977]">Acoes</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {sectorForms.map((sector) => (
+                          <tr key={sector.id} className="border-b last:border-b-0">
+                            <td className="px-3 py-2">{sector.name || "-"}</td>
+                            <td className="px-3 py-2">{sector.isActive ? "Ativo" : "Inativo"}</td>
+                            <td className="px-3 py-2">{sector.mainContactName || "-"}</td>
+                            <td className="px-3 py-2">{sector.mainContactEmail || "-"}</td>
+                            <td className="px-3 py-2">{sector.mainContactPhone || "-"}</td>
+                            <td className="px-3 py-2">{toRiskParameter(sector.riskParameter, 1).toFixed(2)}x</td>
+                            <td className="px-3 py-2">
+                              <div className="flex items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => openEditSectorModal(sector.id)}
+                                  className="rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
+                                >
+                                  Edit
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => removeSectorForm(sector.id)}
+                                  className="rounded-full border border-[#e9c0c0] px-3 py-1 text-xs font-semibold text-[#8f2a2a]"
+                                >
+                                  Delete
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   )}
                 </div>
               </div>
@@ -1489,6 +1697,7 @@ export function ManagerClientFicha({
                   onClick={() => {
                     setCompanyForm(buildClientProfileForm(client));
                     setSectorForms(client.sectors.map(buildSectorProfileForm));
+                    setIsSectorModalOpen(false);
                     setIsEditingCompanyProfile(false);
                   }}
                   className="rounded-full border border-[#9ec8db] px-4 py-2 text-xs font-semibold text-[#0f5b73] disabled:opacity-50"
@@ -1602,7 +1811,11 @@ export function ManagerClientFicha({
               <button type="button" disabled={isBusy} onClick={() => void generateSeriesReports()} className="rounded-full border border-[#e4c898] px-4 py-2 text-sm font-semibold text-[#7a4b00] disabled:opacity-50">Gerar serie de relatorios</button>
             </div>
           </section>
-          <section className="h-auto max-h-none overflow-visible rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
+          <section
+            className={`h-auto max-h-none overflow-visible rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm ${
+              isDrpsActionsMenuOpen ? "pb-28" : ""
+            }`}
+          >
             <div className="flex flex-wrap items-center justify-between gap-3">
               <h3 className="text-lg font-semibold text-[#123447]">Diagnosticos DRPS atribuidos</h3>
               <div className="flex flex-wrap items-center gap-2">
@@ -1617,6 +1830,18 @@ export function ManagerClientFicha({
                 >
                   Ver resultados
                 </button>
+                {resultsCampaign ? (
+                  <a
+                    href={`/api/admin/clients/${client.id}/campaigns/${resultsCampaign.id}/responses/raw-download`}
+                    className="rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73] hover:bg-[#f1f8fc]"
+                  >
+                    Download raw data
+                  </a>
+                ) : (
+                  <span className="rounded-full border border-[#d6dde2] px-3 py-1 text-xs font-semibold text-[#95a4ae]">
+                    Download raw data
+                  </span>
+                )}
                 <button
                   type="button"
                   disabled={!linksActionCampaign || isLoadingLinksFor === linksActionCampaign.id}
@@ -1641,41 +1866,245 @@ export function ManagerClientFicha({
               <table className="min-w-full text-sm">
                 <thead>
                   <tr className="border-b">
+                    <th className="px-2 py-2 text-left">Pacote</th>
                     <th className="px-2 py-2 text-left">Diagnostico</th>
                     <th className="px-2 py-2 text-left">Status</th>
                     <th className="px-2 py-2 text-left">Inicio</th>
                     <th className="px-2 py-2 text-left">Fechamento</th>
                     <th className="px-2 py-2 text-left">Respostas</th>
+                    <th className="px-2 py-2 text-left">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {client.campaigns.length === 0 ? (
                     <tr>
-                      <td colSpan={5} className="px-2 py-3 text-xs text-[#5a7383]">
+                      <td colSpan={7} className="px-2 py-3 text-xs text-[#5a7383]">
                         Nenhum diagnostico atribuido.
                       </td>
                     </tr>
                   ) : (
-                    client.campaigns.map((campaign) => (
-                      <tr key={campaign.id} className="border-b">
-                        <td className="px-2 py-2">
-                          <Link
-                            href={`/manager/clients/${client.id}/diagnostic/${campaign.id}`}
-                            className="font-semibold text-[#123447] hover:text-[#0f5b73] hover:underline"
-                          >
-                            {campaign.name}
-                          </Link>
-                        </td>
-                        <td className="px-2 py-2">{campaignCollectionStatus(campaign.status)}</td>
-                        <td className="px-2 py-2">{fmt(campaign.starts_at)}</td>
-                        <td className="px-2 py-2">{fmt(campaign.closes_at)}</td>
-                        <td className="px-2 py-2">{campaign.responses ?? "-"}</td>
-                      </tr>
-                    ))
+                    client.campaigns.map((campaign) => {
+                      const isExpanded = expandedCampaignId === campaign.id;
+                      const expandedSectors = expandedCampaignSectorsById[campaign.id] ?? [];
+                      const responseTotal = expandedSectors.reduce(
+                        (total, sector) => total + (sector.submissionCount ?? 0),
+                        0,
+                      );
+                      return (
+                        <Fragment key={campaign.id}>
+                          <tr className="border-b">
+                            <td className="px-2 py-2">
+                              <button
+                                type="button"
+                                onClick={() => void toggleCampaignPackage(campaign.id)}
+                                className="rounded-full border border-[#c9dce8] px-2 py-0.5 text-xs font-semibold text-[#123447]"
+                                title="Abrir/fechar sub-questionarios por setor"
+                              >
+                                {isExpanded ? "-" : "+"}
+                              </button>
+                            </td>
+                            <td className="px-2 py-2">
+                              <Link
+                                href={`/manager/clients/${client.id}/diagnostic/${campaign.id}`}
+                                className="font-semibold text-[#123447] hover:text-[#0f5b73] hover:underline"
+                              >
+                                {campaign.name}
+                              </Link>
+                            </td>
+                            <td className="px-2 py-2">{campaignCollectionStatus(campaign.status)}</td>
+                            <td className="px-2 py-2">{fmt(campaign.starts_at)}</td>
+                            <td className="px-2 py-2">{fmt(campaign.closes_at)}</td>
+                            <td className="px-2 py-2">{responseTotal || campaign.responses || 0}</td>
+                            <td className="px-2 py-2">
+                              <div className="relative inline-flex">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setOpenCampaignActionsFor((previous) =>
+                                      previous === campaign.id ? null : campaign.id,
+                                    )
+                                  }
+                                  className="rounded-full border border-[#c9dce8] px-3 py-1 text-xs font-semibold text-[#123447]"
+                                >
+                                  ...
+                                </button>
+                                {openCampaignActionsFor === campaign.id ? (
+                                  <div className="absolute right-0 top-full z-20 mt-2 w-56 overflow-hidden rounded-xl border border-[#d8e4ee] bg-white shadow-lg">
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setOpenCampaignActionsFor(null);
+                                        openCampaignResults(campaign);
+                                      }}
+                                      className="block w-full px-3 py-2 text-left text-xs font-semibold text-[#123447] hover:bg-[#f4f9fc]"
+                                    >
+                                      Ver resultados
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setOpenCampaignActionsFor(null);
+                                        void loadQuestionnaireLinks(campaign);
+                                      }}
+                                      className="block w-full px-3 py-2 text-left text-xs font-semibold text-[#0f5b73] hover:bg-[#f4f9fc]"
+                                    >
+                                      Gerar links
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setOpenCampaignActionsFor(null);
+                                        void addSectorToCampaign(campaign);
+                                      }}
+                                      className="block w-full px-3 py-2 text-left text-xs font-semibold text-[#2d5f23] hover:bg-[#f4f9fc]"
+                                    >
+                                      Adicionar setor
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setOpenCampaignActionsFor(null);
+                                        void updateCampaignLifecycle(campaign, "live");
+                                      }}
+                                      className="block w-full px-3 py-2 text-left text-xs font-semibold text-[#0f5b73] hover:bg-[#f4f9fc]"
+                                    >
+                                      Ativar
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setOpenCampaignActionsFor(null);
+                                        void updateCampaignLifecycle(campaign, "draft");
+                                      }}
+                                      className="block w-full px-3 py-2 text-left text-xs font-semibold text-[#7a4b00] hover:bg-[#fdf8f1]"
+                                    >
+                                      Pausar
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setOpenCampaignActionsFor(null);
+                                        void updateCampaignLifecycle(campaign, "archived");
+                                      }}
+                                      className="block w-full px-3 py-2 text-left text-xs font-semibold text-[#5a3f7c] hover:bg-[#f7f1fd]"
+                                    >
+                                      Arquivar
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setOpenCampaignActionsFor(null);
+                                        void deleteCampaign(campaign);
+                                      }}
+                                      className="block w-full px-3 py-2 text-left text-xs font-semibold text-[#8a2d2d] hover:bg-[#fff4f4]"
+                                    >
+                                      Delete
+                                    </button>
+                                  </div>
+                                ) : null}
+                              </div>
+                            </td>
+                          </tr>
+                          {isExpanded ? (
+                            loadingExpandedCampaignId === campaign.id ? (
+                              <tr className="border-b bg-[#f8fbfd]">
+                                <td colSpan={7} className="px-2 py-3 text-xs text-[#5a7383]">
+                                  Carregando sub-questionarios...
+                                </td>
+                              </tr>
+                            ) : expandedSectors.length === 0 ? (
+                              <tr className="border-b bg-[#f8fbfd]">
+                                <td colSpan={7} className="px-2 py-3 text-xs text-[#5a7383]">
+                                  Nenhum sub-questionario por setor.
+                                </td>
+                              </tr>
+                            ) : (
+                              expandedSectors.map((sector) => {
+                                const subItemKey = `${campaign.id}:${sector.id}`;
+                                return (
+                                  <tr key={subItemKey} className="border-b bg-[#f8fbfd]">
+                                    <td className="px-2 py-2 text-xs text-[#5a7383]">sub</td>
+                                    <td className="px-2 py-2 text-xs font-semibold text-[#123447]">
+                                      {sector.name}
+                                    </td>
+                                    <td className="px-2 py-2 text-xs">
+                                      {sector.isActive ? "Sub-questionario ativo" : "Sub-questionario inativo"}
+                                    </td>
+                                    <td className="px-2 py-2 text-xs">{fmt(campaign.starts_at)}</td>
+                                    <td className="px-2 py-2 text-xs">{fmt(campaign.closes_at)}</td>
+                                    <td className="px-2 py-2 text-xs">{sector.submissionCount}</td>
+                                    <td className="px-2 py-2 text-xs">
+                                      <div className="relative inline-flex">
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            setOpenCampaignSectorActionsFor((previous) =>
+                                              previous === subItemKey ? null : subItemKey,
+                                            )
+                                          }
+                                          className="rounded-full border border-[#c9dce8] px-3 py-1 text-xs font-semibold text-[#123447]"
+                                        >
+                                          ...
+                                        </button>
+                                        {openCampaignSectorActionsFor === subItemKey ? (
+                                          <div className="absolute right-0 top-full z-20 mt-2 w-52 overflow-hidden rounded-xl border border-[#d8e4ee] bg-white shadow-lg">
+                                            <button
+                                              type="button"
+                                              onClick={() => {
+                                                setOpenCampaignSectorActionsFor(null);
+                                                openCampaignResults(campaign, sector.name);
+                                              }}
+                                              className="block w-full px-3 py-2 text-left text-xs font-semibold text-[#123447] hover:bg-[#f4f9fc]"
+                                            >
+                                              Ver resultados
+                                            </button>
+                                            <button
+                                              type="button"
+                                              onClick={() => {
+                                                setOpenCampaignSectorActionsFor(null);
+                                                openSingleSectorLinkModal(campaign, sector);
+                                              }}
+                                              className="block w-full px-3 py-2 text-left text-xs font-semibold text-[#0f5b73] hover:bg-[#f4f9fc]"
+                                            >
+                                              Gerar link (singulo)
+                                            </button>
+                                            <button
+                                              type="button"
+                                              onClick={() => {
+                                                setOpenCampaignSectorActionsFor(null);
+                                                void toggleSectorSubitemActive(campaign, sector);
+                                              }}
+                                              className="block w-full px-3 py-2 text-left text-xs font-semibold text-[#2d5f23] hover:bg-[#f4f9fc]"
+                                            >
+                                              {sector.isActive ? "Desativar" : "Ativar"}
+                                            </button>
+                                            <button
+                                              type="button"
+                                              onClick={() => {
+                                                setOpenCampaignSectorActionsFor(null);
+                                                void deleteSectorSubitem(campaign, sector);
+                                              }}
+                                              className="block w-full px-3 py-2 text-left text-xs font-semibold text-[#8a2d2d] hover:bg-[#fff4f4]"
+                                            >
+                                              Delete
+                                            </button>
+                                          </div>
+                                        ) : null}
+                                      </div>
+                                    </td>
+                                  </tr>
+                                );
+                              })
+                            )
+                          ) : null}
+                        </Fragment>
+                      );
+                    })
                   )}
                 </tbody>
               </table>
             </div>
+            {drpsActionNotice ? <p className="mt-3 text-sm text-[#1f6b2f]">{drpsActionNotice}</p> : null}
           </section>
           <section className="rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
             <h3 className="text-lg font-semibold text-[#123447]">Relatorios gerados</h3>
@@ -1768,6 +2197,219 @@ export function ManagerClientFicha({
                   )}
                 </tbody>
               </table>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {isSectorModalOpen ? (
+        <div
+          className="fixed inset-0 z-40 flex items-center justify-center bg-black/35 p-4"
+          onClick={() => setIsSectorModalOpen(false)}
+        >
+          <div
+            className="w-full max-w-4xl rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <h4 className="text-lg font-semibold text-[#123447]">
+                {sectorModalMode === "add" ? "Adicionar setor" : "Editar setor"}
+              </h4>
+              <button
+                type="button"
+                onClick={() => setIsSectorModalOpen(false)}
+                className="rounded-full border border-[#c9dce8] px-3 py-1 text-xs font-semibold text-[#123447]"
+              >
+                Fechar
+              </button>
+            </div>
+            <div className="mt-4 max-h-[65vh] overflow-y-auto pr-1">
+              <div className="grid gap-3 md:grid-cols-3">
+                <label className="text-xs text-[#4f6977] md:col-span-2">
+                  Setor
+                  <input
+                    className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
+                    value={sectorModalForm.name}
+                    onChange={(event) => updateSectorModalForm({ name: event.target.value })}
+                  />
+                </label>
+                <label className="text-xs text-[#4f6977]">
+                  Contact name
+                  <input
+                    className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
+                    value={sectorModalForm.mainContactName}
+                    onChange={(event) => updateSectorModalForm({ mainContactName: event.target.value })}
+                  />
+                </label>
+                <label className="text-xs text-[#4f6977]">
+                  Status
+                  <select
+                    className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
+                    value={sectorModalForm.isActive ? "active" : "inactive"}
+                    onChange={(event) => updateSectorModalForm({ isActive: event.target.value === "active" })}
+                  >
+                    <option value="active">Ativo</option>
+                    <option value="inactive">Inativo</option>
+                  </select>
+                </label>
+                <label className="text-xs text-[#4f6977]">
+                  Risk parameter
+                  <input
+                    type="number"
+                    min={0.5}
+                    max={2}
+                    step={0.01}
+                    className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
+                    value={sectorModalForm.riskParameter}
+                    onChange={(event) => updateSectorModalForm({ riskParameter: event.target.value })}
+                  />
+                </label>
+                <label className="text-xs text-[#4f6977]">
+                  Shifts
+                  <input
+                    className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
+                    value={sectorModalForm.shifts}
+                    onChange={(event) => updateSectorModalForm({ shifts: event.target.value })}
+                  />
+                </label>
+                <label className="text-xs text-[#4f6977]">
+                  Remote workers in this sector
+                  <input
+                    type="number"
+                    min={0}
+                    className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
+                    value={sectorModalForm.remoteWorkers}
+                    onChange={(event) =>
+                      updateSectorModalForm({
+                        remoteWorkers: toNonNegativeInt(event.target.value, sectorModalForm.remoteWorkers),
+                      })
+                    }
+                  />
+                </label>
+                <label className="text-xs text-[#4f6977]">
+                  On-site workers in this sector
+                  <input
+                    type="number"
+                    min={0}
+                    className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
+                    value={sectorModalForm.onsiteWorkers}
+                    onChange={(event) =>
+                      updateSectorModalForm({
+                        onsiteWorkers: toNonNegativeInt(event.target.value, sectorModalForm.onsiteWorkers),
+                      })
+                    }
+                  />
+                </label>
+                <label className="text-xs text-[#4f6977]">
+                  Hybrid workers in this sector
+                  <input
+                    type="number"
+                    min={0}
+                    className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
+                    value={sectorModalForm.hybridWorkers}
+                    onChange={(event) =>
+                      updateSectorModalForm({
+                        hybridWorkers: toNonNegativeInt(event.target.value, sectorModalForm.hybridWorkers),
+                      })
+                    }
+                  />
+                </label>
+                <label className="text-xs text-[#4f6977]">
+                  Workers in role
+                  <input
+                    type="number"
+                    min={0}
+                    className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
+                    value={sectorModalForm.workersInRole}
+                    onChange={(event) =>
+                      updateSectorModalForm({
+                        workersInRole: toNonNegativeInt(event.target.value, sectorModalForm.workersInRole),
+                      })
+                    }
+                  />
+                </label>
+                <label className="text-xs text-[#4f6977]">
+                  Assessment date
+                  <input
+                    type="date"
+                    className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
+                    value={sectorModalForm.elaborationDate}
+                    onChange={(event) => updateSectorModalForm({ elaborationDate: event.target.value })}
+                  />
+                  <span className="mt-1 block text-[11px] leading-4 text-[#5a7383]">
+                    Date this sector assessment was prepared.
+                  </span>
+                </label>
+                <label className="text-xs text-[#4f6977] md:col-span-2">
+                  Contact email
+                  <input
+                    type="email"
+                    className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
+                    value={sectorModalForm.mainContactEmail}
+                    onChange={(event) => updateSectorModalForm({ mainContactEmail: event.target.value })}
+                  />
+                </label>
+                <label className="text-xs text-[#4f6977]">
+                  Contact phone
+                  <input
+                    className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
+                    value={sectorModalForm.mainContactPhone}
+                    onChange={(event) => updateSectorModalForm({ mainContactPhone: event.target.value })}
+                  />
+                </label>
+                <label className="text-xs text-[#4f6977] md:col-span-3">
+                  Roles / functions
+                  <input
+                    className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
+                    value={sectorModalForm.functions}
+                    onChange={(event) => updateSectorModalForm({ functions: event.target.value })}
+                  />
+                </label>
+                <label className="text-xs text-[#4f6977] md:col-span-3">
+                  Vulnerable groups
+                  <textarea
+                    className="mt-1 min-h-20 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
+                    value={sectorModalForm.vulnerableGroups}
+                    onChange={(event) => updateSectorModalForm({ vulnerableGroups: event.target.value })}
+                  />
+                </label>
+                <label className="text-xs text-[#4f6977] md:col-span-3">
+                  Stress, harassment, overload and other harms
+                  <textarea
+                    className="mt-1 min-h-20 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
+                    value={sectorModalForm.possibleMentalHealthHarms}
+                    onChange={(event) =>
+                      updateSectorModalForm({ possibleMentalHealthHarms: event.target.value })
+                    }
+                  />
+                </label>
+                <label className="text-xs text-[#4f6977] md:col-span-3">
+                  Existing control measures
+                  <textarea
+                    className="mt-1 min-h-20 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
+                    value={sectorModalForm.existingControlMeasures}
+                    onChange={(event) =>
+                      updateSectorModalForm({ existingControlMeasures: event.target.value })
+                    }
+                  />
+                </label>
+              </div>
+            </div>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={saveSectorModal}
+                className="rounded-full bg-[#0f5b73] px-4 py-2 text-xs font-semibold text-white"
+              >
+                {sectorModalMode === "add" ? "Adicionar setor" : "Salvar setor"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsSectorModalOpen(false)}
+                className="rounded-full border border-[#9ec8db] px-4 py-2 text-xs font-semibold text-[#0f5b73]"
+              >
+                Cancelar
+              </button>
             </div>
           </div>
         </div>
@@ -1919,65 +2561,65 @@ export function ManagerClientFicha({
                 ) : (
                   assignedPrograms.map((assignment) => (
                     <tr key={assignment.id} className="border-b">
-                        <td className="px-2 py-2">
-                          <p className="font-medium text-[#123447]">{assignment.programTitle}</p>
-                          <p className="text-xs text-[#5a7383]">{assignment.programDescription ?? assignment.programId}</p>
-                        </td>
-                        <td className="px-2 py-2">{assignment.targetRiskTopic ?? "-"}</td>
-                        <td className="px-2 py-2">{assignment.status}</td>
-                        <td className="px-2 py-2">{fmt(assignment.deployedAt)}</td>
-                        <td className="px-2 py-2">{assignment.scheduleFrequency ?? "-"}</td>
-                        <td className="px-2 py-2">
-                          <div className="relative inline-flex">
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setOpenAssignedProgramActionsFor((previous) =>
-                                  previous === assignment.id ? null : assignment.id,
-                                )
-                              }
-                              className="rounded-full border border-[#c9dce8] px-3 py-1 text-xs font-semibold text-[#123447]"
-                            >
-                              ...
-                            </button>
-                            {openAssignedProgramActionsFor === assignment.id ? (
-                              <div className="absolute right-0 top-full z-20 mt-2 w-56 overflow-hidden rounded-xl border border-[#d8e4ee] bg-white shadow-lg">
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setOpenAssignedProgramActionsFor(null);
-                                    openAssignedProgramDetails(assignment);
-                                  }}
-                                  className="block w-full px-3 py-2 text-left text-xs font-semibold text-[#123447] hover:bg-[#f4f9fc]"
-                                >
-                                  Open
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setOpenAssignedProgramActionsFor(null);
-                                    openAssignedProgramDetails(assignment);
-                                  }}
-                                  className="block w-full px-3 py-2 text-left text-xs font-semibold text-[#2d5f23] hover:bg-[#f4f9fc]"
-                                >
-                                  Editar
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setOpenAssignedProgramActionsFor(null);
-                                    void removeAssignedProgram(assignment.id);
-                                  }}
-                                  disabled={isSavingProgram}
-                                  className="block w-full px-3 py-2 text-left text-xs font-semibold text-[#8a2d2d] hover:bg-[#fff4f4] disabled:cursor-not-allowed disabled:text-[#a8b7c0]"
-                                >
-                                  Remover
-                                </button>
-                              </div>
-                            ) : null}
-                          </div>
-                        </td>
-                      </tr>
+                      <td className="px-2 py-2">
+                        <p className="font-medium text-[#123447]">{assignment.programTitle}</p>
+                        <p className="text-xs text-[#5a7383]">{assignment.programDescription ?? assignment.programId}</p>
+                      </td>
+                      <td className="px-2 py-2">{assignment.targetRiskTopic ?? "-"}</td>
+                      <td className="px-2 py-2">{assignment.status}</td>
+                      <td className="px-2 py-2">{fmt(assignment.deployedAt)}</td>
+                      <td className="px-2 py-2">{assignment.scheduleFrequency ?? "-"}</td>
+                      <td className="px-2 py-2">
+                        <div className="relative inline-flex">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setOpenAssignedProgramActionsFor((previous) =>
+                                previous === assignment.id ? null : assignment.id,
+                              )
+                            }
+                            className="rounded-full border border-[#c9dce8] px-3 py-1 text-xs font-semibold text-[#123447]"
+                          >
+                            ...
+                          </button>
+                          {openAssignedProgramActionsFor === assignment.id ? (
+                            <div className="absolute right-0 top-full z-20 mt-2 w-56 overflow-hidden rounded-xl border border-[#d8e4ee] bg-white shadow-lg">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setOpenAssignedProgramActionsFor(null);
+                                  openAssignedProgramDetails(assignment);
+                                }}
+                                className="block w-full px-3 py-2 text-left text-xs font-semibold text-[#123447] hover:bg-[#f4f9fc]"
+                              >
+                                Open
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setOpenAssignedProgramActionsFor(null);
+                                  openAssignedProgramDetails(assignment);
+                                }}
+                                className="block w-full px-3 py-2 text-left text-xs font-semibold text-[#2d5f23] hover:bg-[#f4f9fc]"
+                              >
+                                Editar
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setOpenAssignedProgramActionsFor(null);
+                                  void removeAssignedProgram(assignment.id);
+                                }}
+                                disabled={isSavingProgram}
+                                className="block w-full px-3 py-2 text-left text-xs font-semibold text-[#8a2d2d] hover:bg-[#fff4f4] disabled:cursor-not-allowed disabled:text-[#a8b7c0]"
+                              >
+                                Remover
+                              </button>
+                            </div>
+                          ) : null}
+                        </div>
+                      </td>
+                    </tr>
                   ))
                 )}
               </tbody>

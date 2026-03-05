@@ -38,6 +38,7 @@ type CampaignCalendarRow = {
   name: string;
   starts_at?: string | null;
   closes_at?: string | null;
+  created_at?: string | null;
 };
 
 type CalendarEventRow = {
@@ -102,10 +103,6 @@ function toDate(value: string | null | undefined): Date | null {
   return date;
 }
 
-function plusOneHour(value: Date): Date {
-  return new Date(value.getTime() + 60 * 60 * 1000);
-}
-
 function plusDays(value: Date, days: number): Date {
   return new Date(value.getTime() + days * 24 * 60 * 60 * 1000);
 }
@@ -114,45 +111,85 @@ function sortByStart(events: MasterCalendarEvent[]): MasterCalendarEvent[] {
   return events.slice().sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime());
 }
 
-type DrpsAggregateKind = "start" | "close";
-
 type DrpsAggregateBucket = {
   event: MasterCalendarEvent;
-  kind: DrpsAggregateKind;
+  campaignNames: Set<string>;
   count: number;
 };
 
-function toAggregateKey(kind: DrpsAggregateKind, clientId: string | null, atIso: string) {
-  return `${kind}:${clientId ?? "unlinked"}:${atIso}`;
+function toDayKey(value: Date): string {
+  return value.toISOString().slice(0, 10);
 }
 
-function toAggregatedTitle(kind: DrpsAggregateKind, count: number): string {
-  if (kind === "start") {
-    return `Inicio DRPS (${count} setores)`;
-  }
-  return `Fechamento DRPS (${count} setores)`;
+function toAggregateKey(clientId: string | null, startsAt: Date, endsAt: Date) {
+  return `${clientId ?? "unlinked"}:${toDayKey(startsAt)}:${toDayKey(endsAt)}`;
 }
 
-function pushOrAggregateDrpsEvent(
+function toDrpsWindowTitle(campaignName: string, count: number): string {
+  if (count > 1) return `Janela DRPS (${count} setores)`;
+  return `Janela DRPS: ${campaignName}`;
+}
+
+function toDrpsWindowContent(campaignNames: Set<string>): string | null {
+  const ordered = Array.from(campaignNames.values())
+    .map((name) => name.trim())
+    .filter((name) => name.length > 0)
+    .sort((left, right) => left.localeCompare(right, "pt-BR"));
+  if (ordered.length === 0) return null;
+  return `Subcampanhas por setor:\n${ordered.map((name) => `- ${name}`).join("\n")}`;
+}
+
+function pushOrAggregateDrpsWindow(
   buckets: Map<string, DrpsAggregateBucket>,
   key: string,
-  kind: DrpsAggregateKind,
+  campaignName: string,
   candidate: MasterCalendarEvent,
 ) {
   const existing = buckets.get(key);
   if (!existing) {
-    buckets.set(key, { event: candidate, kind, count: 1 });
+    const campaignNames = new Set<string>();
+    campaignNames.add(campaignName);
+    candidate.title = toDrpsWindowTitle(campaignName, 1);
+    candidate.details.content = toDrpsWindowContent(campaignNames);
+    buckets.set(key, { event: candidate, campaignNames, count: 1 });
     return;
   }
 
   existing.count += 1;
-  existing.event.title = toAggregatedTitle(existing.kind, existing.count);
+  existing.campaignNames.add(campaignName);
+  existing.event.title = toDrpsWindowTitle(campaignName, existing.count);
+  existing.event.details.content = toDrpsWindowContent(existing.campaignNames);
+
+  const existingStart = new Date(existing.event.startsAt).getTime();
+  const candidateStart = new Date(candidate.startsAt).getTime();
+  if (Number.isFinite(candidateStart) && (!Number.isFinite(existingStart) || candidateStart < existingStart)) {
+    existing.event.startsAt = candidate.startsAt;
+  }
 
   const existingEnd = new Date(existing.event.endsAt).getTime();
   const candidateEnd = new Date(candidate.endsAt).getTime();
   if (Number.isFinite(candidateEnd) && (!Number.isFinite(existingEnd) || candidateEnd > existingEnd)) {
     existing.event.endsAt = candidate.endsAt;
   }
+}
+
+function resolveCampaignWindow(campaign: CampaignCalendarRow): { startsAt: Date; endsAt: Date } | null {
+  const start = toDate(campaign.starts_at);
+  const close = toDate(campaign.closes_at);
+  const createdAt = toDate(campaign.created_at);
+  if (start) {
+    if (close && close.getTime() > start.getTime()) {
+      return { startsAt: start, endsAt: close };
+    }
+    return { startsAt: start, endsAt: plusDays(start, 7) };
+  }
+  if (close) {
+    return { startsAt: plusDays(close, -7), endsAt: close };
+  }
+  if (createdAt) {
+    return { startsAt: createdAt, endsAt: plusDays(createdAt, 7) };
+  }
+  return null;
 }
 
 export function buildDrpsCalendarEvents(
@@ -164,70 +201,33 @@ export function buildDrpsCalendarEvents(
   for (const campaign of campaigns) {
     const clientId = campaign.client_id ?? null;
     const clientName = clientId ? clientNameById?.get(clientId) ?? null : null;
-    const start = toDate(campaign.starts_at);
-    const close = toDate(campaign.closes_at);
-    const closeOrDefault =
-      close && start && close.getTime() > start.getTime()
-        ? close
-        : start
-          ? plusDays(start, 7)
-          : close;
-
-    if (start) {
-      const startIso = start.toISOString();
-      const event = {
-        id: `drps-start-${campaign.id}`,
-        clientId,
-        clientName,
-        eventType: "drps_start",
-        title: `Inicio DRPS: ${campaign.name}`,
-        startsAt: startIso,
-        endsAt: (closeOrDefault ?? plusOneHour(start)).toISOString(),
-        status: "scheduled",
-        sourceClientProgramId: null,
-        details: {
-          content: null,
-          preparationRequired: null,
-          eventLifecycle: "committed",
-          proposalKind: null,
-          availabilityRequestId: null,
-        },
-      } satisfies MasterCalendarEvent;
-      pushOrAggregateDrpsEvent(
-        buckets,
-        toAggregateKey("start", clientId, startIso),
-        "start",
-        event,
-      );
-    }
-
-    if (closeOrDefault) {
-      const closeIso = closeOrDefault.toISOString();
-      const event = {
-        id: `drps-close-${campaign.id}`,
-        clientId,
-        clientName,
-        eventType: "drps_close",
-        title: `Fechamento DRPS: ${campaign.name}`,
-        startsAt: closeIso,
-        endsAt: plusOneHour(closeOrDefault).toISOString(),
-        status: "scheduled",
-        sourceClientProgramId: null,
-        details: {
-          content: null,
-          preparationRequired: null,
-          eventLifecycle: "committed",
-          proposalKind: null,
-          availabilityRequestId: null,
-        },
-      } satisfies MasterCalendarEvent;
-      pushOrAggregateDrpsEvent(
-        buckets,
-        toAggregateKey("close", clientId, closeIso),
-        "close",
-        event,
-      );
-    }
+    const campaignName = campaign.name.trim() || "Campanha sem nome";
+    const window = resolveCampaignWindow(campaign);
+    if (!window) continue;
+    const event = {
+      id: `drps-start-${campaign.id}`,
+      clientId,
+      clientName,
+      eventType: "drps_start",
+      title: toDrpsWindowTitle(campaignName, 1),
+      startsAt: window.startsAt.toISOString(),
+      endsAt: window.endsAt.toISOString(),
+      status: "scheduled",
+      sourceClientProgramId: null,
+      details: {
+        content: null,
+        preparationRequired: null,
+        eventLifecycle: "committed",
+        proposalKind: null,
+        availabilityRequestId: null,
+      },
+    } satisfies MasterCalendarEvent;
+    pushOrAggregateDrpsWindow(
+      buckets,
+      toAggregateKey(clientId, window.startsAt, window.endsAt),
+      campaignName,
+      event,
+    );
   }
 
   return sortByStart(Array.from(buckets.values(), (bucket) => bucket.event));

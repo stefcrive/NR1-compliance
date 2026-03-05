@@ -40,6 +40,8 @@ const assignDrpsSchema = z.object({
   sourceSurveyId: z.string().trim().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i).optional(),
 });
 
+const DRPS_DEFAULT_WINDOW_DAYS = 7;
+
 function toLegacyStatus(value: "draft" | "live" | undefined): "Draft" | "Active" {
   return value === "live" ? "Active" : "Draft";
 }
@@ -49,6 +51,34 @@ function toDateOnly(value?: string | null): string {
     return new Date().toISOString().slice(0, 10);
   }
   return value.slice(0, 10);
+}
+
+function plusDaysIso(value: string, days: number): string {
+  const base = new Date(value);
+  return new Date(base.getTime() + days * 24 * 60 * 60 * 1000).toISOString();
+}
+
+function resolveCampaignWindow(params: { startsAt?: string | null; closesAt?: string | null }) {
+  const startsAtRaw = params.startsAt?.trim() || null;
+  const closesAtRaw = params.closesAt?.trim() || null;
+
+  const startsAtDate = startsAtRaw ? new Date(startsAtRaw) : null;
+  const closesAtDate = closesAtRaw ? new Date(closesAtRaw) : null;
+  const startsAtValid = startsAtDate && !Number.isNaN(startsAtDate.getTime()) ? startsAtDate.toISOString() : null;
+  const closesAtValid = closesAtDate && !Number.isNaN(closesAtDate.getTime()) ? closesAtDate.toISOString() : null;
+
+  if (startsAtValid && closesAtValid && new Date(closesAtValid).getTime() > new Date(startsAtValid).getTime()) {
+    return { startsAt: startsAtValid, closesAt: closesAtValid };
+  }
+  if (startsAtValid) {
+    return { startsAt: startsAtValid, closesAt: plusDaysIso(startsAtValid, DRPS_DEFAULT_WINDOW_DAYS) };
+  }
+  if (closesAtValid) {
+    return { startsAt: plusDaysIso(closesAtValid, -DRPS_DEFAULT_WINDOW_DAYS), closesAt: closesAtValid };
+  }
+
+  const nowIso = new Date().toISOString();
+  return { startsAt: nowIso, closesAt: plusDaysIso(nowIso, DRPS_DEFAULT_WINDOW_DAYS) };
 }
 
 export async function POST(
@@ -68,6 +98,10 @@ export async function POST(
   }
 
   const supabase = getSupabaseAdminClient();
+  const campaignWindow = resolveCampaignWindow({
+    startsAt: parsed.startsAt,
+    closesAt: parsed.closesAt,
+  });
   if (parsed.sourceSurveyId) {
     const { data: sourceQuestion, error: sourceQuestionError } = await supabase
       .from("questions")
@@ -142,8 +176,8 @@ export async function POST(
           turnstile_site_key: parsed.turnstileSiteKey ?? "1x00000000000000000000AA",
           turnstile_expected_hostname:
             parsed.turnstileExpectedHostname ?? request.nextUrl.hostname ?? "localhost",
-          starts_at: parsed.startsAt || null,
-          closes_at: parsed.closesAt || null,
+          starts_at: campaignWindow.startsAt,
+          closes_at: campaignWindow.closesAt,
         })
         .select("id,name,public_slug,status,created_at")
         .single();
@@ -166,8 +200,8 @@ export async function POST(
           client_id: legacyClient.client_id,
           campaign_name: parsed.campaignName,
           status: toLegacyStatus(parsed.status),
-          start_date: toDateOnly(parsed.startsAt),
-          end_date: parsed.closesAt ? toDateOnly(parsed.closesAt) : null,
+          start_date: toDateOnly(campaignWindow.startsAt),
+          end_date: toDateOnly(campaignWindow.closesAt),
           unique_link_token: `${finalSlug}-${randomUUID().slice(0, 8)}`,
         })
         .select("campaign_id,campaign_name,status,start_date,end_date")
@@ -273,8 +307,8 @@ export async function POST(
       turnstile_site_key: parsed.turnstileSiteKey ?? "1x00000000000000000000AA",
       turnstile_expected_hostname:
         parsed.turnstileExpectedHostname ?? request.nextUrl.hostname ?? "localhost",
-      starts_at: parsed.startsAt || null,
-      closes_at: parsed.closesAt || null,
+      starts_at: campaignWindow.startsAt,
+      closes_at: campaignWindow.closesAt,
     })
     .select("id,name,public_slug,status,client_id,created_at")
     .single();

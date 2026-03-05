@@ -101,10 +101,12 @@ const COPY = {
       "Assigned programs history unavailable (client_programs table missing).",
     cardConcludedDrps: "Concluded DRPS",
     cardPrograms: "Assigned programs",
+    cardPastPrograms: "Past continuous programs",
     cardEvents: "Realized events",
     cardReports: "Realized reports",
     sectionDrps: "Concluded DRPS diagnostics and results",
     sectionPrograms: "Assigned programs by company",
+    sectionPastPrograms: "Past continuous programs by company",
     sectionEvents: "Realized events",
     sectionReports: "Realized reports by company",
     tableDiagnostic: "Diagnostic",
@@ -170,10 +172,12 @@ const COPY = {
       "Historico de programas atribuidos indisponivel (tabela client_programs ausente).",
     cardConcludedDrps: "DRPS concluidos",
     cardPrograms: "Programas atribuidos",
+    cardPastPrograms: "Processos continuos passados",
     cardEvents: "Eventos realizados",
     cardReports: "Relatorios realizados",
     sectionDrps: "DRPS concluidos e resultados",
     sectionPrograms: "Programas atribuidos por empresa",
+    sectionPastPrograms: "Processos continuos passados por empresa",
     sectionEvents: "Eventos realizados",
     sectionReports: "Relatorios realizados por empresa",
     tableDiagnostic: "Diagnostico",
@@ -275,6 +279,8 @@ function reportStatusLabel(
 export function ManagerHistory({ forcedClientId }: { forcedClientId?: string }) {
   const { locale } = useManagerLocale();
   const t = COPY[locale];
+  const isCompanyProfileHistory = Boolean(forcedClientId);
+  const showCompanyColumn = !isCompanyProfileHistory;
   const [payload, setPayload] = useState<HistoryPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -322,6 +328,10 @@ export function ManagerHistory({ forcedClientId }: { forcedClientId?: string }) 
       ),
     [activeCompanyFilter, payload?.assignedPrograms],
   );
+  const pastAssignedPrograms = useMemo(
+    () => assignedPrograms.filter((item) => item.status === "Completed"),
+    [assignedPrograms],
+  );
 
   const realizedEvents = useMemo(
     () =>
@@ -338,6 +348,7 @@ export function ManagerHistory({ forcedClientId }: { forcedClientId?: string }) 
       ),
     [activeCompanyFilter, payload?.reports],
   );
+  const programsForTable = isCompanyProfileHistory ? pastAssignedPrograms : assignedPrograms;
 
   const clientPortalSlugById = useMemo(
     () => new Map((payload?.companies ?? []).map((company) => [company.id, company.portalSlug])),
@@ -371,7 +382,13 @@ export function ManagerHistory({ forcedClientId }: { forcedClientId?: string }) 
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div>
             <h2 className="text-2xl font-semibold text-[#121b22] md:text-3xl">{t.pageTitle}</h2>
-            <p className="mt-2 text-sm text-[#4f5f6a]">{t.subtitle}</p>
+            <p className="mt-2 text-sm text-[#4f5f6a]">
+              {isCompanyProfileHistory
+                ? locale === "pt"
+                  ? "DRPS concluidos, processos continuos passados e lista de eventos da empresa."
+                  : "Concluded DRPS, past continuous programs, and company event list."
+                : t.subtitle}
+            </p>
           </div>
           <div className="flex flex-wrap items-end gap-2">
             {forcedClientId ? null : (
@@ -417,17 +434,23 @@ export function ManagerHistory({ forcedClientId }: { forcedClientId?: string }) 
           <p className="mt-2 text-2xl font-semibold text-[#123447]">{concludedCampaigns.length}</p>
         </article>
         <article className="rounded-2xl border border-[#dbe8ef] bg-white p-4 shadow-sm">
-          <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[#5a7383]">{t.cardPrograms}</p>
-          <p className="mt-2 text-2xl font-semibold text-[#123447]">{assignedPrograms.length}</p>
+          <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[#5a7383]">
+            {isCompanyProfileHistory ? t.cardPastPrograms : t.cardPrograms}
+          </p>
+          <p className="mt-2 text-2xl font-semibold text-[#123447]">
+            {isCompanyProfileHistory ? pastAssignedPrograms.length : assignedPrograms.length}
+          </p>
         </article>
         <article className="rounded-2xl border border-[#dbe8ef] bg-white p-4 shadow-sm">
           <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[#5a7383]">{t.cardEvents}</p>
           <p className="mt-2 text-2xl font-semibold text-[#123447]">{realizedEvents.length}</p>
         </article>
-        <article className="rounded-2xl border border-[#dbe8ef] bg-white p-4 shadow-sm">
-          <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[#5a7383]">{t.cardReports}</p>
-          <p className="mt-2 text-2xl font-semibold text-[#123447]">{reports.length}</p>
-        </article>
+        {!isCompanyProfileHistory ? (
+          <article className="rounded-2xl border border-[#dbe8ef] bg-white p-4 shadow-sm">
+            <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[#5a7383]">{t.cardReports}</p>
+            <p className="mt-2 text-2xl font-semibold text-[#123447]">{reports.length}</p>
+          </article>
+        ) : null}
       </section>
 
       <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
@@ -437,7 +460,7 @@ export function ManagerHistory({ forcedClientId }: { forcedClientId?: string }) 
             <thead>
               <tr className="border-b bg-[#f5f8fb]">
                 <th className="px-2 py-2 text-left">{t.tableDiagnostic}</th>
-                <th className="px-2 py-2 text-left">{t.tableCompany}</th>
+                {showCompanyColumn ? <th className="px-2 py-2 text-left">{t.tableCompany}</th> : null}
                 <th className="px-2 py-2 text-left">{t.tablePeriod}</th>
                 <th className="px-2 py-2 text-left">{t.tableResult}</th>
                 <th className="px-2 py-2 text-left">{t.tableResponses}</th>
@@ -447,7 +470,7 @@ export function ManagerHistory({ forcedClientId }: { forcedClientId?: string }) 
             <tbody>
               {concludedCampaigns.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-2 py-3 text-xs text-[#5a7383]">
+                  <td colSpan={showCompanyColumn ? 6 : 5} className="px-2 py-3 text-xs text-[#5a7383]">
                     {t.noData}
                   </td>
                 </tr>
@@ -458,7 +481,9 @@ export function ManagerHistory({ forcedClientId }: { forcedClientId?: string }) 
                       <p className="font-semibold text-[#123447]">{campaign.name}</p>
                       <p className="text-xs text-[#4f6977]">{campaignStatusLabel(campaign.status, locale)}</p>
                     </td>
-                    <td className="px-2 py-2 text-[#3e5a68]">{campaign.clientName ?? t.noCompany}</td>
+                    {showCompanyColumn ? (
+                      <td className="px-2 py-2 text-[#3e5a68]">{campaign.clientName ?? t.noCompany}</td>
+                    ) : null}
                     <td className="px-2 py-2 text-[#3e5a68]">
                       {fmtDateTime(campaign.startsAt, locale)} - {fmtDateTime(campaign.closesAt, locale)}
                     </td>
@@ -498,13 +523,15 @@ export function ManagerHistory({ forcedClientId }: { forcedClientId?: string }) 
       </section>
 
       <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
-        <h3 className="text-lg font-semibold text-[#123447]">{t.sectionPrograms}</h3>
+        <h3 className="text-lg font-semibold text-[#123447]">
+          {isCompanyProfileHistory ? t.sectionPastPrograms : t.sectionPrograms}
+        </h3>
         <div className="mt-3 overflow-x-auto rounded-lg border border-[#d8e4ee] bg-white">
           <table className="min-w-full text-sm">
             <thead>
               <tr className="border-b bg-[#f5f8fb]">
                 <th className="px-2 py-2 text-left">{t.tableProgram}</th>
-                <th className="px-2 py-2 text-left">{t.tableCompany}</th>
+                {showCompanyColumn ? <th className="px-2 py-2 text-left">{t.tableCompany}</th> : null}
                 <th className="px-2 py-2 text-left">{t.tableStatus}</th>
                 <th className="px-2 py-2 text-left">{t.tableDeployedAt}</th>
                 <th className="px-2 py-2 text-left">{t.tableCadence}</th>
@@ -512,20 +539,22 @@ export function ManagerHistory({ forcedClientId }: { forcedClientId?: string }) 
               </tr>
             </thead>
             <tbody>
-              {assignedPrograms.length === 0 ? (
+              {programsForTable.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-2 py-3 text-xs text-[#5a7383]">
+                  <td colSpan={showCompanyColumn ? 6 : 5} className="px-2 py-3 text-xs text-[#5a7383]">
                     {t.noData}
                   </td>
                 </tr>
               ) : (
-                assignedPrograms.map((program) => (
+                programsForTable.map((program) => (
                   <tr key={program.id} className="border-b last:border-b-0">
                     <td className="px-2 py-2">
                       <p className="font-semibold text-[#123447]">{program.programTitle}</p>
                       <p className="text-xs text-[#4f6977]">{program.programId}</p>
                     </td>
-                    <td className="px-2 py-2 text-[#3e5a68]">{program.clientName ?? t.noCompany}</td>
+                    {showCompanyColumn ? (
+                      <td className="px-2 py-2 text-[#3e5a68]">{program.clientName ?? t.noCompany}</td>
+                    ) : null}
                     <td className="px-2 py-2 text-[#3e5a68]">{program.status}</td>
                     <td className="px-2 py-2 text-[#3e5a68]">{fmtDateTime(program.deployedAt, locale)}</td>
                     <td className="px-2 py-2 text-[#3e5a68]">{program.scheduleFrequency}</td>
@@ -552,7 +581,7 @@ export function ManagerHistory({ forcedClientId }: { forcedClientId?: string }) 
             <thead>
               <tr className="border-b bg-[#f5f8fb]">
                 <th className="px-2 py-2 text-left">{t.tableEvent}</th>
-                <th className="px-2 py-2 text-left">{t.tableCompany}</th>
+                {showCompanyColumn ? <th className="px-2 py-2 text-left">{t.tableCompany}</th> : null}
                 <th className="px-2 py-2 text-left">{t.tableWhen}</th>
                 <th className="px-2 py-2 text-left">{t.tableType}</th>
                 <th className="px-2 py-2 text-left">{t.tableLifecycle}</th>
@@ -562,7 +591,7 @@ export function ManagerHistory({ forcedClientId }: { forcedClientId?: string }) 
             <tbody>
               {realizedEvents.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-2 py-3 text-xs text-[#5a7383]">
+                  <td colSpan={showCompanyColumn ? 6 : 5} className="px-2 py-3 text-xs text-[#5a7383]">
                     {t.noData}
                   </td>
                 </tr>
@@ -573,7 +602,9 @@ export function ManagerHistory({ forcedClientId }: { forcedClientId?: string }) 
                       <p className="font-semibold text-[#123447]">{event.title}</p>
                       <p className="text-xs text-[#4f6977]">{event.recordType}</p>
                     </td>
-                    <td className="px-2 py-2 text-[#3e5a68]">{event.clientName ?? t.noCompany}</td>
+                    {showCompanyColumn ? (
+                      <td className="px-2 py-2 text-[#3e5a68]">{event.clientName ?? t.noCompany}</td>
+                    ) : null}
                     <td className="px-2 py-2 text-[#3e5a68]">{fmtDateTime(event.startsAt, locale)}</td>
                     <td className="px-2 py-2 text-[#3e5a68]">{eventTypeLabel(event.eventType, locale)}</td>
                     <td className="px-2 py-2 text-[#3e5a68]">{lifecycleLabel(event.lifecycle, locale)}</td>
@@ -615,57 +646,59 @@ export function ManagerHistory({ forcedClientId }: { forcedClientId?: string }) 
         </div>
       </section>
 
-      <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
-        <h3 className="text-lg font-semibold text-[#123447]">{t.sectionReports}</h3>
-        <div className="mt-3 overflow-x-auto rounded-lg border border-[#d8e4ee] bg-white">
-          <table className="min-w-full text-sm">
-            <thead>
-              <tr className="border-b bg-[#f5f8fb]">
-                <th className="px-2 py-2 text-left">{t.tableReport}</th>
-                <th className="px-2 py-2 text-left">{t.tableCompany}</th>
-                <th className="px-2 py-2 text-left">{t.tableSurvey}</th>
-                <th className="px-2 py-2 text-left">{t.tableStatus}</th>
-                <th className="px-2 py-2 text-left">{t.tableCreatedAt}</th>
-                <th className="px-2 py-2 text-left">{t.tableActions}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {reports.length === 0 ? (
-                <tr>
-                  <td colSpan={6} className="px-2 py-3 text-xs text-[#5a7383]">
-                    {t.noData}
-                  </td>
+      {!isCompanyProfileHistory ? (
+        <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+          <h3 className="text-lg font-semibold text-[#123447]">{t.sectionReports}</h3>
+          <div className="mt-3 overflow-x-auto rounded-lg border border-[#d8e4ee] bg-white">
+            <table className="min-w-full text-sm">
+              <thead>
+                <tr className="border-b bg-[#f5f8fb]">
+                  <th className="px-2 py-2 text-left">{t.tableReport}</th>
+                  <th className="px-2 py-2 text-left">{t.tableCompany}</th>
+                  <th className="px-2 py-2 text-left">{t.tableSurvey}</th>
+                  <th className="px-2 py-2 text-left">{t.tableStatus}</th>
+                  <th className="px-2 py-2 text-left">{t.tableCreatedAt}</th>
+                  <th className="px-2 py-2 text-left">{t.tableActions}</th>
                 </tr>
-              ) : (
-                reports.map((report) => (
-                  <tr key={report.id} className="border-b last:border-b-0">
-                    <td className="px-2 py-2">
-                      <p className="font-semibold text-[#123447]">{report.reportTitle}</p>
-                      <p className="text-xs text-[#4f6977]">{report.id}</p>
-                    </td>
-                    <td className="px-2 py-2 text-[#3e5a68]">{report.clientName ?? t.noCompany}</td>
-                    <td className="px-2 py-2 text-[#3e5a68]">{report.surveyName ?? "-"}</td>
-                    <td className="px-2 py-2 text-[#3e5a68]">{reportStatusLabel(report.status, locale)}</td>
-                    <td className="px-2 py-2 text-[#3e5a68]">{fmtDateTime(report.createdAt, locale)}</td>
-                    <td className="px-2 py-2">
-                      {report.clientId ? (
-                        <Link
-                          href={`/manager/clients/${report.clientId}`}
-                          className="text-xs font-semibold text-[#0f5b73] hover:underline"
-                        >
-                          {t.openClient}
-                        </Link>
-                      ) : (
-                        <span className="text-xs text-[#7f8d95]">{t.actionsPlaceholder}</span>
-                      )}
+              </thead>
+              <tbody>
+                {reports.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="px-2 py-3 text-xs text-[#5a7383]">
+                      {t.noData}
                     </td>
                   </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </section>
+                ) : (
+                  reports.map((report) => (
+                    <tr key={report.id} className="border-b last:border-b-0">
+                      <td className="px-2 py-2">
+                        <p className="font-semibold text-[#123447]">{report.reportTitle}</p>
+                        <p className="text-xs text-[#4f6977]">{report.id}</p>
+                      </td>
+                      <td className="px-2 py-2 text-[#3e5a68]">{report.clientName ?? t.noCompany}</td>
+                      <td className="px-2 py-2 text-[#3e5a68]">{report.surveyName ?? "-"}</td>
+                      <td className="px-2 py-2 text-[#3e5a68]">{reportStatusLabel(report.status, locale)}</td>
+                      <td className="px-2 py-2 text-[#3e5a68]">{fmtDateTime(report.createdAt, locale)}</td>
+                      <td className="px-2 py-2">
+                        {report.clientId ? (
+                          <Link
+                            href={`/manager/clients/${report.clientId}`}
+                            className="text-xs font-semibold text-[#0f5b73] hover:underline"
+                          >
+                            {t.openClient}
+                          </Link>
+                        ) : (
+                          <span className="text-xs text-[#7f8d95]">{t.actionsPlaceholder}</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      ) : null}
     </div>
   );
 }

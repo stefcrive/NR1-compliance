@@ -16,6 +16,12 @@ type ManagerNotification = {
   createdAt: string;
 };
 
+type ManagerClientNavItem = {
+  id: string;
+  companyName: string;
+  updatedAt: string;
+};
+
 function HomeIcon({ className = "h-4 w-4" }: IconProps) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={className}>
@@ -103,6 +109,7 @@ const COPY = {
     history: "History",
     programsDatabase: "Programs database",
     createClient: "Create client",
+    recentClients: "Recent clients",
     new: "New",
     switchLabel: "Language",
     notifications: "Notifications",
@@ -125,6 +132,7 @@ const COPY = {
     history: "Historico",
     programsDatabase: "Base de programas",
     createClient: "Criar cliente",
+    recentClients: "Clientes recentes",
     new: "Novo",
     switchLabel: "Idioma",
     notifications: "Notificacoes",
@@ -155,6 +163,7 @@ function ManagerShellInner({ children }: { children: React.ReactNode }) {
   const [notificationsUnavailable, setNotificationsUnavailable] = useState(false);
   const [notifications, setNotifications] = useState<ManagerNotification[]>([]);
   const [markingNotificationId, setMarkingNotificationId] = useState<string | null>(null);
+  const [recentClients, setRecentClients] = useState<ManagerClientNavItem[]>([]);
 
   const loadNotifications = useCallback(async () => {
     setLoadingNotifications(true);
@@ -176,9 +185,36 @@ function ManagerShellInner({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  const loadRecentClients = useCallback(async () => {
+    try {
+      const response = await fetch("/api/admin/clients", { cache: "no-store" });
+      if (!response.ok) {
+        setRecentClients([]);
+        return;
+      }
+      const payload = (await response.json().catch(() => ({}))) as {
+        clients?: Array<{ id?: string; companyName?: string; updatedAt?: string }>;
+      };
+      const clients = (payload.clients ?? [])
+        .filter(
+          (item): item is { id: string; companyName: string; updatedAt: string } =>
+            Boolean(item.id && item.companyName && item.updatedAt),
+        )
+        .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+        .slice(0, 3);
+      setRecentClients(clients);
+    } catch {
+      setRecentClients([]);
+    }
+  }, []);
+
   useEffect(() => {
     void loadNotifications();
   }, [loadNotifications, pathname]);
+
+  useEffect(() => {
+    void loadRecentClients();
+  }, [loadRecentClients, pathname]);
 
   useEffect(() => {
     const handler = (event: MouseEvent) => {
@@ -380,6 +416,31 @@ function ManagerShellInner({ children }: { children: React.ReactNode }) {
                       </Link>
                     );
                   })}
+                  {recentClients.length > 0 ? (
+                    <>
+                      <p className="px-3 pt-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6a7f8b]">
+                        {t.recentClients}
+                      </p>
+                      {recentClients.map((client) => {
+                        const href = `/manager/clients/${client.id}`;
+                        const active = isNavItemActive(href);
+                        return (
+                          <Link
+                            key={client.id}
+                            href={href}
+                            className={`block rounded-xl px-3 py-2 text-sm ${
+                              active
+                                ? "bg-white font-semibold text-[#0f1720]"
+                                : "text-[#202f38] hover:bg-white/70"
+                            }`}
+                            title={client.companyName}
+                          >
+                            <span className="block truncate">{client.companyName}</span>
+                          </Link>
+                        );
+                      })}
+                    </>
+                  ) : null}
                 </nav>
               </section>
 

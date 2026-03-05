@@ -92,6 +92,14 @@ type SectorConfigRow = {
   last_submitted_at: string | null;
 };
 
+type ClientSectorHeadcountRow = {
+  key: string;
+  name: string;
+  remote_workers: number;
+  onsite_workers: number;
+  hybrid_workers: number;
+};
+
 type ReportRow = {
   id: string;
   survey_id: string | null;
@@ -149,12 +157,15 @@ type AvailabilitySlot = {
 const annualPlanMonthRegex = /^\d{4}-(0[1-9]|1[0-2])$/;
 const DRPS_COLLECTION_WINDOW_DAYS = 7;
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
+const AFFECTED_EMPLOYEE_SCORE_THRESHOLD = 3;
+const CRITICAL_EMPLOYEE_SCORE_THRESHOLD = 4;
 
 type ResponseRawRow = {
   id: string;
   survey_id: string;
   submitted_at: string;
   group_values: Record<string, unknown> | null;
+  answers_json?: unknown;
 };
 
 type CampaignResponseRow = {
@@ -319,6 +330,37 @@ function probabilityBandFromValue(probability: number | null): ProbabilityBand |
   return "very_frequent";
 }
 
+function smoothProbability(meanProbability: number, sampleSize: number): number {
+  const priorMean = 0.5;
+  const priorWeight = 2;
+  const smoothed =
+    (meanProbability * sampleSize + priorMean * priorWeight) /
+    Math.max(sampleSize + priorWeight, Number.EPSILON);
+  return clamp(smoothed, 0, 1);
+}
+
+function estimateOccurrenceProbabilityFromScores(scores: number[]): number | null {
+  if (scores.length === 0) return null;
+  const affectedShare =
+    scores.filter((score) => score >= AFFECTED_EMPLOYEE_SCORE_THRESHOLD).length / scores.length;
+  const severeShare = scores.filter((score) => score >= CRITICAL_EMPLOYEE_SCORE_THRESHOLD).length / scores.length;
+  const blendedFrequency = affectedShare * 0.82 + severeShare * 0.18;
+  return smoothProbability(blendedFrequency, scores.length);
+}
+
+function estimateObservedSeverityFromScores(scores: number[]): number | null {
+  if (scores.length === 0) return null;
+  const affectedScores = scores.filter((score) => score >= AFFECTED_EMPLOYEE_SCORE_THRESHOLD);
+  const severeScores = scores.filter((score) => score >= CRITICAL_EMPLOYEE_SCORE_THRESHOLD);
+  const basePool =
+    severeScores.length > 0 ? severeScores : affectedScores.length > 0 ? affectedScores : scores;
+  const baseMean = safeMean(basePool);
+  if (baseMean === null) return null;
+  const dispersion = safeStdDev(scores) ?? 0;
+  const severeShare = severeScores.length / scores.length;
+  return clamp(baseMean + dispersion * 0.18 + severeShare * 0.22, 1, 5);
+}
+
 function matrixClassFromRiskScore(score: number | null): RiskMatrixClass | null {
   if (score === null) return null;
   if (score < 1.5) return "low";
@@ -354,6 +396,14 @@ function resolveSector(groupValues: Record<string, unknown> | null): string {
   return sector.length > 0 ? sector : "Sem setor";
 }
 
+function normalizeSectorLookupValue(value: string): string {
+  return value.trim().toLocaleLowerCase("pt-BR");
+}
+
+function sanitizeHeadcount(value: number): number {
+  return Number.isFinite(value) ? Math.max(0, value) : 0;
+}
+
 function toMonthlyPeriod(isoDatetime: string): string {
   const parsed = new Date(isoDatetime);
   if (Number.isNaN(parsed.getTime())) {
@@ -377,7 +427,7 @@ function computeCriticalExposure(rows: ResponseRiskDatasetRow[]): CriticalExposu
 
   for (const row of rows) {
     allEmployees.add(row.employeeId);
-    if (row.score >= 4) {
+    if (row.score >= CRITICAL_EMPLOYEE_SCORE_THRESHOLD) {
       criticalCountByEmployee.set(row.employeeId, (criticalCountByEmployee.get(row.employeeId) ?? 0) + 1);
     }
   }
@@ -494,6 +544,32 @@ function buildResponseRiskDataset(params: {
   return rows;
 }
 
+function buildAnswerRowsFromResponses(responses: ResponseRawRow[]): AnswerScoreRow[] {
+  const answerRows: AnswerScoreRow[] = [];
+
+  for (const response of responses) {
+    if (!Array.isArray(response.answers_json)) continue;
+    for (const rawEntry of response.answers_json) {
+      if (!rawEntry || typeof rawEntry !== "object") continue;
+      const entry = rawEntry as Record<string, unknown>;
+      const questionId = entry.question_id;
+      if (typeof questionId !== "string" || questionId.trim().length === 0) continue;
+
+      const valueCandidate = entry.corrected_value ?? entry.value ?? entry.raw_value;
+      const numericValue = toNumber(valueCandidate as number | string);
+      if (numericValue === null) continue;
+
+      answerRows.push({
+        response_id: response.id,
+        question_id: questionId,
+        corrected_value: numericValue,
+      });
+    }
+  }
+
+  return answerRows;
+}
+
 function buildRiskFactorMetrics(rows: ResponseRiskDatasetRow[], topicIds: number[]): RiskFactorMetric[] {
   const rowsByTopic = new Map<number, ResponseRiskDatasetRow[]>();
   for (const row of rows) {
@@ -511,7 +587,7 @@ function buildRiskFactorMetrics(rows: ResponseRiskDatasetRow[], topicIds: number
     for (const row of topicRows) {
       distribution[row.scoreBucket] += 1;
       scores.push(row.score);
-      if (row.score >= 4) {
+      if (row.score >= AFFECTED_EMPLOYEE_SCORE_THRESHOLD) {
         affectedEmployees += 1;
       }
     }
@@ -520,15 +596,16 @@ function buildRiskFactorMetrics(rows: ResponseRiskDatasetRow[], topicIds: number
     const meanExposureRaw = safeMean(scores);
     const meanExposure = meanExposureRaw === null ? null : round(meanExposureRaw);
     const prevalence = responses > 0 ? round(affectedEmployees / responses) : null;
+    const observedSeverityRaw = estimateObservedSeverityFromScores(scores) ?? meanExposureRaw;
     const severityIndex =
-      responses > 0
-        ? round(
-            (distribution[1] + distribution[2] * 2 + distribution[3] * 3 + distribution[4] * 4 + distribution[5] * 5) /
-              (5 * responses),
-          )
+      responses > 0 && observedSeverityRaw !== null
+        ? round(clamp(observedSeverityRaw / 5, 0, 1))
         : null;
+    const meanOccurrenceProbability = estimateOccurrenceProbabilityFromScores(scores);
     const probability =
-      meanExposure === null ? null : round(clamp((meanExposure - 1) / 4, 0, 1));
+      responses > 0 && meanOccurrenceProbability !== null
+        ? round(meanOccurrenceProbability)
+        : null;
     const severity = toTopicSeverity(topicId);
     const riskScore = probability === null ? null : round(probability * severity);
     const concentrationRaw = safeStdDev(scores);
@@ -581,7 +658,7 @@ function buildTrendSeries(
         topicId: row.topicId,
         period,
         scores: [row.score],
-        affectedEmployees: row.score >= 4 ? 1 : 0,
+        affectedEmployees: row.score >= AFFECTED_EMPLOYEE_SCORE_THRESHOLD ? 1 : 0,
         distribution: {
           1: row.scoreBucket === 1 ? 1 : 0,
           2: row.scoreBucket === 2 ? 1 : 0,
@@ -593,7 +670,7 @@ function buildTrendSeries(
       continue;
     }
     entry.scores.push(row.score);
-    if (row.score >= 4) {
+    if (row.score >= AFFECTED_EMPLOYEE_SCORE_THRESHOLD) {
       entry.affectedEmployees += 1;
     }
     entry.distribution[row.scoreBucket] += 1;
@@ -605,18 +682,16 @@ function buildTrendSeries(
     const meanExposureRaw = safeMean(entry.scores) ?? 0;
     const stdDevRaw = safeStdDev(entry.scores) ?? 0;
     const prevalence = responses > 0 ? round(entry.affectedEmployees / responses) : null;
+    const observedSeverityRaw = estimateObservedSeverityFromScores(entry.scores) ?? meanExposureRaw;
     const severityIndex =
       responses > 0
-        ? round(
-            (entry.distribution[1] +
-              entry.distribution[2] * 2 +
-              entry.distribution[3] * 3 +
-              entry.distribution[4] * 4 +
-              entry.distribution[5] * 5) /
-              (5 * responses),
-          )
+        ? round(clamp(observedSeverityRaw / 5, 0, 1))
         : null;
-    const probability = clamp((meanExposureRaw - 1) / 4, 0, 1);
+    const meanOccurrenceProbability = estimateOccurrenceProbabilityFromScores(entry.scores);
+    const probability =
+      responses > 0 && meanOccurrenceProbability !== null
+        ? meanOccurrenceProbability
+        : 0;
     const severity = toTopicSeverity(entry.topicId);
     const riskScore = probability * severity;
     const list = byTopic.get(entry.topicId) ?? [];
@@ -657,7 +732,10 @@ function buildTrendSeriesFromStoredTimeseries(
 
     const sector = (row.sector_name ?? "").trim() || "Sem setor";
     const key = `${sector}:${row.topic_id}`;
-    const probability = clamp((meanExposure - 1) / 4, 0, 1);
+    const meanProbability = clamp((meanExposure - 1) / 4, 0, 1);
+    const spreadPressure = clamp(stdDevExposure / 2.2, 0, 1);
+    const probability = clamp(meanProbability * 0.72 + spreadPressure * 0.28, 0, 1);
+    const observedSeverity = clamp(meanExposure + stdDevExposure * 0.2 + probability * 0.15, 1, 5);
     const severity = toTopicSeverity(row.topic_id);
     const riskScore = probability * severity;
 
@@ -677,7 +755,7 @@ function buildTrendSeriesFromStoredTimeseries(
       meanExposure: round(meanExposure),
       stdDevExposure: round(Math.max(0, stdDevExposure)),
       prevalence: null,
-      severityIndex: round(clamp(meanExposure / 5, 0, 1)),
+      severityIndex: round(clamp(observedSeverity / 5, 0, 1)),
       probability: round(probability),
       severity,
       riskScore: round(riskScore),
@@ -824,6 +902,11 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
+function probabilityToSeverityScale(probability: number | null): number | null {
+  if (probability === null || Number.isNaN(probability)) return null;
+  return round(clamp(1 + probability * 4, 1, 5), 4);
+}
+
 function parseSlots(value: unknown): AvailabilitySlot[] {
   if (!Array.isArray(value)) return [];
   const slots: AvailabilitySlot[] = [];
@@ -903,6 +986,8 @@ export async function GET(
 ) {
   const { clientSlug } = await context.params;
   const selectedCampaignId = request.nextUrl.searchParams.get("campaignId");
+  const selectedSectorFilterInput = request.nextUrl.searchParams.get("sector")?.trim() ?? "";
+  const selectedSectorFilter = selectedSectorFilterInput.length > 0 ? selectedSectorFilterInput : null;
   const supabase = getSupabaseAdminClient();
   let client: ClientRow | null = null;
   const { data: modernClient, error: clientError } = await supabase
@@ -1295,6 +1380,7 @@ export async function GET(
     responseRowsResult,
     questionTopicsResult,
     storedTimeseriesResult,
+    clientSectorHeadcountResult,
   ] = await Promise.all([
     supabase
       .from("drps_assessments")
@@ -1303,7 +1389,6 @@ export async function GET(
       )
       .in("survey_id", dashboardCampaignIds)
       .order("created_at", { ascending: false })
-      .limit(1)
       .returns<DrpsSnapshotRow[]>(),
     supabase
       .from("survey_sectors")
@@ -1313,7 +1398,7 @@ export async function GET(
       .returns<SectorConfigRow[]>(),
     supabase
       .from("responses")
-      .select("id,survey_id,submitted_at,group_values")
+      .select("id,survey_id,submitted_at,group_values,answers_json")
       .in("survey_id", dashboardCampaignIds)
       .returns<ResponseRawRow[]>(),
     supabase
@@ -1322,6 +1407,11 @@ export async function GET(
       .in("survey_id", dashboardCampaignIds)
       .returns<QuestionTopicRow[]>(),
     storedTimeseriesPromise,
+    supabase
+      .from("client_sectors")
+      .select("key,name,remote_workers,onsite_workers,hybrid_workers")
+      .eq("client_id", client.client_id)
+      .returns<ClientSectorHeadcountRow[]>(),
   ]);
 
   if (
@@ -1340,14 +1430,78 @@ export async function GET(
         ? storedTimeseriesResult.data
         : [];
 
-  const responseRows = Array.isArray(responseRowsResult.data) ? responseRowsResult.data : [];
+  const rawSectorConfigs = Array.isArray(sectorConfigResult.data) ? sectorConfigResult.data : [];
+  const rawClientSectorHeadcounts =
+    clientSectorHeadcountResult.error &&
+    !isMissingTableError(clientSectorHeadcountResult.error, "client_sectors") &&
+    !isMissingColumnError(clientSectorHeadcountResult.error, "remote_workers") &&
+    !isMissingColumnError(clientSectorHeadcountResult.error, "onsite_workers") &&
+    !isMissingColumnError(clientSectorHeadcountResult.error, "hybrid_workers")
+      ? []
+      : Array.isArray(clientSectorHeadcountResult.data)
+        ? clientSectorHeadcountResult.data
+        : [];
+  const sectorHeadcountByLookup = new Map<string, number>();
+  for (const sector of rawClientSectorHeadcounts) {
+    const employees =
+      sanitizeHeadcount(sector.remote_workers) +
+      sanitizeHeadcount(sector.onsite_workers) +
+      sanitizeHeadcount(sector.hybrid_workers);
+    if (sector.key.trim().length > 0) {
+      sectorHeadcountByLookup.set(normalizeSectorLookupValue(sector.key), employees);
+    }
+    if (sector.name.trim().length > 0) {
+      sectorHeadcountByLookup.set(normalizeSectorLookupValue(sector.name), employees);
+    }
+  }
+  const resolveConfiguredSectorEmployees = (sectorName: string, sectorKey: string | null | undefined): number | null => {
+    const byKey =
+      sectorKey && sectorKey.trim().length > 0
+        ? sectorHeadcountByLookup.get(normalizeSectorLookupValue(sectorKey))
+        : undefined;
+    if (typeof byKey === "number") return byKey;
+    const byName = sectorHeadcountByLookup.get(normalizeSectorLookupValue(sectorName));
+    return typeof byName === "number" ? byName : null;
+  };
+  const responseRowsRaw = Array.isArray(responseRowsResult.data) ? responseRowsResult.data : [];
+  const responseRowsWithSector = responseRowsRaw.map((row) => ({
+    row,
+    sectorName: resolveSector(row.group_values),
+  }));
+  const sectorNamesForLookup = Array.from(
+    new Set([
+      ...rawSectorConfigs.map((item) => item.name),
+      ...responseRowsWithSector.map((item) => item.sectorName),
+    ]),
+  );
+  const sectorFilterLookup = selectedSectorFilter
+    ? normalizeSectorLookupValue(selectedSectorFilter)
+    : null;
+  const resolvedSectorFilterName =
+    sectorFilterLookup === null
+      ? null
+      : sectorNamesForLookup.find(
+          (name) => normalizeSectorLookupValue(name) === sectorFilterLookup,
+        ) ?? selectedSectorFilter;
+  const activeSectorScopeLookup = resolvedSectorFilterName
+    ? normalizeSectorLookupValue(resolvedSectorFilterName)
+    : null;
+  const isSectorInScope = (value: string) =>
+    activeSectorScopeLookup === null ||
+    normalizeSectorLookupValue(value) === activeSectorScopeLookup;
+
+  const responseRows = responseRowsWithSector
+    .filter((entry) => isSectorInScope(entry.sectorName))
+    .map((entry) => entry.row);
   const responseCountBySectorName = new Map<string, number>();
   const responseTimeseriesByDay = new Map<string, number>();
   const timeseriesCutoff = new Date();
   timeseriesCutoff.setUTCHours(0, 0, 0, 0);
   timeseriesCutoff.setUTCDate(timeseriesCutoff.getUTCDate() - 29);
-  for (const response of responseRows) {
-    const sectorName = resolveSector(response.group_values);
+  for (const responseEntry of responseRowsWithSector) {
+    if (!isSectorInScope(responseEntry.sectorName)) continue;
+    const response = responseEntry.row;
+    const sectorName = responseEntry.sectorName;
     responseCountBySectorName.set(sectorName, (responseCountBySectorName.get(sectorName) ?? 0) + 1);
     const submittedAt = new Date(response.submitted_at);
     if (Number.isNaN(submittedAt.getTime()) || submittedAt < timeseriesCutoff) continue;
@@ -1363,19 +1517,30 @@ export async function GET(
   const questionTopicById = new Map(questionTopicRows.map((row) => [row.id, row.topic_id]));
   const questionIds = Array.from(questionTopicById.keys());
 
-  let answerRows: AnswerScoreRow[] = [];
+  let answerRows: AnswerScoreRow[] = buildAnswerRowsFromResponses(responseRows);
   if (questionIds.length > 0) {
-    const answersResult = await supabase
-      .from("answers")
-      .select("response_id,question_id,corrected_value")
-      .in("question_id", questionIds)
-      .returns<AnswerScoreRow[]>();
+    const answeredResponseIds = new Set(answerRows.map((row) => row.response_id));
+    const missingResponseIds = responseRows
+      .map((row) => row.id)
+      .filter((responseId) => !answeredResponseIds.has(responseId));
 
-    if (answersResult.error) {
-      return NextResponse.json({ error: "Could not load campaign dashboard." }, { status: 500 });
+    if (missingResponseIds.length > 0) {
+      const answersResult = await supabase
+        .from("answers")
+        .select("response_id,question_id,corrected_value")
+        .in("response_id", missingResponseIds)
+        .in("question_id", questionIds)
+        .returns<AnswerScoreRow[]>();
+
+      if (answersResult.error) {
+        return NextResponse.json({ error: "Could not load campaign dashboard." }, { status: 500 });
+      }
+
+      const fallbackAnswerRows = Array.isArray(answersResult.data) ? answersResult.data : [];
+      if (fallbackAnswerRows.length > 0) {
+        answerRows = answerRows.concat(fallbackAnswerRows);
+      }
     }
-
-    answerRows = Array.isArray(answersResult.data) ? answersResult.data : [];
   }
 
   const responseRiskDataset = buildResponseRiskDataset({
@@ -1399,7 +1564,7 @@ export async function GET(
       topic_id: metric.topicId,
       n_responses: metric.responses,
       mean_severity: metric.meanExposure,
-      mean_probability: metric.meanExposure,
+      mean_probability: probabilityToSeverityScale(metric.probability),
     }),
   );
   const normalizedGlobalWithLabels = normalizedGlobal.map((topic) => ({
@@ -1419,7 +1584,10 @@ export async function GET(
     critical: normalizedGlobal.filter((item) => item.risk === "critical").length,
   };
 
-  const sectorConfigs = Array.isArray(sectorConfigResult.data) ? sectorConfigResult.data : [];
+  const latestDrpsRows = Array.isArray(latestDrpsResult.data) ? latestDrpsResult.data : [];
+  const latestDrps =
+    latestDrpsRows.find((row) => isSectorInScope(row.sector)) ?? null;
+  const sectorConfigs = rawSectorConfigs.filter((item) => isSectorInScope(item.name));
   const configByName = new Map(sectorConfigs.map((item) => [item.name, item]));
   const allSectorNames = Array.from(
     new Set([
@@ -1440,6 +1608,10 @@ export async function GET(
     const nResponses = responseCountBySectorName.get(sectorName) ?? 0;
     const suppressed = nResponses > 0 && nResponses < kAnonymityMin;
     const sectorRows = datasetRowsBySectorName.get(sectorName) ?? [];
+    const configuredEmployees = resolveConfiguredSectorEmployees(
+      sectorName,
+      configByName.get(sectorName)?.key,
+    );
 
     if (suppressed || nResponses === 0) {
       sectorMetricByName.set(sectorName, {
@@ -1452,7 +1624,7 @@ export async function GET(
         riskConcentration: null,
         criticalExposure: null,
         criticalEmployees: 0,
-        employeeCount: 0,
+        employeeCount: configuredEmployees ?? 0,
         riskFactors: [],
       });
       continue;
@@ -1475,7 +1647,7 @@ export async function GET(
       riskConcentration,
       criticalExposure: criticalExposure.rate,
       criticalEmployees: criticalExposure.criticalEmployees,
-      employeeCount: criticalExposure.employees,
+      employeeCount: configuredEmployees ?? criticalExposure.employees,
       riskFactors,
     });
   }
@@ -1536,7 +1708,7 @@ export async function GET(
         riskConcentration: null,
         criticalExposure: null,
         criticalEmployees: 0,
-        employeeCount: 0,
+        employeeCount: snapshot?.employeeCount ?? 0,
         riskFactors: [],
       });
       continue;
@@ -1544,12 +1716,13 @@ export async function GET(
 
     const normalizedTopics: Array<ReturnType<typeof normalizeTopic>> = snapshot.riskFactors.map((riskFactor) => {
       const severityClass = classifyScore(riskFactor.meanExposure);
-      const probabilityClass = classifyScore(riskFactor.meanExposure);
+      const meanProbability = probabilityToSeverityScale(riskFactor.probability);
+      const probabilityClass = classifyScore(meanProbability);
       return {
         topicId: riskFactor.topicId,
         nResponses: snapshot.nResponses,
         meanSeverity: riskFactor.meanExposure,
-        meanProbability: riskFactor.meanExposure,
+        meanProbability,
         severityClass,
         probabilityClass,
         risk: resolveRisk(severityClass, probabilityClass),
@@ -1603,7 +1776,10 @@ export async function GET(
   const trendTopicIds = globalRiskFactors.map((metric) => metric.topicId);
   const storedTrendSeries = buildTrendSeriesFromStoredTimeseries(
     storedTimeseriesRows.filter(
-      (row) => trendTopicIds.includes(row.topic_id) && !suppressedSectorSet.has(row.sector_name),
+      (row) =>
+        trendTopicIds.includes(row.topic_id) &&
+        !suppressedSectorSet.has(row.sector_name) &&
+        isSectorInScope(row.sector_name),
     ),
     trendTopicIds,
   );
@@ -1662,7 +1838,7 @@ export async function GET(
       topics: normalizedGlobalWithLabels,
       responseTimeseries,
       sectors,
-      latestDrps: Array.isArray(latestDrpsResult.data) ? latestDrpsResult.data[0] ?? null : null,
+      latestDrps,
       metrics: {
         dataset: {
           totalRows: responseRiskDataset.length,
@@ -1690,7 +1866,10 @@ export async function GET(
           topicId: metric.topicId,
           riskFactor: metric.riskFactor,
           probability: metric.probability,
-          severity: metric.severity,
+          severity:
+            metric.severityIndex === null
+              ? metric.severity
+              : round(clamp(metric.severityIndex * 5, 1, 5), 2),
           riskScore: metric.riskScore,
           affectedEmployees: metric.affectedEmployees,
           category: metric.riskCategory,

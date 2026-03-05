@@ -35,7 +35,9 @@ type Report = {
 
 type SectorLink = {
   id: string;
+  key?: string;
   name: string;
+  riskParameter?: number;
   accessLink: string;
   isActive: boolean;
   submissionCount: number;
@@ -139,6 +141,30 @@ function csvEscape(value: string | number | null): string {
   return `"${String(value).replace(/"/g, '""')}"`;
 }
 
+async function copyTextToClipboard(value: string): Promise<boolean> {
+  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(value);
+      return true;
+    } catch {
+      // Fallback below.
+    }
+  }
+
+  if (typeof document === "undefined") return false;
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.setAttribute("readonly", "true");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  const copied = document.execCommand("copy");
+  document.body.removeChild(textarea);
+  return copied;
+}
+
 function campaignCollectionStatus(status: Campaign["status"]) {
   if (status === "live") return "Questionario aberto (coletando respostas)";
   if (status === "closed") return "Questionario fechado";
@@ -203,7 +229,15 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
   const [isLinksModalOpen, setIsLinksModalOpen] = useState(false);
   const [isLoadingLinksFor, setIsLoadingLinksFor] = useState<string | null>(null);
   const [copiedSectorId, setCopiedSectorId] = useState<string | null>(null);
+  const [expandedCampaignId, setExpandedCampaignId] = useState<string | null>(null);
+  const [expandedCampaignSectorsById, setExpandedCampaignSectorsById] = useState<
+    Record<string, SectorLink[]>
+  >({});
+  const [loadingExpandedCampaignId, setLoadingExpandedCampaignId] = useState<string | null>(null);
+  const [openCampaignActionsFor, setOpenCampaignActionsFor] = useState<string | null>(null);
+  const [openCampaignSectorActionsFor, setOpenCampaignSectorActionsFor] = useState<string | null>(null);
   const [drpsActionError, setDrpsActionError] = useState("");
+  const [drpsActionNotice, setDrpsActionNotice] = useState("");
   const [calendarMonth, setCalendarMonth] = useState(() => {
     const now = new Date();
     return new Date(now.getFullYear(), now.getMonth(), 1);
@@ -273,20 +307,32 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
     void loadData(resultsCampaign.id);
   }, [loadData, payload, resultsCampaign]);
 
+  useEffect(() => {
+    if (!expandedCampaignId) return;
+    if ((payload?.campaigns ?? []).some((campaign) => campaign.id === expandedCampaignId)) return;
+    setExpandedCampaignId(null);
+  }, [expandedCampaignId, payload?.campaigns]);
+
+  async function fetchCampaignSectorPayload(campaignId: string): Promise<SectorPayload> {
+    const response = await fetch(`/api/client/portal/${clientSlug}/campaigns/${campaignId}/sectors`, {
+      cache: "no-store",
+    });
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new Error(payload.error ?? "Falha ao carregar links do questionario.");
+    }
+    return (await response.json()) as SectorPayload;
+  }
+
   async function loadQuestionnaireLinks(campaign: Campaign) {
     setIsLoadingLinksFor(campaign.id);
     setDrpsActionError("");
+    setDrpsActionNotice("");
     setLinksPayload(null);
     setIsLinksModalOpen(false);
     try {
-      const response = await fetch(`/api/client/portal/${clientSlug}/campaigns/${campaign.id}/sectors`, {
-        cache: "no-store",
-      });
-      if (!response.ok) {
-        setDrpsActionError("Falha ao carregar links do questionario.");
-        return;
-      }
-      setLinksPayload((await response.json()) as SectorPayload);
+      const payload = await fetchCampaignSectorPayload(campaign.id);
+      setLinksPayload(payload);
       setCopiedSectorId(null);
       setIsLinksModalOpen(true);
     } catch {
@@ -296,17 +342,72 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
     }
   }
 
+  async function toggleCampaignPackage(campaignId: string) {
+    if (expandedCampaignId === campaignId) {
+      setExpandedCampaignId(null);
+      return;
+    }
+
+    setExpandedCampaignId(campaignId);
+    if (expandedCampaignSectorsById[campaignId]) return;
+
+    setLoadingExpandedCampaignId(campaignId);
+    try {
+      const payload = await fetchCampaignSectorPayload(campaignId);
+      setExpandedCampaignSectorsById((previous) => ({
+        ...previous,
+        [campaignId]: payload.sectors ?? [],
+      }));
+    } catch {
+      setDrpsActionError("Falha ao carregar setores do pacote DRPS.");
+    } finally {
+      setLoadingExpandedCampaignId((previous) => (previous === campaignId ? null : previous));
+    }
+  }
+
+  function openCampaignResults(campaignId: string, sectorName?: string) {
+    const search = sectorName ? `?sector=${encodeURIComponent(sectorName)}` : "";
+    router.push(`/client/${clientSlug}/diagnostic/${campaignId}${search}`);
+  }
+
+  function openSingleSectorLinkModal(campaign: Campaign, sector: SectorLink) {
+    setDrpsActionError("");
+    setDrpsActionNotice("");
+    setCopiedSectorId(null);
+    setLinksPayload({
+      campaign: {
+        id: campaign.id,
+        name: campaign.name,
+        slug: campaign.public_slug,
+      },
+      sectors: [sector],
+    });
+    setIsLinksModalOpen(true);
+  }
+
   async function copySectorLink(sector: SectorLink) {
     if (!sector.isActive) {
       return;
     }
-    await navigator.clipboard.writeText(sector.accessLink);
+    setDrpsActionNotice("");
+    const link = sector.accessLink?.trim();
+    if (!link) {
+      setDrpsActionError("Link do setor indisponivel.");
+      return;
+    }
+    const copied = await copyTextToClipboard(link);
+    if (!copied) {
+      window.prompt("Copie o link do setor:", link);
+    }
     setCopiedSectorId(sector.id);
+    setDrpsActionError("");
+    setDrpsActionNotice(`Link copiado para o setor ${sector.name}.`);
     window.setTimeout(() => setCopiedSectorId(null), 1200);
   }
 
   async function copyAllLinks() {
     if (!linksPayload) return;
+    setDrpsActionNotice("");
     const lines = linksPayload.sectors
       .filter((sector) => sector.isActive)
       .map((sector) => `${sector.name}: ${sector.accessLink}`);
@@ -314,7 +415,12 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
       setDrpsActionError("Nenhum setor ativo para copiar.");
       return;
     }
-    await navigator.clipboard.writeText(lines.join("\n"));
+    const copied = await copyTextToClipboard(lines.join("\n"));
+    if (!copied) {
+      window.prompt("Copie os links dos setores:", lines.join("\n"));
+    }
+    setDrpsActionError("");
+    setDrpsActionNotice("Links dos setores copiados.");
   }
 
   function exportLinksCsv() {
@@ -789,42 +895,172 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
           <table className="min-w-full text-sm">
             <thead>
               <tr className="border-b">
+                <th className="px-2 py-2 text-left">Pacote</th>
                 <th className="px-2 py-2 text-left">Diagnostico</th>
                 <th className="px-2 py-2 text-left">Status</th>
                 <th className="px-2 py-2 text-left">Inicio</th>
                 <th className="px-2 py-2 text-left">Fechamento</th>
                 <th className="px-2 py-2 text-left">Respostas</th>
+                <th className="px-2 py-2 text-left">Actions</th>
               </tr>
             </thead>
             <tbody>
               {openCampaigns.length === 0 ? (
                 <tr>
-                  <td className="px-2 py-3 text-xs text-[#5a7383]" colSpan={5}>
+                  <td className="px-2 py-3 text-xs text-[#5a7383]" colSpan={7}>
                     Sem questionarios abertos coletando respostas no momento.
                   </td>
                 </tr>
               ) : (
-                openCampaigns.map((campaign) => (
-                  <tr key={campaign.id} className="border-b">
-                    <td className="px-2 py-2">
-                      <Link
-                        href={`/client/${clientSlug}/diagnostic/${campaign.id}`}
-                        className="font-semibold text-[#123447] hover:text-[#0f5b73] hover:underline"
-                      >
-                        {campaign.name}
-                      </Link>
-                    </td>
-                    <td className="px-2 py-2">{campaignCollectionStatus(campaign.status)}</td>
-                    <td className="px-2 py-2">{fmt(campaign.starts_at)}</td>
-                    <td className="px-2 py-2">{fmt(campaign.closes_at)}</td>
-                    <td className="px-2 py-2">{campaign.responses ?? 0}</td>
-                  </tr>
-                ))
+                openCampaigns.map((campaign) => {
+                  const isExpanded = expandedCampaignId === campaign.id;
+                  const expandedSectors = expandedCampaignSectorsById[campaign.id] ?? [];
+                  const responseTotal = expandedSectors.reduce(
+                    (total, sector) => total + (sector.submissionCount ?? 0),
+                    0,
+                  );
+                  return [
+                    <tr key={`${campaign.id}-main`} className="border-b">
+                      <td className="px-2 py-2">
+                        <button
+                          type="button"
+                          onClick={() => void toggleCampaignPackage(campaign.id)}
+                          className="rounded-full border border-[#c9dce8] px-2 py-0.5 text-xs font-semibold text-[#123447]"
+                          title="Abrir/fechar sub-questionarios por setor"
+                        >
+                          {isExpanded ? "-" : "+"}
+                        </button>
+                      </td>
+                      <td className="px-2 py-2">
+                        <Link
+                          href={`/client/${clientSlug}/diagnostic/${campaign.id}`}
+                          className="font-semibold text-[#123447] hover:text-[#0f5b73] hover:underline"
+                        >
+                          {campaign.name}
+                        </Link>
+                      </td>
+                      <td className="px-2 py-2">{campaignCollectionStatus(campaign.status)}</td>
+                      <td className="px-2 py-2">{fmt(campaign.starts_at)}</td>
+                      <td className="px-2 py-2">{fmt(campaign.closes_at)}</td>
+                      <td className="px-2 py-2">{responseTotal || campaign.responses || 0}</td>
+                      <td className="px-2 py-2">
+                        <div className="relative inline-flex">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setOpenCampaignActionsFor((previous) =>
+                                previous === campaign.id ? null : campaign.id,
+                              )
+                            }
+                            className="rounded-full border border-[#c9dce8] px-3 py-1 text-xs font-semibold text-[#123447]"
+                          >
+                            ...
+                          </button>
+                          {openCampaignActionsFor === campaign.id ? (
+                            <div className="absolute right-0 top-full z-20 mt-2 w-52 overflow-hidden rounded-xl border border-[#d8e4ee] bg-white shadow-lg">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setOpenCampaignActionsFor(null);
+                                  openCampaignResults(campaign.id);
+                                }}
+                                className="block w-full px-3 py-2 text-left text-xs font-semibold text-[#123447] hover:bg-[#f4f9fc]"
+                              >
+                                Ver resultados
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setOpenCampaignActionsFor(null);
+                                  void loadQuestionnaireLinks(campaign);
+                                }}
+                                className="block w-full px-3 py-2 text-left text-xs font-semibold text-[#0f5b73] hover:bg-[#f4f9fc]"
+                              >
+                                Gerar links
+                              </button>
+                            </div>
+                          ) : null}
+                        </div>
+                      </td>
+                    </tr>,
+                    isExpanded ? (
+                      loadingExpandedCampaignId === campaign.id ? (
+                        <tr key={`${campaign.id}-loading`} className="border-b bg-[#f8fbfd]">
+                          <td colSpan={7} className="px-2 py-3 text-xs text-[#5a7383]">
+                            Carregando sub-questionarios...
+                          </td>
+                        </tr>
+                      ) : expandedSectors.length === 0 ? (
+                        <tr key={`${campaign.id}-empty`} className="border-b bg-[#f8fbfd]">
+                          <td colSpan={7} className="px-2 py-3 text-xs text-[#5a7383]">
+                            Nenhum sub-questionario por setor.
+                          </td>
+                        </tr>
+                      ) : (
+                        expandedSectors.map((sector) => {
+                          const subItemKey = `${campaign.id}:${sector.id}`;
+                          return (
+                            <tr key={subItemKey} className="border-b bg-[#f8fbfd]">
+                              <td className="px-2 py-2 text-xs text-[#5a7383]">sub</td>
+                              <td className="px-2 py-2 text-xs font-semibold text-[#123447]">{sector.name}</td>
+                              <td className="px-2 py-2 text-xs">
+                                {sector.isActive ? "Sub-questionario ativo" : "Sub-questionario inativo"}
+                              </td>
+                              <td className="px-2 py-2 text-xs">{fmt(campaign.starts_at)}</td>
+                              <td className="px-2 py-2 text-xs">{fmt(campaign.closes_at)}</td>
+                              <td className="px-2 py-2 text-xs">{sector.submissionCount}</td>
+                              <td className="px-2 py-2 text-xs">
+                                <div className="relative inline-flex">
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setOpenCampaignSectorActionsFor((previous) =>
+                                        previous === subItemKey ? null : subItemKey,
+                                      )
+                                    }
+                                    className="rounded-full border border-[#c9dce8] px-3 py-1 text-xs font-semibold text-[#123447]"
+                                  >
+                                    ...
+                                  </button>
+                                  {openCampaignSectorActionsFor === subItemKey ? (
+                                    <div className="absolute right-0 top-full z-20 mt-2 w-52 overflow-hidden rounded-xl border border-[#d8e4ee] bg-white shadow-lg">
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setOpenCampaignSectorActionsFor(null);
+                                          openCampaignResults(campaign.id, sector.name);
+                                        }}
+                                        className="block w-full px-3 py-2 text-left text-xs font-semibold text-[#123447] hover:bg-[#f4f9fc]"
+                                      >
+                                        Ver resultados
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setOpenCampaignSectorActionsFor(null);
+                                          openSingleSectorLinkModal(campaign, sector);
+                                        }}
+                                        className="block w-full px-3 py-2 text-left text-xs font-semibold text-[#0f5b73] hover:bg-[#f4f9fc]"
+                                      >
+                                        Gerar link (singulo)
+                                      </button>
+                                    </div>
+                                  ) : null}
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )
+                    ) : null,
+                  ];
+                })
               )}
             </tbody>
           </table>
         </div>
         {drpsActionError ? <p className="mt-3 text-sm text-red-600">{drpsActionError}</p> : null}
+        {drpsActionNotice ? <p className="mt-2 text-sm text-[#1f6b2f]">{drpsActionNotice}</p> : null}
       </section>
 
       <section className="h-auto max-h-none overflow-visible rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
