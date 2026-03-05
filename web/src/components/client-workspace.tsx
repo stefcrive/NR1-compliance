@@ -753,19 +753,32 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
       <section className="rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h3 className="text-lg font-semibold text-[#123447]">Diagnosticos DRPS</h3>
-          <button
-            type="button"
-            disabled={!linksActionCampaign || isLoadingLinksFor === linksActionCampaign.id}
-            onClick={() => {
-              if (!linksActionCampaign) return;
-              void loadQuestionnaireLinks(linksActionCampaign);
-            }}
-            className="rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73] disabled:cursor-not-allowed disabled:border-[#d6dde2] disabled:text-[#95a4ae]"
-          >
-            {linksActionCampaign && isLoadingLinksFor === linksActionCampaign.id
-              ? "Carregando..."
-              : "Gerar link questionario"}
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              disabled={!resultsCampaign}
+              onClick={() => {
+                if (!resultsCampaign) return;
+                router.push(`/client/${clientSlug}/diagnostic/${resultsCampaign.id}`);
+              }}
+              className="rounded-full border border-[#c9dce8] px-3 py-1 text-xs font-semibold text-[#123447] disabled:cursor-not-allowed disabled:border-[#d6dde2] disabled:text-[#95a4ae]"
+            >
+              Ver resultados
+            </button>
+            <button
+              type="button"
+              disabled={!linksActionCampaign || isLoadingLinksFor === linksActionCampaign.id}
+              onClick={() => {
+                if (!linksActionCampaign) return;
+                void loadQuestionnaireLinks(linksActionCampaign);
+              }}
+              className="rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73] disabled:cursor-not-allowed disabled:border-[#d6dde2] disabled:text-[#95a4ae]"
+            >
+              {linksActionCampaign && isLoadingLinksFor === linksActionCampaign.id
+                ? "Carregando..."
+                : "Gerar link questionario"}
+            </button>
+          </div>
         </div>
         <p className="mt-2 text-xs text-[#4f6977]">
           {selectedCampaign
@@ -781,13 +794,12 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
                 <th className="px-2 py-2 text-left">Inicio</th>
                 <th className="px-2 py-2 text-left">Fechamento</th>
                 <th className="px-2 py-2 text-left">Respostas</th>
-                <th className="px-2 py-2 text-left">Acoes</th>
               </tr>
             </thead>
             <tbody>
               {openCampaigns.length === 0 ? (
                 <tr>
-                  <td className="px-2 py-3 text-xs text-[#5a7383]" colSpan={6}>
+                  <td className="px-2 py-3 text-xs text-[#5a7383]" colSpan={5}>
                     Sem questionarios abertos coletando respostas no momento.
                   </td>
                 </tr>
@@ -806,17 +818,6 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
                     <td className="px-2 py-2">{fmt(campaign.starts_at)}</td>
                     <td className="px-2 py-2">{fmt(campaign.closes_at)}</td>
                     <td className="px-2 py-2">{campaign.responses ?? 0}</td>
-                    <td className="px-2 py-2">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          router.push(`/client/${clientSlug}/diagnostic/${campaign.id}`);
-                        }}
-                        className="rounded-full border border-[#c9dce8] px-3 py-1 text-xs font-semibold text-[#123447]"
-                      >
-                        Ver resultados
-                      </button>
-                    </td>
                   </tr>
                 ))
               )}

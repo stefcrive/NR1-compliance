@@ -64,11 +64,6 @@ type TopicAggregateRow = {
   mean_probability: number | null;
 };
 
-type GroupCountRow = {
-  group_value: string;
-  n_responses: number;
-};
-
 type TimeseriesRow = {
   day: string;
   response_count: number;
@@ -86,6 +81,7 @@ type DrpsSnapshotRow = {
 };
 
 type SectorConfigRow = {
+  survey_id: string;
   id: string;
   key: string;
   name: string;
@@ -1117,6 +1113,21 @@ export async function GET(
     campaignsWithLinks.find((item) => item.status === "live") ??
     campaignsWithLinks[0] ??
     null;
+  const dashboardCampaigns =
+    campaignsWithLinks.filter((item) => item.status === "live").length > 0
+      ? campaignsWithLinks.filter((item) => item.status === "live")
+      : [
+          campaignsWithLinks.find((item) => item.status === "closed") ??
+            selectedCampaign ??
+            campaignsWithLinks[0],
+        ].filter((item): item is (typeof campaignsWithLinks)[number] => Boolean(item));
+  const dashboardCampaignIds = dashboardCampaigns.map((item) => item.id);
+  const dashboardCampaignById = new Map(dashboardCampaigns.map((campaign) => [campaign.id, campaign]));
+  const dashboardPrimaryCampaign = dashboardCampaigns[0] ?? selectedCampaign;
+  const kAnonymityMin =
+    dashboardCampaigns.length > 0
+      ? Math.max(...dashboardCampaigns.map((campaign) => campaign.k_anonymity_min))
+      : selectedCampaign?.k_anonymity_min ?? 1;
 
   const assignments = assignmentsMissing ? [] : assignmentsResult.data ?? [];
   const programIds = Array.from(new Set(assignments.map((item) => item.program_id)));
@@ -1253,31 +1264,32 @@ export async function GET(
     });
   }
 
-  const refreshTimeseriesResult = await supabase.rpc("refresh_survey_sector_risk_factor_timeseries", {
-    p_survey_id: selectedCampaign.id,
-  });
-  const storedTimeseriesFeatureAvailable =
-    !refreshTimeseriesResult.error ||
-    !isMissingFunctionError(
-      refreshTimeseriesResult.error,
-      "refresh_survey_sector_risk_factor_timeseries",
-    );
+  const refreshTimeseriesResults = await Promise.all(
+    dashboardCampaignIds.map((campaignId) =>
+      supabase.rpc("refresh_survey_sector_risk_factor_timeseries", {
+        p_survey_id: campaignId,
+      }),
+    ),
+  );
+  const storedTimeseriesFeatureAvailable = refreshTimeseriesResults.every(
+    (result) =>
+      !result.error ||
+      !isMissingFunctionError(result.error, "refresh_survey_sector_risk_factor_timeseries"),
+  );
 
-  const storedTimeseriesPromise = storedTimeseriesFeatureAvailable
-    ? supabase
-        .from("survey_sector_risk_factor_timeseries")
-        .select("sector_name,topic_id,period_start,response_count,mean_exposure,std_dev_exposure")
-        .eq("survey_id", selectedCampaign.id)
-        .returns<SectorRiskFactorTimeseriesRow[]>()
-    : Promise.resolve({
-        data: [] as SectorRiskFactorTimeseriesRow[],
-        error: null,
-      });
+  const storedTimeseriesPromise =
+    storedTimeseriesFeatureAvailable && dashboardCampaignIds.length > 0
+      ? supabase
+          .from("survey_sector_risk_factor_timeseries")
+          .select("sector_name,topic_id,period_start,response_count,mean_exposure,std_dev_exposure")
+          .in("survey_id", dashboardCampaignIds)
+          .returns<SectorRiskFactorTimeseriesRow[]>()
+      : Promise.resolve({
+          data: [] as SectorRiskFactorTimeseriesRow[],
+          error: null,
+        });
 
   const [
-    globalResult,
-    sectorCountsResult,
-    timeseriesResult,
     latestDrpsResult,
     sectorConfigResult,
     responseRowsResult,
@@ -1285,56 +1297,34 @@ export async function GET(
     storedTimeseriesResult,
   ] = await Promise.all([
     supabase
-      .rpc("get_topic_aggregates", {
-        p_survey_id: selectedCampaign.id,
-        p_group_key: null,
-        p_group_value: null,
-      })
-      .returns<TopicAggregateRow[]>(),
-    supabase
-      .rpc("get_group_counts", {
-        p_survey_id: selectedCampaign.id,
-        p_group_key: "sector",
-      })
-      .returns<GroupCountRow[]>(),
-    supabase
-      .rpc("get_response_timeseries", {
-        p_survey_id: selectedCampaign.id,
-        p_days: 30,
-      })
-      .returns<TimeseriesRow[]>(),
-    supabase
       .from("drps_assessments")
       .select(
         "id,sector,reference_period,part1_probability_score,part1_probability_class,recommended_programs,governance_actions,created_at",
       )
-      .eq("survey_id", selectedCampaign.id)
+      .in("survey_id", dashboardCampaignIds)
       .order("created_at", { ascending: false })
       .limit(1)
       .returns<DrpsSnapshotRow[]>(),
     supabase
       .from("survey_sectors")
-      .select("id,key,name,risk_parameter,access_token,is_active,submission_count,last_submitted_at")
-      .eq("survey_id", selectedCampaign.id)
+      .select("survey_id,id,key,name,risk_parameter,access_token,is_active,submission_count,last_submitted_at")
+      .in("survey_id", dashboardCampaignIds)
       .eq("is_active", true)
       .returns<SectorConfigRow[]>(),
     supabase
       .from("responses")
       .select("id,survey_id,submitted_at,group_values")
-      .eq("survey_id", selectedCampaign.id)
+      .in("survey_id", dashboardCampaignIds)
       .returns<ResponseRawRow[]>(),
     supabase
       .from("questions")
       .select("id,topic_id")
-      .eq("survey_id", selectedCampaign.id)
+      .in("survey_id", dashboardCampaignIds)
       .returns<QuestionTopicRow[]>(),
     storedTimeseriesPromise,
   ]);
 
   if (
-    globalResult.error ||
-    sectorCountsResult.error ||
-    timeseriesResult.error ||
     latestDrpsResult.error ||
     sectorConfigResult.error ||
     responseRowsResult.error ||
@@ -1350,26 +1340,24 @@ export async function GET(
         ? storedTimeseriesResult.data
         : [];
 
-  const globalRows = Array.isArray(globalResult.data) ? globalResult.data : [];
-  const normalizedGlobal = globalRows.map(normalizeTopic);
-  const normalizedGlobalWithLabels = normalizedGlobal.map((topic) => ({
-    ...topic,
-    riskFactor: toTopicLabel(topic.topicId),
-    severity: toTopicSeverity(topic.topicId),
-  }));
-
-  const sectorCounts = Array.isArray(sectorCountsResult.data) ? sectorCountsResult.data : [];
-  const countBySectorName = new Map<string, number>();
-  for (const row of sectorCounts) {
-    countBySectorName.set(row.group_value, row.n_responses);
-  }
-
   const responseRows = Array.isArray(responseRowsResult.data) ? responseRowsResult.data : [];
   const responseCountBySectorName = new Map<string, number>();
+  const responseTimeseriesByDay = new Map<string, number>();
+  const timeseriesCutoff = new Date();
+  timeseriesCutoff.setUTCHours(0, 0, 0, 0);
+  timeseriesCutoff.setUTCDate(timeseriesCutoff.getUTCDate() - 29);
   for (const response of responseRows) {
     const sectorName = resolveSector(response.group_values);
     responseCountBySectorName.set(sectorName, (responseCountBySectorName.get(sectorName) ?? 0) + 1);
+    const submittedAt = new Date(response.submitted_at);
+    if (Number.isNaN(submittedAt.getTime()) || submittedAt < timeseriesCutoff) continue;
+    const dayKey = submittedAt.toISOString().slice(0, 10);
+    responseTimeseriesByDay.set(dayKey, (responseTimeseriesByDay.get(dayKey) ?? 0) + 1);
   }
+  const responseTimeseries: TimeseriesRow[] = Array.from(responseTimeseriesByDay.entries())
+    .slice()
+    .sort(([leftDay], [rightDay]) => leftDay.localeCompare(rightDay))
+    .map(([day, response_count]) => ({ day, response_count }));
 
   const questionTopicRows = Array.isArray(questionTopicsResult.data) ? questionTopicsResult.data : [];
   const questionTopicById = new Map(questionTopicRows.map((row) => [row.id, row.topic_id]));
@@ -1396,14 +1384,29 @@ export async function GET(
     questionTopicById,
   });
 
+  const canonicalTopicIds = Object.keys(TOPIC_PROFILES).map((key) => Number(key));
   const topicIds = Array.from(
-    new Set([
-      ...normalizedGlobal.map((topic) => topic.topicId),
-      ...questionTopicRows.map((question) => question.topic_id),
-    ]),
+    new Set(
+      [...questionTopicRows.map((question) => question.topic_id), ...canonicalTopicIds].filter(
+        (topicId) => Number.isFinite(topicId) && topicId >= 1 && topicId <= 13,
+      ),
+    ),
   ).sort((a, b) => a - b);
 
   const globalRiskFactors = buildRiskFactorMetrics(responseRiskDataset, topicIds);
+  const normalizedGlobal = globalRiskFactors.map((metric) =>
+    normalizeTopic({
+      topic_id: metric.topicId,
+      n_responses: metric.responses,
+      mean_severity: metric.meanExposure,
+      mean_probability: metric.meanExposure,
+    }),
+  );
+  const normalizedGlobalWithLabels = normalizedGlobal.map((topic) => ({
+    ...topic,
+    riskFactor: toTopicLabel(topic.topicId),
+    severity: toTopicSeverity(topic.topicId),
+  }));
   const rankedRiskFactors = globalRiskFactors
     .filter((metric) => metric.riskScore !== null)
     .slice()
@@ -1421,7 +1424,6 @@ export async function GET(
   const allSectorNames = Array.from(
     new Set([
       ...sectorConfigs.map((item) => item.name),
-      ...sectorCounts.map((item) => item.group_value),
       ...Array.from(responseCountBySectorName.keys()),
     ]),
   );
@@ -1435,8 +1437,8 @@ export async function GET(
 
   const sectorMetricByName = new Map<string, SectorMetricSnapshot>();
   for (const sectorName of allSectorNames) {
-    const nResponses = countBySectorName.get(sectorName) ?? responseCountBySectorName.get(sectorName) ?? 0;
-    const suppressed = nResponses > 0 && nResponses < selectedCampaign.k_anonymity_min;
+    const nResponses = responseCountBySectorName.get(sectorName) ?? 0;
+    const suppressed = nResponses > 0 && nResponses < kAnonymityMin;
     const sectorRows = datasetRowsBySectorName.get(sectorName) ?? [];
 
     if (suppressed || nResponses === 0) {
@@ -1504,6 +1506,8 @@ export async function GET(
 
   for (const sectorName of allSectorNames) {
     const config = configByName.get(sectorName);
+    const configCampaign = config?.survey_id ? dashboardCampaignById.get(config.survey_id) ?? null : null;
+    const accessCampaign = configCampaign ?? dashboardPrimaryCampaign;
     const riskParameter = config ? toRiskParameter(config.risk_parameter) : 1;
     const snapshot = sectorMetricByName.get(sectorName);
     const nResponses = snapshot?.nResponses ?? 0;
@@ -1516,8 +1520,8 @@ export async function GET(
         sectorKey: config?.key ?? null,
         riskParameter,
         accessToken: config?.access_token ?? null,
-        accessLink: config
-          ? buildAccessLink(request.nextUrl.origin, selectedCampaign.public_slug, config.access_token)
+        accessLink: config && accessCampaign
+          ? buildAccessLink(request.nextUrl.origin, accessCampaign.public_slug, config.access_token)
           : null,
         submissionCount: config?.submission_count ?? 0,
         lastSubmittedAt: config?.last_submitted_at ?? null,
@@ -1559,8 +1563,8 @@ export async function GET(
       sectorKey: config?.key ?? null,
       riskParameter,
       accessToken: config?.access_token ?? null,
-      accessLink: config
-        ? buildAccessLink(request.nextUrl.origin, selectedCampaign.public_slug, config.access_token)
+      accessLink: config && accessCampaign
+        ? buildAccessLink(request.nextUrl.origin, accessCampaign.public_slug, config.access_token)
         : null,
       submissionCount: config?.submission_count ?? 0,
       lastSubmittedAt: config?.last_submitted_at ?? null,
@@ -1590,8 +1594,8 @@ export async function GET(
 
   const suppressedSectorSet = new Set(
     allSectorNames.filter((sectorName) => {
-      const nResponses = countBySectorName.get(sectorName) ?? responseCountBySectorName.get(sectorName) ?? 0;
-      return nResponses > 0 && nResponses < selectedCampaign.k_anonymity_min;
+      const nResponses = responseCountBySectorName.get(sectorName) ?? 0;
+      return nResponses > 0 && nResponses < kAnonymityMin;
     }),
   );
   const visibleResponseRows = responseRiskDataset.filter((row) => !suppressedSectorSet.has(row.sector));
@@ -1644,18 +1648,19 @@ export async function GET(
       }),
     };
   });
+  const activeSectorCount = new Set(sectorConfigs.map((sector) => sector.name)).size;
 
   return NextResponse.json({
     ...basePayload,
     dashboard: {
       totals: {
-        responses: globalRows[0]?.n_responses ?? responseRows.length,
+        responses: responseRows.length,
         topics: topicIds.length,
-        activeSectors: sectorConfigs.length,
+        activeSectors: activeSectorCount,
       },
       riskDistribution,
       topics: normalizedGlobalWithLabels,
-      responseTimeseries: Array.isArray(timeseriesResult.data) ? timeseriesResult.data : [],
+      responseTimeseries,
       sectors,
       latestDrps: Array.isArray(latestDrpsResult.data) ? latestDrpsResult.data[0] ?? null : null,
       metrics: {

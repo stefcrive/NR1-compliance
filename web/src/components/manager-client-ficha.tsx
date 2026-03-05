@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { ManagerHistory } from "@/components/manager-history";
 
@@ -13,6 +13,7 @@ type Diagnostic = {
   status: "draft" | "live" | "closed" | "archived";
   starts_at: string | null;
   closes_at: string | null;
+  responses?: number;
 };
 
 type ClientSector = {
@@ -189,6 +190,13 @@ function fmt(value: string | null) {
 function fmtDate(value: string | null) {
   if (!value) return "-";
   return new Intl.DateTimeFormat("pt-BR", { dateStyle: "short" }).format(new Date(value));
+}
+
+function campaignCollectionStatus(status: Diagnostic["status"]) {
+  if (status === "live") return "Questionario aberto (coletando respostas)";
+  if (status === "closed") return "Questionario fechado";
+  if (status === "draft") return "Questionario em rascunho";
+  return "Questionario arquivado";
 }
 
 function accessInvitationStatusLabel(
@@ -379,17 +387,14 @@ export function ManagerClientFicha({
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
   const [isBusy, setIsBusy] = useState(false);
-  const [isSavingDiagnostic, setIsSavingDiagnostic] = useState(false);
   const [linksPayload, setLinksPayload] = useState<SectorPayload | null>(null);
   const [isLinksModalOpen, setIsLinksModalOpen] = useState(false);
   const [copiedSectorId, setCopiedSectorId] = useState<string | null>(null);
   const [accessInviteCopied, setAccessInviteCopied] = useState(false);
   const [isLoadingLinksFor, setIsLoadingLinksFor] = useState<string | null>(null);
-  const [openCampaignActionsFor, setOpenCampaignActionsFor] = useState<string | null>(null);
   const [openAssignedProgramActionsFor, setOpenAssignedProgramActionsFor] = useState<string | null>(
     null,
   );
-  const [editingCampaignId, setEditingCampaignId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<ClientTab>(initialTab);
   const [isEditingCompanyProfile, setIsEditingCompanyProfile] = useState(false);
   const [isSavingCompanyProfile, setIsSavingCompanyProfile] = useState(false);
@@ -409,12 +414,6 @@ export function ManagerClientFicha({
     contractEndDate: "",
   });
   const [sectorForms, setSectorForms] = useState<SectorProfileForm[]>([]);
-  const [editForm, setEditForm] = useState({
-    name: "",
-    status: "draft" as "draft" | "live" | "closed" | "archived",
-    startsAt: "",
-    closesAt: "",
-  });
   const [availablePrograms, setAvailablePrograms] = useState<ContinuousProgramOption[]>([]);
   const [assignedPrograms, setAssignedPrograms] = useState<AssignedContinuousProgram[]>([]);
   const [continuousError, setContinuousError] = useState("");
@@ -440,6 +439,23 @@ export function ManagerClientFicha({
     () => client?.campaigns.find((campaign) => campaign.id === selectedCampaignId) ?? null,
     [client, selectedCampaignId],
   );
+  const openCampaigns = useMemo(
+    () => client?.campaigns.filter((campaign) => campaign.status === "live") ?? [],
+    [client],
+  );
+  const resultsCampaign = useMemo(() => {
+    if (!client) return null;
+    if (selectedCampaign && (selectedCampaign.status === "live" || selectedCampaign.status === "closed")) {
+      return selectedCampaign;
+    }
+    return (
+      client.campaigns.find((campaign) => campaign.status === "live") ??
+      client.campaigns.find((campaign) => campaign.status === "closed") ??
+      null
+    );
+  }, [client, selectedCampaign]);
+  const linksActionCampaign =
+    selectedCampaign?.status === "live" ? selectedCampaign : openCampaigns[0] ?? null;
 
   const assignedProgramIds = useMemo(
     () => new Set(assignedPrograms.map((assignment) => assignment.programId)),
@@ -594,7 +610,6 @@ export function ManagerClientFicha({
 
   useEffect(() => {
     if (activeTab === "assigned-drps") return;
-    setOpenCampaignActionsFor(null);
     setIsLinksModalOpen(false);
   }, [activeTab]);
 
@@ -602,24 +617,6 @@ export function ManagerClientFicha({
     if (activeTab === "assigned-continuous") return;
     setOpenAssignedProgramActionsFor(null);
   }, [activeTab]);
-
-  async function updateDiagnostic(campaignId: string, payload: Record<string, unknown>) {
-    setIsSavingDiagnostic(true);
-    const response = await fetch(`/api/admin/campaigns/${campaignId}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    if (!response.ok) {
-      const data = (await response.json().catch(() => ({}))) as { error?: string };
-      setError(data.error || "Falha ao atualizar diagnostico.");
-      setIsSavingDiagnostic(false);
-      return;
-    }
-    await loadBase();
-    setEditingCampaignId(null);
-    setIsSavingDiagnostic(false);
-  }
 
   async function generateSeriesReports() {
     if (!client) return;
@@ -630,19 +627,6 @@ export function ManagerClientFicha({
       body: JSON.stringify({ generateAll: true }),
     });
     if (!response.ok && response.status !== 207) setError("Falha ao gerar serie de relatorios.");
-    await loadBase();
-    setIsBusy(false);
-  }
-
-  async function generateReportForCampaign(campaignId: string) {
-    if (!client) return;
-    setIsBusy(true);
-    const response = await fetch(`/api/admin/clients/${client.id}/reports`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ surveyId: campaignId }),
-    });
-    if (!response.ok && response.status !== 207) setError("Falha ao gerar relatorio.");
     await loadBase();
     setIsBusy(false);
   }
@@ -1619,7 +1603,40 @@ export function ManagerClientFicha({
             </div>
           </section>
           <section className="h-auto max-h-none overflow-visible rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
-            <h3 className="text-lg font-semibold text-[#123447]">Diagnosticos DRPS atribuidos</h3>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <h3 className="text-lg font-semibold text-[#123447]">Diagnosticos DRPS atribuidos</h3>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  disabled={!resultsCampaign}
+                  onClick={() => {
+                    if (!resultsCampaign) return;
+                    focusResults(resultsCampaign);
+                  }}
+                  className="rounded-full border border-[#c9dce8] px-3 py-1 text-xs font-semibold text-[#123447] disabled:cursor-not-allowed disabled:border-[#d6dde2] disabled:text-[#95a4ae]"
+                >
+                  Ver resultados
+                </button>
+                <button
+                  type="button"
+                  disabled={!linksActionCampaign || isLoadingLinksFor === linksActionCampaign.id}
+                  onClick={() => {
+                    if (!linksActionCampaign) return;
+                    void loadQuestionnaireLinks(linksActionCampaign);
+                  }}
+                  className="rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73] disabled:cursor-not-allowed disabled:border-[#d6dde2] disabled:text-[#95a4ae]"
+                >
+                  {linksActionCampaign && isLoadingLinksFor === linksActionCampaign.id
+                    ? "Carregando..."
+                    : "Gerar link questionario"}
+                </button>
+              </div>
+            </div>
+            <p className="mt-2 text-xs text-[#4f6977]">
+              {selectedCampaign
+                ? `Questionario atual: ${campaignCollectionStatus(selectedCampaign.status)}`
+                : "Sem questionario selecionado."}
+            </p>
             <div className="mt-3 max-h-none overflow-x-auto overflow-y-visible">
               <table className="min-w-full text-sm">
                 <thead>
@@ -1628,7 +1645,7 @@ export function ManagerClientFicha({
                     <th className="px-2 py-2 text-left">Status</th>
                     <th className="px-2 py-2 text-left">Inicio</th>
                     <th className="px-2 py-2 text-left">Fechamento</th>
-                    <th className="px-2 py-2 text-left">Acoes</th>
+                    <th className="px-2 py-2 text-left">Respostas</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1640,167 +1657,20 @@ export function ManagerClientFicha({
                     </tr>
                   ) : (
                     client.campaigns.map((campaign) => (
-                      <Fragment key={campaign.id}>
-                        <tr className="border-b">
-                          <td className="px-2 py-2">{campaign.name}</td>
-                          <td className="px-2 py-2">{campaign.status}</td>
-                          <td className="px-2 py-2">{fmt(campaign.starts_at)}</td>
-                          <td className="px-2 py-2">{fmt(campaign.closes_at)}</td>
-                          <td className="px-2 py-2">
-                            <div className="relative inline-flex">
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setOpenCampaignActionsFor((previous) =>
-                                    previous === campaign.id ? null : campaign.id,
-                                  )
-                                }
-                                className="rounded-full border border-[#c9dce8] px-3 py-1 text-xs font-semibold text-[#123447]"
-                              >
-                                ...
-                              </button>
-                              {openCampaignActionsFor === campaign.id ? (
-                                <div className="absolute right-0 top-full z-20 mt-2 w-56 overflow-hidden rounded-xl border border-[#d8e4ee] bg-white shadow-lg">
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setOpenCampaignActionsFor(null);
-                                      focusResults(campaign);
-                                    }}
-                                    className="block w-full px-3 py-2 text-left text-xs font-semibold text-[#123447] hover:bg-[#f4f9fc]"
-                                  >
-                                    Ver resultados
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setOpenCampaignActionsFor(null);
-                                      setEditingCampaignId(campaign.id);
-                                      setEditForm({
-                                        name: campaign.name,
-                                        status: campaign.status,
-                                        startsAt: toDatetimeLocal(campaign.starts_at),
-                                        closesAt: toDatetimeLocal(campaign.closes_at),
-                                      });
-                                    }}
-                                    className="block w-full px-3 py-2 text-left text-xs font-semibold text-[#123447] hover:bg-[#f4f9fc]"
-                                  >
-                                    Editar
-                                  </button>
-                                  <button
-                                    type="button"
-                                    disabled={isSavingDiagnostic || campaign.status === "closed"}
-                                    onClick={() => {
-                                      setOpenCampaignActionsFor(null);
-                                      void updateDiagnostic(campaign.id, {
-                                        status: "closed",
-                                        closesAt: new Date().toISOString(),
-                                      });
-                                    }}
-                                    className="block w-full px-3 py-2 text-left text-xs font-semibold text-[#7a4b00] hover:bg-[#fff8ef] disabled:cursor-not-allowed disabled:text-[#a8b7c0]"
-                                  >
-                                    Fechar
-                                  </button>
-                                  <button
-                                    type="button"
-                                    disabled={isLoadingLinksFor === campaign.id}
-                                    onClick={() => {
-                                      setOpenCampaignActionsFor(null);
-                                      void loadQuestionnaireLinks(campaign);
-                                    }}
-                                    className="block w-full px-3 py-2 text-left text-xs font-semibold text-[#5a2b8a] hover:bg-[#f8f2ff] disabled:cursor-not-allowed disabled:text-[#a8b7c0]"
-                                  >
-                                    {isLoadingLinksFor === campaign.id
-                                      ? "Carregando..."
-                                      : "Gerar links questionario"}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    disabled={isBusy}
-                                    onClick={() => {
-                                      setOpenCampaignActionsFor(null);
-                                      void generateReportForCampaign(campaign.id);
-                                    }}
-                                    className="block w-full px-3 py-2 text-left text-xs font-semibold text-[#0f5b73] hover:bg-[#f4f9fc] disabled:cursor-not-allowed disabled:text-[#a8b7c0]"
-                                  >
-                                    Gerar relatorio
-                                  </button>
-                                </div>
-                              ) : null}
-                            </div>
-                          </td>
-                        </tr>
-                        {editingCampaignId === campaign.id ? (
-                          <tr className="border-b bg-[#f8fbfd]">
-                            <td colSpan={5} className="px-2 py-3">
-                              <div className="grid gap-2 md:grid-cols-4">
-                                <input
-                                  className="rounded border border-[#c9dce8] px-3 py-2 text-sm md:col-span-2"
-                                  value={editForm.name}
-                                  onChange={(event) =>
-                                    setEditForm((previous) => ({ ...previous, name: event.target.value }))
-                                  }
-                                />
-                                <select
-                                  className="rounded border border-[#c9dce8] px-3 py-2 text-sm"
-                                  value={editForm.status}
-                                  onChange={(event) =>
-                                    setEditForm((previous) => ({
-                                      ...previous,
-                                      status: event.target.value as "draft" | "live" | "closed" | "archived",
-                                    }))
-                                  }
-                                >
-                                  <option value="draft">Rascunho</option>
-                                  <option value="live">Ativo</option>
-                                  <option value="closed">Concluido</option>
-                                  <option value="archived">Arquivado</option>
-                                </select>
-                                <input
-                                  type="datetime-local"
-                                  className="rounded border border-[#c9dce8] px-3 py-2 text-sm"
-                                  value={editForm.startsAt}
-                                  onChange={(event) =>
-                                    setEditForm((previous) => ({ ...previous, startsAt: event.target.value }))
-                                  }
-                                />
-                                <input
-                                  type="datetime-local"
-                                  className="rounded border border-[#c9dce8] px-3 py-2 text-sm"
-                                  value={editForm.closesAt}
-                                  onChange={(event) =>
-                                    setEditForm((previous) => ({ ...previous, closesAt: event.target.value }))
-                                  }
-                                />
-                              </div>
-                              <div className="mt-3 flex gap-2">
-                                <button
-                                  type="button"
-                                  disabled={isSavingDiagnostic}
-                                  onClick={() =>
-                                    void updateDiagnostic(campaign.id, {
-                                      name: editForm.name.trim(),
-                                      status: editForm.status,
-                                      startsAt: fromDatetimeLocal(editForm.startsAt),
-                                      closesAt: fromDatetimeLocal(editForm.closesAt),
-                                    })
-                                  }
-                                  className="rounded-full bg-[#0f5b73] px-4 py-2 text-xs font-semibold text-white disabled:opacity-50"
-                                >
-                                  Salvar
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => setEditingCampaignId(null)}
-                                  className="rounded-full border border-[#9ec8db] px-4 py-2 text-xs font-semibold text-[#0f5b73]"
-                                >
-                                  Cancelar
-                                </button>
-                              </div>
-                            </td>
-                          </tr>
-                        ) : null}
-                      </Fragment>
+                      <tr key={campaign.id} className="border-b">
+                        <td className="px-2 py-2">
+                          <Link
+                            href={`/manager/clients/${client.id}/diagnostic/${campaign.id}`}
+                            className="font-semibold text-[#123447] hover:text-[#0f5b73] hover:underline"
+                          >
+                            {campaign.name}
+                          </Link>
+                        </td>
+                        <td className="px-2 py-2">{campaignCollectionStatus(campaign.status)}</td>
+                        <td className="px-2 py-2">{fmt(campaign.starts_at)}</td>
+                        <td className="px-2 py-2">{fmt(campaign.closes_at)}</td>
+                        <td className="px-2 py-2">{campaign.responses ?? "-"}</td>
+                      </tr>
                     ))
                   )}
                 </tbody>
