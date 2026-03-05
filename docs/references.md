@@ -32,3 +32,20 @@ about the access to the platform. Manager has a specific user and password, only
 
 
 Chamelon12__
+
+add delete client file
+
+mentarai
+
+notification when clinet creates account
+when a committed event is changed send a notification to the client
+
+
+add download button to doeload bulk journal events for a process
+
+incorporate video in event page
+
+add google calendar sync
+
+
+we need to change a little the atribuir diagnostocos DRPS to a company flow: 

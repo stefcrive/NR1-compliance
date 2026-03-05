@@ -13,6 +13,7 @@ type Diagnostic = {
   status: "draft" | "live" | "closed" | "archived";
   starts_at: string | null;
   closes_at: string | null;
+  responses: number;
   employeeFormLink?: string;
 };
 
@@ -64,6 +65,23 @@ type RiskFactorMetric = {
   riskCategory: "low" | "moderate" | "high" | "critical" | null;
   concentration: number | null;
   distribution: ScoreDistribution;
+};
+
+type RiskFactorTrendSeries = {
+  topicId: number;
+  riskFactor: string;
+  sector: string;
+  points: Array<{
+    period: string;
+    meanExposure: number;
+    stdDevExposure: number;
+    prevalence: number | null;
+    severityIndex: number | null;
+    probability: number;
+    severity: number;
+    riskScore: number;
+    responses: number;
+  }>;
 };
 
 type DatasetSortKey = "employee_id" | "sector" | "risk_factor" | "score" | "timestamp";
@@ -190,17 +208,7 @@ type ClientPortalPayload = {
           }>;
         }>;
       };
-      trends: Array<{
-        topicId: number;
-        riskFactor: string;
-        points: Array<{
-          period: string;
-          meanExposure: number;
-          probability: number;
-          riskScore: number;
-          responses: number;
-        }>;
-      }>;
+      trends: RiskFactorTrendSeries[];
       sectorRanking: Array<{
         sector: string;
         sectorRiskIndex: number | null;
@@ -269,6 +277,25 @@ function fmtDuration(startValue: string, endValue: string) {
   if (hours > 0) parts.push(`${hours}h`);
   if (minutes > 0 || parts.length === 0) parts.push(`${minutes}min`);
   return parts.join(" ");
+}
+
+function chronogramStatusBadge(value: "scheduled" | "completed" | "cancelled") {
+  if (value === "completed") {
+    return {
+      label: "Completed",
+      className: "border-[#bde4c9] bg-[#e8f8ee] text-[#1f6b3d]",
+    };
+  }
+  if (value === "cancelled") {
+    return {
+      label: "Cancelled",
+      className: "border-[#e2d2d2] bg-[#f8eded] text-[#8a2d2d]",
+    };
+  }
+  return {
+    label: "Scheduled",
+    className: "border-[#c8dce8] bg-[#edf5fa] text-[#2c546a]",
+  };
 }
 
 function fmtCurrency(value: number) {
@@ -504,6 +531,51 @@ function shortRiskName(label: string, topicId?: number) {
   return `${normalized.slice(0, 16)}...`;
 }
 
+function parseTrendPeriodToUtcMs(period: string): number | null {
+  const monthlyMatch = period.match(/^(\d{4})-(\d{2})$/);
+  if (monthlyMatch) {
+    const year = Number(monthlyMatch[1]);
+    const month = Number(monthlyMatch[2]);
+    if (month >= 1 && month <= 12) {
+      return Date.UTC(year, month - 1, 1);
+    }
+  }
+
+  const parsed = new Date(period);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed.getTime();
+}
+
+function formatTrendPeriodLabel(period: string): string {
+  const monthlyMatch = period.match(/^(\d{4})-(\d{2})$/);
+  if (monthlyMatch) {
+    const year = Number(monthlyMatch[1]);
+    const month = Number(monthlyMatch[2]);
+    if (month >= 1 && month <= 12) {
+      return new Intl.DateTimeFormat("pt-BR", { month: "short", year: "2-digit", timeZone: "UTC" })
+        .format(new Date(Date.UTC(year, month - 1, 1)))
+        .replace(".", "");
+    }
+  }
+
+  const dayMatch = period.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (dayMatch) {
+    const year = Number(dayMatch[1]);
+    const month = Number(dayMatch[2]);
+    const day = Number(dayMatch[3]);
+    return new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "2-digit", timeZone: "UTC" }).format(
+      new Date(Date.UTC(year, month - 1, day)),
+    );
+  }
+
+  const parsed = new Date(period);
+  if (!Number.isNaN(parsed.getTime())) {
+    return new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeZone: "UTC" }).format(parsed);
+  }
+
+  return period;
+}
+
 const PLOT_INFO_CONTENT: Record<
   PlotInfoKey,
   {
@@ -546,11 +618,11 @@ const PLOT_INFO_CONTENT: Record<
   distribution: {
     title: "Distribution Plots",
     whatItShows:
-      "For each risk factor, bars show how many responses fell into scores 1 to 5.",
+      "For each risk factor, bars show counts in scores 1 to 5, plus the factor mean and standard deviation.",
     howToUse: [
       "Look for right-skewed distributions (4-5) as early warning for chronic exposure.",
       "Look for polarized distributions to detect unequal exposure and potential subgroup harm.",
-      "Use distribution shape to avoid relying only on averages that can hide severe pockets.",
+      "Use mean and sd together: high mean + high sd often indicates both severity and inequality of exposure.",
     ],
   },
   ranking: {
@@ -566,9 +638,10 @@ const PLOT_INFO_CONTENT: Record<
   trend: {
     title: "Trend Analysis",
     whatItShows:
-      "Time series for one risk factor (typically top-ranked), tracking mean exposure by period.",
+      "Time series by risk factor and sector, tracking mean exposure and standard deviation by period.",
     howToUse: [
-      "Rising trend indicates worsening climate and higher legal/operational exposure.",
+      "Rising mean trend indicates worsening climate and higher legal/operational exposure.",
+      "Increasing sd indicates dispersion growth (unequal exposure across respondents in that sector).",
       "Flat high trend indicates persistent structural risk requiring stronger controls.",
       "Use pre/post intervention points to verify whether actions reduced exposure.",
     ],
@@ -650,7 +723,6 @@ export function ClientCompanyDataSection({ clientSlug }: { clientSlug: string })
 export function ClientDiagnosticStatusSection({ clientSlug }: { clientSlug: string }) {
   const router = useRouter();
   const { data, isLoading, error } = useClientPortalData(clientSlug);
-  const [openDiagnosticActionsFor, setOpenDiagnosticActionsFor] = useState<string | null>(null);
   const [linksPayload, setLinksPayload] = useState<SectorPayload | null>(null);
   const [isLinksModalOpen, setIsLinksModalOpen] = useState(false);
   const [isLoadingLinksFor, setIsLoadingLinksFor] = useState<string | null>(null);
@@ -682,6 +754,9 @@ export function ClientDiagnosticStatusSection({ clientSlug }: { clientSlug: stri
   }
 
   async function copySectorLink(sector: SectorLink) {
+    if (!sector.isActive) {
+      return;
+    }
     await navigator.clipboard.writeText(sector.accessLink);
     setCopiedSectorId(sector.id);
     window.setTimeout(() => setCopiedSectorId(null), 1200);
@@ -692,6 +767,10 @@ export function ClientDiagnosticStatusSection({ clientSlug }: { clientSlug: stri
     const lines = linksPayload.sectors
       .filter((sector) => sector.isActive)
       .map((sector) => `${sector.name}: ${sector.accessLink}`);
+    if (lines.length === 0) {
+      setActionsError("Nenhum setor ativo para copiar.");
+      return;
+    }
     await navigator.clipboard.writeText(lines.join("\n"));
   }
 
@@ -707,7 +786,7 @@ export function ClientDiagnosticStatusSection({ clientSlug }: { clientSlug: stri
         csvEscape(sector.name),
         csvEscape(sector.isActive ? "true" : "false"),
         csvEscape(sector.submissionCount),
-        csvEscape(sector.accessLink),
+        csvEscape(sector.isActive ? sector.accessLink : null),
       ].join(","),
     );
     const blob = new Blob([[header, ...rows].join("\n")], { type: "text/csv;charset=utf-8;" });
@@ -728,11 +807,27 @@ export function ClientDiagnosticStatusSection({ clientSlug }: { clientSlug: stri
   if (error || !data) return <p className="text-sm text-red-600">{error || "Diagnostic unavailable."}</p>;
   const openCampaigns = data.campaigns.filter((campaign) => campaign.status === "live");
   const hasClosedCampaigns = data.campaigns.some((campaign) => campaign.status === "closed");
+  const linksActionCampaign = data.selectedCampaign?.status === "live" ? data.selectedCampaign : openCampaigns[0] ?? null;
 
   return (
     <div className="space-y-6">
       <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
-        <h2 className="text-2xl font-semibold text-[#141d24]">Diagnosticos DRPS (status e resultados)</h2>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-2xl font-semibold text-[#141d24]">Diagnosticos DRPS (status e resultados)</h2>
+          <button
+            type="button"
+            disabled={!linksActionCampaign || isLoadingLinksFor === linksActionCampaign.id}
+            onClick={() => {
+              if (!linksActionCampaign) return;
+              void loadQuestionnaireLinks(linksActionCampaign);
+            }}
+            className="rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73] disabled:cursor-not-allowed disabled:border-[#d6dde2] disabled:text-[#95a4ae]"
+          >
+            {linksActionCampaign && isLoadingLinksFor === linksActionCampaign.id
+              ? "Carregando..."
+              : "Gerar link questionario"}
+          </button>
+        </div>
         <p className="mt-1 text-sm text-[#475660]">
           Diagnosticos DRPS atribuidos pelo gestor com status de coleta e acesso ao resultado.
         </p>
@@ -751,13 +846,14 @@ export function ClientDiagnosticStatusSection({ clientSlug }: { clientSlug: stri
                 <th className="px-2 py-2 text-left">Diagnostico</th>
                 <th className="px-2 py-2 text-left">Status</th>
                 <th className="px-2 py-2 text-left">Janela</th>
+                <th className="px-2 py-2 text-left">Respostas</th>
                 <th className="px-2 py-2 text-left">Acoes</th>
               </tr>
             </thead>
             <tbody>
               {openCampaigns.length === 0 ? (
                 <tr>
-                  <td colSpan={4} className="px-2 py-3 text-[#5a7383]">
+                  <td colSpan={5} className="px-2 py-3 text-[#5a7383]">
                     {hasClosedCampaigns
                       ? "Nao ha questionarios abertos. Os diagnosticos existentes estao fechados."
                       : "Nenhum diagnostico DRPS atribuido."}
@@ -771,47 +867,17 @@ export function ClientDiagnosticStatusSection({ clientSlug }: { clientSlug: stri
                     <td className="px-2 py-2">
                       {fmtDate(campaign.starts_at)} - {fmtDate(campaign.closes_at)}
                     </td>
+                    <td className="px-2 py-2">{campaign.responses}</td>
                     <td className="px-2 py-2">
-                      <div className="relative inline-flex">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setOpenDiagnosticActionsFor((previous) =>
-                              previous === campaign.id ? null : campaign.id,
-                            )
-                          }
-                          className="rounded-full border border-[#c8c8c8] px-3 py-1 text-xs font-semibold text-[#1b2832]"
-                        >
-                          ...
-                        </button>
-                        {openDiagnosticActionsFor === campaign.id ? (
-                          <div className="absolute right-0 top-full z-20 mt-2 w-56 overflow-hidden rounded-xl border border-[#d9d9d9] bg-white shadow-lg">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setOpenDiagnosticActionsFor(null);
-                                router.push(`/client/${clientSlug}/diagnostic/${campaign.id}`);
-                              }}
-                              className="block w-full px-3 py-2 text-left text-xs font-semibold text-[#1b2832] hover:bg-[#f5f6f7]"
-                            >
-                              Ver resultados
-                            </button>
-                            <button
-                              type="button"
-                              disabled={isLoadingLinksFor === campaign.id}
-                              onClick={() => {
-                                setOpenDiagnosticActionsFor(null);
-                                void loadQuestionnaireLinks(campaign);
-                              }}
-                              className="block w-full px-3 py-2 text-left text-xs font-semibold text-[#5a2b8a] hover:bg-[#f8f2ff] disabled:cursor-not-allowed disabled:text-[#9aa6af]"
-                            >
-                              {isLoadingLinksFor === campaign.id
-                                ? "Carregando..."
-                                : "Gerar links questionario"}
-                            </button>
-                          </div>
-                        ) : null}
-                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          router.push(`/client/${clientSlug}/diagnostic/${campaign.id}`);
+                        }}
+                        className="rounded-full border border-[#c8c8c8] px-3 py-1 text-xs font-semibold text-[#1b2832]"
+                      >
+                        Ver resultados
+                      </button>
                     </td>
                   </tr>
                 ))
@@ -887,15 +953,16 @@ export function ClientDiagnosticStatusSection({ clientSlug }: { clientSlug: stri
                           <div className="flex items-center gap-2">
                             <input
                               readOnly
-                              value={sector.accessLink}
+                              value={sector.isActive ? sector.accessLink : "Setor inativo (link bloqueado)"}
                               className="w-full min-w-[280px] rounded border border-[#d5e2ea] bg-[#f7fbfe] px-2 py-1 text-xs"
                             />
                             <button
                               type="button"
+                              disabled={!sector.isActive}
                               onClick={() => void copySectorLink(sector)}
-                              className="rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
+                              className="rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73] disabled:cursor-not-allowed disabled:border-[#d6dde2] disabled:text-[#95a4ae]"
                             >
-                              {copiedSectorId === sector.id ? "Copiado" : "Copiar"}
+                              {!sector.isActive ? "Inativo" : copiedSectorId === sector.id ? "Copiado" : "Copiar"}
                             </button>
                           </div>
                         </td>
@@ -916,14 +983,21 @@ export function ClientDiagnosticResultsSection({
   clientSlug,
   campaignId,
   fromHistory = false,
+  managerClientId,
+  managerClientName,
+  managerFromHome = false,
 }: {
   clientSlug: string;
   campaignId: string;
   fromHistory?: boolean;
+  managerClientId?: string;
+  managerClientName?: string | null;
+  managerFromHome?: boolean;
 }) {
   const { data, isLoading, error } = useClientPortalData(clientSlug, campaignId);
 
   const campaign = data?.selectedCampaign ?? null;
+  const managerBreadcrumbClientLabel = managerClientName?.trim() || data?.client.companyName || "Cliente";
   const dashboard = data?.dashboard ?? null;
   const metrics = dashboard?.metrics;
   const ranking = (metrics?.ranking ?? []).slice(0, 5);
@@ -934,14 +1008,42 @@ export function ClientDiagnosticResultsSection({
     .sort((a, b) => (b.riskScore ?? 0) - (a.riskScore ?? 0));
   const sectorRanking = (metrics?.sectorRanking ?? []).slice(0, 5);
   const heatmap = metrics?.heatmap;
-  const trends = metrics?.trends ?? [];
-  const trendTopicId = topRisk?.topicId ?? trends[0]?.topicId ?? null;
-  const selectedTrend = (trendTopicId ? trends.find((series) => series.topicId === trendTopicId) : null) ?? null;
+  const trends = useMemo(() => metrics?.trends ?? [], [metrics?.trends]);
   const [datasetSectorFilter, setDatasetSectorFilter] = useState("all");
   const [datasetSortKey, setDatasetSortKey] = useState<DatasetSortKey>("timestamp");
   const [datasetSortDirection, setDatasetSortDirection] = useState<"asc" | "desc">("desc");
   const [activePlotInfo, setActivePlotInfo] = useState<PlotInfoKey | null>(null);
   const [isolatedRadarSector, setIsolatedRadarSector] = useState<string | null>(null);
+  const [selectedTrendTopicIdInput, setSelectedTrendTopicIdInput] = useState<number | null>(null);
+
+  const trendTopics = useMemo(
+    () =>
+      Array.from(
+        trends.reduce((map, series) => map.set(series.topicId, series.riskFactor), new Map<number, string>()),
+      )
+        .map(([topicId, riskFactor]) => ({ topicId, riskFactor }))
+        .sort((a, b) => a.topicId - b.topicId),
+    [trends],
+  );
+  const trendTopicIds = trendTopics.map((topic) => topic.topicId);
+  const defaultTrendTopicId =
+    topRisk?.topicId && trendTopicIds.includes(topRisk.topicId)
+      ? topRisk.topicId
+      : trendTopics[0]?.topicId ?? null;
+  const selectedTrendTopicId =
+    selectedTrendTopicIdInput !== null &&
+    trendTopics.some((topic) => topic.topicId === selectedTrendTopicIdInput)
+      ? selectedTrendTopicIdInput
+      : defaultTrendTopicId;
+
+  const selectedTrendTopic =
+    selectedTrendTopicId === null
+      ? null
+      : trendTopics.find((topic) => topic.topicId === selectedTrendTopicId) ?? null;
+  const selectedTrendRiskMetric =
+    selectedTrendTopicId === null
+      ? null
+      : (metrics?.riskFactors ?? []).find((risk) => risk.topicId === selectedTrendTopicId) ?? null;
 
   const datasetSampleRows = useMemo(() => metrics?.dataset.sample ?? [], [metrics?.dataset.sample]);
   const datasetSectorOptions = useMemo(
@@ -979,9 +1081,9 @@ export function ClientDiagnosticResultsSection({
 
   const matrixModel = useMemo(() => {
     if (matrixPoints.length === 0) return null;
-    const width = 420;
-    const height = 280;
-    const padding = { left: 44, right: 18, top: 18, bottom: 30 };
+    const width = 520;
+    const height = 360;
+    const padding = { left: 58, right: 28, top: 24, bottom: 48 };
     const plotWidth = width - padding.left - padding.right;
     const plotHeight = height - padding.top - padding.bottom;
     const maxAffected = Math.max(...matrixPoints.map((point) => point.affectedEmployees), 1);
@@ -999,8 +1101,8 @@ export function ClientDiagnosticResultsSection({
         Math.max(padding.left + 2, x + horizontalDirection * (radius + 8)),
       );
       const labelY = Math.min(
-        height - padding.bottom - 2,
-        Math.max(padding.top + 10, y + verticalOffset),
+        height - padding.bottom - 6,
+        Math.max(padding.top + 12, y + verticalOffset),
       );
       const labelAnchor: "start" | "end" = horizontalDirection === 1 ? "start" : "end";
       return {
@@ -1048,9 +1150,10 @@ export function ClientDiagnosticResultsSection({
     const axes = Array.from(topicMap.values()).sort((a, b) => a.topicId - b.topicId);
     if (axes.length === 0) return null;
 
-    const size = 320;
+    const size = 420;
     const center = size / 2;
-    const radius = 118;
+    const radius = 150;
+    const labelRadius = radius + 22;
     const levels = [0.2, 0.4, 0.6, 0.8, 1];
     const palette = [
       { line: "#1d4ed8", fill: "#1d4ed833" },
@@ -1067,12 +1170,31 @@ export function ClientDiagnosticResultsSection({
       const angle = (-Math.PI / 2) + (2 * Math.PI * index) / axes.length;
       const axisX = center + Math.cos(angle) * radius;
       const axisY = center + Math.sin(angle) * radius;
+      const baseLabelX = center + Math.cos(angle) * labelRadius;
+      const baseLabelY = center + Math.sin(angle) * labelRadius;
+      const cos = Math.cos(angle);
+      const labelAnchor: "start" | "middle" | "end" = cos > 0.28 ? "start" : cos < -0.28 ? "end" : "middle";
+      const estimatedLabelWidth = Math.max(44, Math.min(156, axis.label.length * 7.2));
+      const labelPadding = 8;
+      const labelX =
+        labelAnchor === "start"
+          ? Math.min(size - labelPadding - estimatedLabelWidth, baseLabelX)
+          : labelAnchor === "end"
+            ? Math.max(labelPadding + estimatedLabelWidth, baseLabelX)
+            : Math.min(
+                size - labelPadding - estimatedLabelWidth / 2,
+                Math.max(labelPadding + estimatedLabelWidth / 2, baseLabelX),
+              );
+      const labelY = Math.min(size - 14, Math.max(14, baseLabelY));
       return {
         topicId: axis.topicId,
         label: axis.label,
         angle,
         axisX,
         axisY,
+        labelX,
+        labelY,
+        labelAnchor,
       };
     });
 
@@ -1140,30 +1262,246 @@ export function ClientDiagnosticResultsSection({
     return radarModel.sectorPolygons.filter((series) => series.sector === effectiveIsolatedRadarSector);
   }, [effectiveIsolatedRadarSector, radarModel]);
 
-  const trendModel = useMemo(() => {
-    if (!selectedTrend || selectedTrend.points.length === 0) return null;
-    const points = selectedTrend.points;
-    const width = 520;
-    const height = 220;
-    const padding = { left: 40, right: 20, top: 16, bottom: 30 };
-    const plotWidth = width - padding.left - padding.right;
-    const plotHeight = height - padding.top - padding.bottom;
-    const maxY = Math.max(...points.map((point) => point.meanExposure), 1);
-    const denominator = Math.max(points.length - 1, 1);
+  const trendDashboardModel = (() => {
+    const trendSeriesForTopic =
+      selectedTrendTopicId === null
+        ? ([] as RiskFactorTrendSeries[])
+        : trends.filter((series) => series.topicId === selectedTrendTopicId);
+    if (trendSeriesForTopic.length === 0) return null;
+    const chartWidth = 420;
+    const chartHeight = 246;
+    const chartPadding = { left: 44, right: 16, top: 20, bottom: 42 };
+    const plotWidth = chartWidth - chartPadding.left - chartPadding.right;
+    const plotHeight = chartHeight - chartPadding.top - chartPadding.bottom;
+    const periodLabelByTime = new Map<number, string>();
+    const palette = [
+      { line: "#0f766e", fill: "#0f766e22" },
+      { line: "#1d4ed8", fill: "#1d4ed822" },
+      { line: "#b45309", fill: "#b4530922" },
+      { line: "#9333ea", fill: "#9333ea22" },
+      { line: "#be185d", fill: "#be185d22" },
+      { line: "#0369a1", fill: "#0369a122" },
+      { line: "#4d7c0f", fill: "#4d7c0f22" },
+      { line: "#334155", fill: "#33415522" },
+    ];
 
-    const plotted = points.map((point, index) => {
-      const x = padding.left + (index / denominator) * plotWidth;
-      const y = padding.top + (1 - point.meanExposure / maxY) * plotHeight;
-      return { ...point, x, y };
+    const parsedSeries = trendSeriesForTopic
+      .map((series, index) => {
+        const color = palette[index % palette.length];
+        const points = series.points
+          .reduce<
+            Array<{
+              period: string;
+              meanExposure: number;
+              stdDevExposure: number;
+              prevalence: number | null;
+              severityIndex: number | null;
+              probability: number;
+              severity: number;
+              riskScore: number;
+              responses: number;
+              timeMs: number;
+            }>
+          >((acc, point) => {
+            const timeMs = parseTrendPeriodToUtcMs(point.period);
+            if (timeMs === null) return acc;
+            periodLabelByTime.set(timeMs, point.period);
+            acc.push({
+              ...point,
+              timeMs,
+            });
+            return acc;
+          }, [])
+          .sort((a, b) => a.timeMs - b.timeMs);
+
+        return {
+          sector: series.sector,
+          color,
+          points,
+        };
+      })
+      .filter((series) => series.points.length > 0);
+    if (parsedSeries.length === 0) return null;
+
+    const allTimes = Array.from(
+      new Set(parsedSeries.flatMap((series) => series.points.map((point) => point.timeMs))),
+    ).sort((a, b) => a - b);
+    if (allTimes.length === 0) return null;
+
+    const minX = allTimes[0];
+    const maxX = allTimes[allTimes.length - 1];
+    const xSpan = Math.max(maxX - minX, 1);
+    const xScale = (value: number) => chartPadding.left + ((value - minX) / xSpan) * plotWidth;
+
+    const xTickTarget = Math.min(6, allTimes.length);
+    const rawXTicks = Array.from({ length: xTickTarget }, (_, index) => {
+      if (allTimes.length === 1) return allTimes[0];
+      const sourceIndex = Math.round((index * (allTimes.length - 1)) / Math.max(xTickTarget - 1, 1));
+      return allTimes[sourceIndex];
     });
+    const xTicks = Array.from(new Set(rawXTicks))
+      .map((timeMs) => ({
+        timeMs,
+        x: xScale(timeMs),
+        label: formatTrendPeriodLabel(periodLabelByTime.get(timeMs) ?? new Date(timeMs).toISOString()),
+      }))
+      .sort((a, b) => a.timeMs - b.timeMs);
+
+    const baseSeries = parsedSeries.map((series) => ({
+      sector: series.sector,
+      color: series.color,
+      points: series.points.map((point) => ({
+        ...point,
+        x: xScale(point.timeMs),
+      })),
+    }));
+
+    const metricDefinitions = [
+      { key: "meanExposure", title: "Mean (1-5)", yLabel: "Mean", min: 1, max: 5, decimals: 2, percent: false, showBand: true },
+      { key: "prevalence", title: "Prevalence", yLabel: "Prevalence", min: 0, max: 1, decimals: 0, percent: true, showBand: false },
+      { key: "severityIndex", title: "Severity idx", yLabel: "Severity idx", min: 0, max: 1, decimals: 0, percent: true, showBand: false },
+      { key: "probability", title: "Prob.", yLabel: "Prob.", min: 0, max: 1, decimals: 0, percent: true, showBand: false },
+      { key: "severity", title: "Sev.", yLabel: "Severity", min: 1, max: 5, decimals: 0, percent: false, showBand: false },
+      { key: "riskScore", title: "Score", yLabel: "Score", min: 0, max: 5, decimals: 2, percent: false, showBand: false },
+    ] as const;
+
+    function pointMetricValue(
+      point: (typeof baseSeries)[number]["points"][number],
+      key: (typeof metricDefinitions)[number]["key"],
+    ): number | null {
+      if (key === "meanExposure") return point.meanExposure;
+      if (key === "prevalence") return point.prevalence;
+      if (key === "severityIndex") return point.severityIndex ?? point.meanExposure / 5;
+      if (key === "probability") return point.probability;
+      if (key === "severity") return point.severity;
+      if (key === "riskScore") return point.riskScore;
+      return null;
+    }
+
+    const charts = metricDefinitions
+      .map((metric) => {
+        const yScale = (value: number) =>
+          chartPadding.top + (1 - (value - metric.min) / Math.max(metric.max - metric.min, 1)) * plotHeight;
+        const yTicks = [0, 0.25, 0.5, 0.75, 1].map((step) => {
+          const value = metric.min + step * (metric.max - metric.min);
+          return {
+            value,
+            y: yScale(value),
+            label: metric.percent
+              ? `${Math.round(value * 100)}%`
+              : value.toFixed(metric.decimals),
+          };
+        });
+
+        const series = baseSeries.map((item) => {
+          const plotted = item.points
+            .map((point) => {
+              const value = pointMetricValue(point, metric.key);
+              if (value === null || Number.isNaN(value)) return null;
+              const clamped = Math.min(metric.max, Math.max(metric.min, value));
+              return {
+                ...point,
+                value: clamped,
+                y: yScale(clamped),
+                yUpper:
+                  metric.showBand
+                    ? yScale(Math.min(metric.max, Math.max(metric.min, point.meanExposure + point.stdDevExposure)))
+                    : null,
+                yLower:
+                  metric.showBand
+                    ? yScale(Math.min(metric.max, Math.max(metric.min, point.meanExposure - point.stdDevExposure)))
+                    : null,
+              };
+            })
+            .filter((point): point is NonNullable<typeof point> => point !== null);
+          return {
+            sector: item.sector,
+            color: item.color,
+            points: plotted,
+            polyline: plotted.map((point) => `${point.x},${point.y}`).join(" "),
+            bandPolygon:
+              metric.showBand && plotted.length > 0
+                ? `${plotted.map((point) => `${point.x},${point.yUpper}`).join(" ")} ${plotted
+                    .slice()
+                    .reverse()
+                    .map((point) => `${point.x},${point.yLower}`)
+                    .join(" ")}`
+                : null,
+          };
+        });
+
+        return {
+          key: metric.key,
+          title: metric.title,
+          yLabel: metric.yLabel,
+          width: chartWidth,
+          height: chartHeight,
+          padding: chartPadding,
+          xAxisY: chartHeight - chartPadding.bottom,
+          yAxisX: chartPadding.left,
+          xTicks,
+          yTicks,
+          series,
+        };
+      })
+      .filter((chart) => chart.series.some((series) => series.points.length > 0));
+
+    const histogram = selectedTrendRiskMetric
+      ? (() => {
+          const width = chartWidth;
+          const height = chartHeight;
+          const padding = { left: 36, right: 16, top: 34, bottom: 42 };
+          const histPlotWidth = width - padding.left - padding.right;
+          const histPlotHeight = height - padding.top - padding.bottom;
+          const bars = ([1, 2, 3, 4, 5] as const).map((score) => ({
+            score,
+            count: selectedTrendRiskMetric.distribution[score] ?? 0,
+          }));
+          const maxCount = Math.max(...bars.map((bar) => bar.count), 1);
+          const centerX = (score: number) => padding.left + ((score - 1) / 4) * histPlotWidth;
+          const barWidth = Math.min(44, (histPlotWidth / 5) * 0.64);
+          const plottedBars = bars.map((bar) => {
+            const heightRatio = bar.count / maxCount;
+            const barHeight = Math.max(bar.count > 0 ? 6 : 2, heightRatio * histPlotHeight);
+            return {
+              ...bar,
+              x: centerX(bar.score) - barWidth / 2,
+              y: padding.top + histPlotHeight - barHeight,
+              width: barWidth,
+              height: barHeight,
+            };
+          });
+
+          const mean = selectedTrendRiskMetric.meanExposure;
+          const sd = selectedTrendRiskMetric.concentration;
+          const meanX = mean === null ? null : centerX(Math.min(5, Math.max(1, mean)));
+          const lowX =
+            mean === null || sd === null ? null : centerX(Math.min(5, Math.max(1, mean - sd)));
+          const highX =
+            mean === null || sd === null ? null : centerX(Math.min(5, Math.max(1, mean + sd)));
+
+          return {
+            width,
+            height,
+            padding,
+            bars: plottedBars,
+            maxCount,
+            mean,
+            sd,
+            meanX,
+            lowX,
+            highX,
+            intervalY: padding.top - 8,
+          };
+        })()
+      : null;
 
     return {
-      width,
-      height,
-      points: plotted,
-      polyline: plotted.map((point) => `${point.x},${point.y}`).join(" "),
+      charts,
+      legend: baseSeries.map((series) => ({ sector: series.sector, color: series.color })),
+      histogram,
     };
-  }, [selectedTrend]);
+  })();
 
   if (isLoading) return <p className="text-sm text-[#49697a]">Carregando resultados do diagnostico...</p>;
   if (error || !data) return <p className="text-sm text-red-600">{error || "Resultados indisponiveis."}</p>;
@@ -1171,7 +1509,27 @@ export function ClientDiagnosticResultsSection({
   return (
     <div className="space-y-6">
       <nav className="text-xs text-[#4f6977]">
-        {fromHistory ? (
+        {managerClientId ? (
+          managerFromHome ? (
+            <>
+              <Link href="/manager" className="text-[#0f5b73]">
+                Home
+              </Link>{" "}
+              / <span>{campaign?.name ?? "Diagnostico"}</span> / <span>Resultados</span>
+            </>
+          ) : (
+            <>
+              <Link href="/manager/clients" className="text-[#0f5b73]">
+                Client area
+              </Link>{" "}
+              /{" "}
+              <Link href={`/manager/clients/${managerClientId}`} className="text-[#0f5b73]">
+                {managerBreadcrumbClientLabel}
+              </Link>{" "}
+              / <span>{campaign?.name ?? "Diagnostico"}</span> / <span>Resultados</span>
+            </>
+          )
+        ) : fromHistory ? (
           <>
             <Link href={`/client/${clientSlug}/history`} className="text-[#1b2832]">
               Historico
@@ -1285,7 +1643,7 @@ export function ClientDiagnosticResultsSection({
         </div>
       </section>
 
-      <section className="grid gap-4 xl:grid-cols-2">
+      <section className="grid items-start gap-4 xl:grid-cols-2">
         <article className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
           <div className="flex items-center justify-between gap-2">
             <h3 className="text-lg font-semibold text-[#141d24]">Risk Matrix</h3>
@@ -1301,7 +1659,7 @@ export function ClientDiagnosticResultsSection({
           <p className="mt-1 text-xs text-[#55707f]">x: probability | y: severity | bubble: affected employees</p>
           <div className="mt-3 overflow-x-auto">
             {matrixModel ? (
-              <svg viewBox={`0 0 ${matrixModel.width} ${matrixModel.height}`} className="h-[300px] w-full min-w-[420px]">
+              <svg viewBox={`0 0 ${matrixModel.width} ${matrixModel.height}`} className="h-[380px] w-full min-w-[520px]">
                 {[0, 0.25, 0.5, 0.75, 1].map((step) => {
                   const x = matrixModel.padding.left + step * matrixModel.plotWidth;
                   return (
@@ -1355,7 +1713,7 @@ export function ClientDiagnosticResultsSection({
                       x={x}
                       y={matrixModel.height - matrixModel.padding.bottom + 14}
                       textAnchor="middle"
-                      className="fill-[#475569] text-[9px]"
+                      className="fill-[#475569] text-[12px]"
                     >
                       {step.toFixed(2)}
                     </text>
@@ -1370,7 +1728,7 @@ export function ClientDiagnosticResultsSection({
                       x={matrixModel.padding.left - 8}
                       y={y + 3}
                       textAnchor="end"
-                      className="fill-[#475569] text-[9px]"
+                      className="fill-[#475569] text-[12px]"
                     >
                       {severity}
                     </text>
@@ -1380,7 +1738,7 @@ export function ClientDiagnosticResultsSection({
                   x={(matrixModel.padding.left + (matrixModel.width - matrixModel.padding.right)) / 2}
                   y={matrixModel.height - 2}
                   textAnchor="middle"
-                  className="fill-[#334155] text-[10px]"
+                  className="fill-[#334155] text-[14px] font-semibold"
                 >
                   Probability of occurrence
                 </text>
@@ -1389,7 +1747,7 @@ export function ClientDiagnosticResultsSection({
                   y={matrixModel.height / 2}
                   textAnchor="middle"
                   transform={`rotate(-90 12 ${matrixModel.height / 2})`}
-                  className="fill-[#334155] text-[10px]"
+                  className="fill-[#334155] text-[14px] font-semibold"
                 >
                   Severity
                 </text>
@@ -1417,7 +1775,7 @@ export function ClientDiagnosticResultsSection({
                       x={point.labelX}
                       y={point.labelY}
                       textAnchor={point.labelAnchor}
-                      className="fill-[#1f2937] text-[9px] font-semibold"
+                      className="fill-[#1f2937] text-[13px] font-semibold"
                     >
                       {point.label}
                     </text>
@@ -1476,7 +1834,7 @@ export function ClientDiagnosticResultsSection({
           ) : null}
           <div className="mt-3 overflow-x-auto">
             {radarModel ? (
-              <svg viewBox={`0 0 ${radarModel.size} ${radarModel.size}`} className="mx-auto h-[320px] w-[320px]">
+              <svg viewBox={`0 0 ${radarModel.size} ${radarModel.size}`} className="mx-auto h-[420px] w-[420px]">
                 {radarModel.rings.map((ring, index) => (
                   <polygon
                     key={`ring-${index}`}
@@ -1518,7 +1876,13 @@ export function ClientDiagnosticResultsSection({
                 ))}
                 {radarModel.axisVertices.map((vertex) => (
                   <g key={`axis-label-${vertex.topicId}`}>
-                    <text x={vertex.axisX} y={vertex.axisY} textAnchor="middle" className="fill-[#334155] text-[9px]">
+                    <text
+                      x={vertex.labelX}
+                      y={vertex.labelY}
+                      textAnchor={vertex.labelAnchor}
+                      dominantBaseline="middle"
+                      className="fill-[#334155] text-[14px] font-semibold"
+                    >
                       {vertex.label}
                     </text>
                   </g>
@@ -1594,6 +1958,10 @@ export function ClientDiagnosticResultsSection({
                     </p>
                     <span className="text-[11px] text-[#5d7786]">n={risk.responses}</span>
                   </div>
+                  <div className="mt-1 flex items-center gap-3 text-[11px] text-[#5d7786]">
+                    <span>mean {risk.meanExposure !== null ? risk.meanExposure.toFixed(2) : "-"}</span>
+                    <span>sd {risk.concentration !== null ? risk.concentration.toFixed(2) : "-"}</span>
+                  </div>
                   <div className="mt-2 flex h-20 items-end gap-1.5">
                     {[1, 2, 3, 4, 5].map((score) => {
                       const count = risk.distribution[score as 1 | 2 | 3 | 4 | 5];
@@ -1663,7 +2031,7 @@ export function ClientDiagnosticResultsSection({
 
       <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
         <div className="flex items-center justify-between gap-2">
-          <h3 className="text-lg font-semibold text-[#141d24]">Trend Analysis ({selectedTrend?.riskFactor ?? "n/a"})</h3>
+          <h3 className="text-lg font-semibold text-[#141d24]">Trend Analysis</h3>
           <button
             type="button"
             onClick={() => setActivePlotInfo("trend")}
@@ -1673,32 +2041,123 @@ export function ClientDiagnosticResultsSection({
             i
           </button>
         </div>
+        <div className="mt-2 grid gap-2 md:grid-cols-1">
+          <label className="text-xs text-[#4f6977]">
+            Risk factor
+            <select
+              className="mt-1 w-full rounded border border-[#cddde7] bg-white px-2 py-1 text-xs"
+              value={selectedTrendTopicId ?? ""}
+              onChange={(event) => {
+                if (!event.target.value) {
+                  setSelectedTrendTopicIdInput(null);
+                  return;
+                }
+                const parsed = Number(event.target.value);
+                setSelectedTrendTopicIdInput(Number.isFinite(parsed) ? parsed : null);
+              }}
+              disabled={trendTopics.length === 0}
+            >
+              {trendTopics.map((topic) => (
+                <option key={`trend-topic-${topic.topicId}`} value={topic.topicId}>
+                  {shortRiskName(topic.riskFactor, topic.topicId)}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <p className="mt-2 text-xs text-[#5b7482]">
+          {trendModel
+            ? `${selectedTrendTopic?.riskFactor ?? "Selected risk factor"} | mean +/-1 sd envelope by sector`
+            : "No trend series available for selected filters."}
+        </p>
+        {trendModel ? (
+          <div className="mt-2 flex flex-wrap gap-2 text-xs text-[#4f6977]">
+            {trendModel.series.map((series) => (
+              <span
+                key={`trend-legend-${series.sector}`}
+                className="inline-flex items-center gap-1.5 rounded-full border border-[#d5e2ea] bg-white px-2 py-1"
+              >
+                <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: series.color.line }} />
+                {series.sector}
+              </span>
+            ))}
+          </div>
+        ) : null}
         <div className="mt-3 overflow-x-auto">
           {trendModel ? (
-            <svg viewBox={`0 0 ${trendModel.width} ${trendModel.height}`} className="h-[240px] w-full min-w-[520px]">
-              {[0, 0.25, 0.5, 0.75, 1].map((step) => {
-                const y = 16 + step * (220 - 16 - 30);
-                return (
+            <svg viewBox={`0 0 ${trendModel.width} ${trendModel.height}`} className="h-[280px] w-full min-w-[640px]">
+              {trendModel.yTicks.map((tick) => (
+                <g key={`grid-y-${tick.value}`}>
                   <line
-                    key={`grid-${step}`}
-                    x1={40}
-                    y1={y}
-                    x2={500}
-                    y2={y}
+                    x1={trendModel.padding.left}
+                    y1={tick.y}
+                    x2={trendModel.width - trendModel.padding.right}
+                    y2={tick.y}
                     stroke="#dce7ee"
                     strokeDasharray="4 6"
                   />
-                );
-              })}
-              <polyline fill="none" stroke="#0f766e" strokeWidth="3" points={trendModel.polyline} />
-              {trendModel.points.map((point) => (
-                <g key={`trend-${point.period}`}>
-                  <circle cx={point.x} cy={point.y} r={4} fill="#0f766e" />
-                  <text x={point.x} y={210} textAnchor="middle" className="fill-[#415564] text-[10px]">
-                    {point.period}
+                  <text x={trendModel.padding.left - 8} y={tick.y + 4} textAnchor="end" className="fill-[#5d7482] text-[10px]">
+                    {tick.label}
                   </text>
                 </g>
               ))}
+              {trendModel.xTicks.map((tick) => (
+                <g key={`grid-x-${tick.timeMs}`}>
+                  <line
+                    x1={tick.x}
+                    y1={trendModel.padding.top}
+                    x2={tick.x}
+                    y2={trendModel.xAxisY}
+                    stroke="#eef4f8"
+                    strokeDasharray="2 6"
+                  />
+                  <text x={tick.x} y={trendModel.height - 30} textAnchor="middle" className="fill-[#415564] text-[10px]">
+                    {tick.label}
+                  </text>
+                </g>
+              ))}
+              <line
+                x1={trendModel.padding.left}
+                y1={trendModel.xAxisY}
+                x2={trendModel.width - trendModel.padding.right}
+                y2={trendModel.xAxisY}
+                stroke="#93a9b5"
+                strokeWidth="1.5"
+              />
+              <line
+                x1={trendModel.yAxisX}
+                y1={trendModel.padding.top}
+                x2={trendModel.yAxisX}
+                y2={trendModel.xAxisY}
+                stroke="#93a9b5"
+                strokeWidth="1.5"
+              />
+              {trendModel.series.map((series) => (
+                <g key={`trend-series-${series.sector}`}>
+                  <polygon points={series.bandPolygon} fill={series.color.fill} />
+                  <polyline fill="none" stroke={series.color.line} strokeWidth="2.2" points={series.meanPolyline} />
+                  {series.points.map((point) => (
+                    <circle key={`trend-point-${series.sector}-${point.timeMs}`} cx={point.x} cy={point.y} r={3} fill={series.color.line} />
+                  ))}
+                </g>
+              ))}
+              <text
+                x={(trendModel.padding.left + trendModel.width - trendModel.padding.right) / 2}
+                y={trendModel.height - 8}
+                textAnchor="middle"
+                className="fill-[#4b6674] text-[11px]"
+              >
+                Time
+              </text>
+              <text
+                x={14}
+                y={trendModel.padding.top + (trendModel.xAxisY - trendModel.padding.top) / 2}
+                textAnchor="middle"
+                className="fill-[#4b6674] text-[11px]"
+                transform={`rotate(-90 14 ${trendModel.padding.top + (trendModel.xAxisY - trendModel.padding.top) / 2})`}
+              >
+                Rate
+              </text>
             </svg>
           ) : (
             <p className="text-sm text-[#5b7482]">No trend data available.</p>
@@ -2302,9 +2761,18 @@ export function ClientProgramDetailsSection({
       .slice()
       .sort((left, right) => new Date(left.startsAt).getTime() - new Date(right.startsAt).getTime());
   }, [assignedFromApi, data?.masterCalendar?.events]);
-  const nextMeeting = useMemo(() => {
-    return assignmentMeetings.find((item) => item.status === "scheduled") ?? assignmentMeetings[0] ?? null;
+  const committedAssignmentMeetings = useMemo(() => {
+    return assignmentMeetings.filter(
+      (item) => item.details?.eventLifecycle === "committed" && item.status !== "cancelled",
+    );
   }, [assignmentMeetings]);
+  const nextMeeting = useMemo(() => {
+    return (
+      committedAssignmentMeetings.find((item) => item.status === "scheduled") ??
+      committedAssignmentMeetings[0] ??
+      null
+    );
+  }, [committedAssignmentMeetings]);
   const evaluationScopeId = requestedAssignmentId ?? programId;
   const storageKey = `nr1-program-evals:${clientSlug}:${evaluationScopeId}`;
   const [scores, setScores] = useState<Record<number, number>>({});
@@ -2439,51 +2907,44 @@ export function ClientProgramDetailsSection({
       {assignedFromApi ? (
         <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
           <h3 className="text-lg font-semibold text-[#141d24]">Cronograma (reunioes no calendario)</h3>
-          <div className="mt-3 overflow-x-auto">
-            <table className="min-w-full text-sm">
-              <thead>
-                <tr className="border-b">
-                  <th className="px-2 py-2 text-left">Evento</th>
-                  <th className="px-2 py-2 text-left">Data atual</th>
-                  <th className="px-2 py-2 text-left">Duracao</th>
-                  <th className="px-2 py-2 text-left">Status</th>
-                  <th className="px-2 py-2 text-left">Acoes</th>
+          <div className="mt-3 overflow-x-auto rounded-xl border border-[#d8e4ee]">
+            <table className="min-w-full text-xs">
+              <thead className="bg-[#f3f8fb]">
+                <tr className="border-b border-[#d8e4ee]">
+                  <th className="px-3 py-2 text-left font-semibold text-[#244354]">Data/hora</th>
+                  <th className="px-3 py-2 text-left font-semibold text-[#244354]">Duracao</th>
+                  <th className="px-3 py-2 text-left font-semibold text-[#244354]">Status</th>
+                  <th className="px-3 py-2 text-left font-semibold text-[#244354]">Acoes</th>
                 </tr>
               </thead>
               <tbody>
-                {assignmentMeetings.length === 0 ? (
+                {committedAssignmentMeetings.length === 0 ? (
                   <tr>
-                    <td colSpan={5} className="px-2 py-3 text-xs text-[#5a7383]">
-                      Nenhuma reuniao em calendario para esta atribuicao no momento.
+                    <td colSpan={4} className="px-3 py-3 text-xs text-[#5a7383]">
+                      Nenhuma reuniao commitada para esta atribuicao no momento.
                     </td>
                   </tr>
                 ) : (
-                  assignmentMeetings.map((item) => {
-                    const calendarEventLink = `/client/${clientSlug}/company?calendarEventId=${encodeURIComponent(item.id)}`;
-                    const portalProgramLink = `/client/${clientSlug}/programs/${encodeURIComponent(
-                      assignedFromApi.programId,
-                    )}?assignmentId=${encodeURIComponent(assignedFromApi.id)}`;
+                  committedAssignmentMeetings.map((item) => {
+                    const status = chronogramStatusBadge(item.status);
                     return (
-                      <tr key={item.id} className="border-b">
-                        <td className="px-2 py-2">{item.title}</td>
-                        <td className="px-2 py-2">{fmtDateTime(item.startsAt)}</td>
-                        <td className="px-2 py-2">{fmtDuration(item.startsAt, item.endsAt)}</td>
-                        <td className="px-2 py-2">{item.status}</td>
-                        <td className="px-2 py-2">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <Link
-                              href={calendarEventLink}
-                              className="rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
-                            >
-                              Abrir no calendario
-                            </Link>
-                            <Link
-                              href={portalProgramLink}
-                              className="rounded-full border border-[#c8c8c8] px-3 py-1 text-xs font-semibold text-[#1b2832]"
-                            >
-                              Ver no portal
-                            </Link>
-                          </div>
+                      <tr key={item.id} className="border-b border-[#e2edf3] bg-[#ebf6fd]">
+                        <td className="px-3 py-2 text-[#123447]">{fmtDateTime(item.startsAt)}</td>
+                        <td className="px-3 py-2 text-[#123447]">{fmtDuration(item.startsAt, item.endsAt)}</td>
+                        <td className="px-3 py-2">
+                          <span
+                            className={`inline-flex rounded-full border px-2 py-0.5 font-semibold ${status.className}`}
+                          >
+                            {status.label}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2">
+                          <Link
+                            href={`/client/${clientSlug}/history/events/${item.id}`}
+                            className="inline-flex items-center justify-center rounded-full border border-[#9ec8db] px-3 py-1 font-semibold text-[#0f5b73]"
+                          >
+                            Event record
+                          </Link>
                         </td>
                       </tr>
                     );

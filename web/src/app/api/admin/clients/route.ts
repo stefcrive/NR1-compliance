@@ -13,6 +13,7 @@ import {
   type ClientStatus,
 } from "@/lib/client-accounts";
 import { isAdminApiAuthorized } from "@/lib/admin-auth";
+import { issueClientInvitation, resolveRequestOrigin } from "@/lib/client-access";
 import { slugify } from "@/lib/slug";
 import { isMissingColumnError, isMissingTableError } from "@/lib/supabase-errors";
 import { getSupabaseAdminClient } from "@/lib/supabase-admin";
@@ -628,6 +629,17 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Could not create client account." }, { status: 500 });
   }
 
+  const invitationResult = await issueClientInvitation(
+    supabase,
+    insertedClient.client_id,
+    resolveRequestOrigin(request),
+  );
+  const clientAccess = {
+    invitationLink: invitationResult.invitationLink,
+    invitationExpiresAt: invitationResult.invitationExpiresAt,
+    invitationStatus: invitationResult.invitationStatus,
+  };
+
   const preparedSectors = (parsed.sectors ?? []).map((sector) => ({
     id: randomUUID(),
     client_id: insertedClient.client_id,
@@ -711,7 +723,12 @@ export async function POST(request: NextRequest) {
       {
         error: "Client created, but failed to save sector profile.",
         details: "Table client_sectors does not exist.",
-        clientId: insertedClient.client_id,
+        client: {
+          id: insertedClient.client_id,
+          portalSlug: insertedClient.portal_slug,
+          access: clientAccess,
+        },
+        warning: invitationResult.warning ?? undefined,
       },
       { status: 207 },
     );
@@ -724,7 +741,12 @@ export async function POST(request: NextRequest) {
         {
           error: "Client created, but failed to save sector profile.",
           details: sectorsError.message,
-          clientId: insertedClient.client_id,
+          client: {
+            id: insertedClient.client_id,
+            portalSlug: insertedClient.portal_slug,
+            access: clientAccess,
+          },
+          warning: invitationResult.warning ?? undefined,
         },
         { status: 207 },
       );
@@ -754,6 +776,7 @@ export async function POST(request: NextRequest) {
         mentalHealthLeaveCases: insertedClient.mental_health_leave_cases ?? null,
         organizationalClimateReports: insertedClient.organizational_climate_reports ?? null,
         updatedAt: insertedClient.updated_at,
+        access: clientAccess,
         sectors: preparedSectors.map((item) => ({
           id: item.id,
           key: item.key,
@@ -771,6 +794,7 @@ export async function POST(request: NextRequest) {
           riskParameter: item.risk_parameter,
         })),
       },
+      warning: invitationResult.warning ?? undefined,
     },
     { status: 201 },
   );

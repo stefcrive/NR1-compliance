@@ -7,14 +7,14 @@ const ROLES = [
     description:
       "Consultancy workspace: clients table, DRPS diagnostics calendar, and programs database.",
     href: "/access/manager",
-    devHref: "/manager/clients",
+    devHref: "/access/manager",
   },
   {
     title: "Client",
     description:
       "Company workspace: company metrics, DRPS diagnostics, and continuous programs.",
     href: "/access/client",
-    devHref: "/client/techcorp-brasil/company",
+    devHref: "/access/client",
   },
   {
     title: "Employee",

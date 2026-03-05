@@ -8,6 +8,7 @@ type Campaign = {
   id: string;
   name: string;
   status: "draft" | "live" | "closed" | "archived";
+  client_id?: string | null;
   client_name?: string | null;
   starts_at?: string | null;
   closes_at?: string | null;
@@ -187,7 +188,12 @@ export function ManagerHomeOverview() {
   const liveCampaigns = useMemo(
     () =>
       campaigns
-        .filter((campaign) => campaign.status === "live")
+        .filter(
+          (campaign) =>
+            campaign.status === "live" &&
+            typeof campaign.client_id === "string" &&
+            campaign.client_id.length > 0,
+        )
         .slice()
         .sort((a, b) => {
           const left = a.starts_at ? new Date(a.starts_at).getTime() : Number.MAX_SAFE_INTEGER;
@@ -220,7 +226,12 @@ export function ManagerHomeOverview() {
   function eventHref(event: MasterCalendarEvent) {
     if (event.eventType === "drps_start" || event.eventType === "drps_close") {
       const campaignId = extractCampaignIdFromCalendarEvent(event);
-      return campaignId ? `/manager/programs/drps/${campaignId}` : null;
+      if (!campaignId) return null;
+      const campaign = campaigns.find((item) => item.id === campaignId) ?? null;
+      const clientId = event.clientId ?? campaign?.client_id ?? null;
+      return clientId
+        ? `/manager/clients/${clientId}/diagnostic/${campaignId}?from=home`
+        : `/manager/programs/drps/${campaignId}`;
     }
     if (event.eventType === "continuous_meeting" && event.sourceClientProgramId) {
       const assignment =
@@ -275,10 +286,10 @@ export function ManagerHomeOverview() {
         <div className="grid gap-4 xl:grid-cols-2">
           <section>
             <h4 className="text-lg font-semibold text-[#123447]">{t.activeDrpsTableTitle}</h4>
-            <div className="mt-3 overflow-x-auto rounded-lg border border-[#d8e4ee] bg-white">
+            <div className="mt-3 overflow-x-auto">
               <table className="min-w-full text-sm">
                 <thead>
-                  <tr className="border-b bg-[#f5f8fb]">
+                  <tr className="border-b">
                     <th className="px-2 py-2 text-left">{t.tableName}</th>
                     <th className="px-2 py-2 text-left">{t.tableCompany}</th>
                     <th className="px-2 py-2 text-left">{t.tableStart}</th>
@@ -294,20 +305,20 @@ export function ManagerHomeOverview() {
                     </tr>
                   ) : (
                     liveCampaigns.map((campaign) => (
-                      <tr key={campaign.id} className="border-b last:border-b-0">
+                      <tr key={campaign.id} className="border-b">
                         <td className="px-2 py-2">
                           <Link
-                            href={`/manager/programs/drps/${campaign.id}`}
+                            href={`/manager/clients/${campaign.client_id}/diagnostic/${campaign.id}?from=home`}
                             className="font-semibold text-[#123447] hover:text-[#0f5b73] hover:underline"
                           >
                             {campaign.name}
                           </Link>
                         </td>
-                        <td className="px-2 py-2 text-[#3e5a68]">{campaign.client_name ?? t.noCompany}</td>
-                        <td className="px-2 py-2 text-[#3e5a68]">
+                        <td className="px-2 py-2">{campaign.client_name ?? t.noCompany}</td>
+                        <td className="px-2 py-2">
                           {campaign.starts_at ? toDate(campaign.starts_at, locale) : t.notPlanned}
                         </td>
-                        <td className="px-2 py-2 text-[#3e5a68]">
+                        <td className="px-2 py-2">
                           {campaign.closes_at ? toDate(campaign.closes_at, locale) : t.notPlanned}
                         </td>
                       </tr>
@@ -320,10 +331,10 @@ export function ManagerHomeOverview() {
 
           <section>
             <h4 className="text-lg font-semibold text-[#123447]">{t.activeProgramsTableTitle}</h4>
-            <div className="mt-3 overflow-x-auto rounded-lg border border-[#d8e4ee] bg-white">
+            <div className="mt-3 overflow-x-auto">
               <table className="min-w-full text-sm">
                 <thead>
-                  <tr className="border-b bg-[#f5f8fb]">
+                  <tr className="border-b">
                     <th className="px-2 py-2 text-left">{t.tableProgram}</th>
                     <th className="px-2 py-2 text-left">{t.tableCompany}</th>
                     <th className="px-2 py-2 text-left">{t.tableSince}</th>
@@ -338,7 +349,7 @@ export function ManagerHomeOverview() {
                     </tr>
                   ) : (
                     liveContinuousPrograms.map((program) => (
-                      <tr key={program.id} className="border-b last:border-b-0">
+                      <tr key={program.id} className="border-b">
                         <td className="px-2 py-2">
                           <Link
                             href={`/manager/clients/${program.clientId}/assigned-continuous/${program.id}`}
@@ -347,8 +358,8 @@ export function ManagerHomeOverview() {
                             {program.programTitle}
                           </Link>
                         </td>
-                        <td className="px-2 py-2 text-[#3e5a68]">{program.clientName ?? t.noCompany}</td>
-                        <td className="px-2 py-2 text-[#3e5a68]">
+                        <td className="px-2 py-2">{program.clientName ?? t.noCompany}</td>
+                        <td className="px-2 py-2">
                           {program.deployedAt ? toDate(program.deployedAt, locale) : t.notPlanned}
                         </td>
                       </tr>

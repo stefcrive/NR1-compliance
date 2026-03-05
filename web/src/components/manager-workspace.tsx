@@ -186,6 +186,7 @@ const COPY = {
     eventEditError: "Could not update event.",
     invalidTimeRange: "Invalid time range.",
     eventCloseAction: "Close",
+    eventOpenRecord: "Open event record",
     eventOpenDrpsResults: "Open DRPS results",
     eventOpenProgramDetails: "Open process details",
     eventLifecycleCommitted: "Committed",
@@ -310,6 +311,7 @@ const COPY = {
     eventEditError: "Nao foi possivel atualizar o evento.",
     invalidTimeRange: "Intervalo de horario invalido.",
     eventCloseAction: "Fechar",
+    eventOpenRecord: "Abrir ficha do evento",
     eventOpenDrpsResults: "Abrir resultado DRPS",
     eventOpenProgramDetails: "Abrir detalhes do processo",
     eventLifecycleCommitted: "Commitado",
@@ -599,7 +601,13 @@ export function ManagerWorkspace({
     t.invalidTimeRange,
   ]);
 
-  const liveCampaigns = useMemo(() => campaigns.filter((campaign) => campaign.status === "live"), [campaigns]);
+  const liveCampaigns = useMemo(
+    () =>
+      campaigns.filter(
+        (campaign) => campaign.status === "live" && typeof campaign.client_id === "string" && campaign.client_id.length > 0,
+      ),
+    [campaigns],
+  );
   const liveContinuousPrograms = useMemo(
     () =>
       activeContinuousPrograms
@@ -996,6 +1004,14 @@ export function ManagerWorkspace({
     t.eventOpenDrpsResults,
     t.eventOpenProgramDetails,
   ]);
+
+  const selectedCalendarEventRecordHref = useMemo(
+    () =>
+      selectedCalendarEvent
+        ? `/manager/history/events/${encodeURIComponent(selectedCalendarEvent.id)}`
+        : null,
+    [selectedCalendarEvent],
+  );
 
   const filteredCalendarEvents = useMemo(() => {
     const query = calendarSearchQuery.trim().toLowerCase();
@@ -1547,7 +1563,8 @@ export function ManagerWorkspace({
             ) : null}
             {events.length === 0 ? (
               <p className="mt-4 text-sm text-[#5a7383]">{t.noCalendarEventsForFilters}</p>
-            ) : calendarView === "month" ? (
+            ) : null}
+            {calendarView === "month" ? (
               <div className="mt-4 grid grid-cols-7 gap-2">
                 {WEEK_LABELS[locale].map((w) => (
                   <p key={w} className="text-center text-xs font-semibold text-[#5e7d8d]">
@@ -1921,61 +1938,41 @@ export function ManagerWorkspace({
               </button>
             </div>
 
-            <div className="mt-4 grid gap-3 md:grid-cols-2">
-              <div className="rounded-lg border border-[#e0e9ee] bg-[#f7fbfd] p-3">
-                <p className="text-xs text-[#4d6a79]">{t.eventDetailsType}</p>
-                <p className="text-sm font-semibold text-[#123447]">{selectedEventTypeLabel}</p>
-              </div>
-              <div className="rounded-lg border border-[#e0e9ee] bg-[#f7fbfd] p-3">
-                <p className="text-xs text-[#4d6a79]">{t.eventDetailsCompany}</p>
-                <p className="text-sm font-semibold text-[#123447]">
-                  {selectedCalendarEvent.clientName ?? t.noCompany}
-                </p>
-              </div>
-              <div className="rounded-lg border border-[#e0e9ee] bg-[#f7fbfd] p-3 md:col-span-2">
-                <p className="text-xs text-[#4d6a79]">{t.eventDetailsWhen}</p>
-                <p className="text-sm font-semibold text-[#123447]">{toDate(selectedCalendarEvent.startsAt, locale)}</p>
-              </div>
-              <div className="rounded-lg border border-[#e0e9ee] bg-[#f7fbfd] p-3 md:col-span-2">
-                <p className="text-xs text-[#4d6a79]">{t.eventDetailsDuration}</p>
-                <p className="text-sm font-semibold text-[#123447]">
-                  {durationMinutesFromRange(selectedCalendarEvent.startsAt, selectedCalendarEvent.endsAt, 60)} min
-                </p>
-              </div>
-              <div className="rounded-lg border border-[#e0e9ee] bg-[#f7fbfd] p-3 md:col-span-2">
-                <p className="text-xs text-[#4d6a79]">{t.eventDetailsLifecycle}</p>
-                <p className="text-sm font-semibold text-[#123447]">{selectedLifecycleLabel}</p>
-              </div>
-            </div>
-
-            <div className="mt-3 grid gap-3 md:grid-cols-2">
-              <div className="rounded-lg border border-[#e0e9ee] p-3">
-                <p className="text-xs text-[#4d6a79]">{t.eventDetailsContent}</p>
-                <p className="mt-1 text-sm text-[#123447]">
-                  {selectedCalendarEvent.details?.content ?? t.eventDetailsNoContent}
-                </p>
-              </div>
-              <div className="rounded-lg border border-[#e0e9ee] p-3">
-                <p className="text-xs text-[#4d6a79]">{t.eventDetailsPreparation}</p>
-                <p className="mt-1 text-sm text-[#123447]">
-                  {selectedCalendarEvent.details?.preparationRequired ?? t.eventDetailsNoPreparation}
-                </p>
-              </div>
-            </div>
-
-            {selectedCalendarEventLink ? (
-              <div className="mt-3">
-                <Link
-                  href={selectedCalendarEventLink.href}
-                  className="inline-flex rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
-                >
-                  {selectedCalendarEventLink.label}
-                </Link>
+            {selectedCalendarEventRecordHref || selectedCalendarEventLink ? (
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                {selectedCalendarEventRecordHref ? (
+                  <Link
+                    href={selectedCalendarEventRecordHref}
+                    className="inline-flex rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
+                  >
+                    {t.eventOpenRecord}
+                  </Link>
+                ) : null}
+                {selectedCalendarEventLink ? (
+                  <Link
+                    href={selectedCalendarEventLink.href}
+                    className="inline-flex rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
+                  >
+                    {selectedCalendarEventLink.label}
+                  </Link>
+                ) : null}
               </div>
             ) : null}
 
             {isEditableCalendarEvent(selectedCalendarEvent) ? (
               <div className="mt-4 space-y-3 rounded-lg border border-[#d8e4ee] bg-[#f8fbfd] p-3">
+                <div className="grid gap-2 md:grid-cols-2">
+                  <div className="rounded-lg border border-[#e0e9ee] bg-white p-3">
+                    <p className="text-xs text-[#4d6a79]">{t.eventDetailsType}</p>
+                    <p className="text-sm font-semibold text-[#123447]">{selectedEventTypeLabel}</p>
+                  </div>
+                  <div className="rounded-lg border border-[#e0e9ee] bg-white p-3">
+                    <p className="text-xs text-[#4d6a79]">{t.eventDetailsCompany}</p>
+                    <p className="text-sm font-semibold text-[#123447]">
+                      {selectedCalendarEvent.clientName ?? t.noCompany}
+                    </p>
+                  </div>
+                </div>
                 <label className="block">
                   <span className="text-xs text-[#4d6a79]">{t.eventEditTitleLabel}</span>
                   <input
@@ -2074,7 +2071,53 @@ export function ManagerWorkspace({
                 {eventEditFeedback ? <p className="text-xs text-[#365160]">{eventEditFeedback}</p> : null}
               </div>
             ) : (
-              <p className="mt-4 text-xs text-[#5a7383]">{t.eventReadOnly}</p>
+              <>
+                <div className="mt-4 grid gap-3 md:grid-cols-2">
+                  <div className="rounded-lg border border-[#e0e9ee] bg-[#f7fbfd] p-3">
+                    <p className="text-xs text-[#4d6a79]">{t.eventDetailsType}</p>
+                    <p className="text-sm font-semibold text-[#123447]">{selectedEventTypeLabel}</p>
+                  </div>
+                  <div className="rounded-lg border border-[#e0e9ee] bg-[#f7fbfd] p-3">
+                    <p className="text-xs text-[#4d6a79]">{t.eventDetailsCompany}</p>
+                    <p className="text-sm font-semibold text-[#123447]">
+                      {selectedCalendarEvent.clientName ?? t.noCompany}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-[#e0e9ee] bg-[#f7fbfd] p-3 md:col-span-2">
+                    <p className="text-xs text-[#4d6a79]">{t.eventDetailsWhen}</p>
+                    <p className="text-sm font-semibold text-[#123447]">
+                      {toDate(selectedCalendarEvent.startsAt, locale)}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-[#e0e9ee] bg-[#f7fbfd] p-3 md:col-span-2">
+                    <p className="text-xs text-[#4d6a79]">{t.eventDetailsDuration}</p>
+                    <p className="text-sm font-semibold text-[#123447]">
+                      {durationMinutesFromRange(selectedCalendarEvent.startsAt, selectedCalendarEvent.endsAt, 60)} min
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-[#e0e9ee] bg-[#f7fbfd] p-3 md:col-span-2">
+                    <p className="text-xs text-[#4d6a79]">{t.eventDetailsLifecycle}</p>
+                    <p className="text-sm font-semibold text-[#123447]">{selectedLifecycleLabel}</p>
+                  </div>
+                </div>
+
+                <div className="mt-3 grid gap-3 md:grid-cols-2">
+                  <div className="rounded-lg border border-[#e0e9ee] p-3">
+                    <p className="text-xs text-[#4d6a79]">{t.eventDetailsContent}</p>
+                    <p className="mt-1 text-sm text-[#123447]">
+                      {selectedCalendarEvent.details?.content ?? t.eventDetailsNoContent}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-[#e0e9ee] p-3">
+                    <p className="text-xs text-[#4d6a79]">{t.eventDetailsPreparation}</p>
+                    <p className="mt-1 text-sm text-[#123447]">
+                      {selectedCalendarEvent.details?.preparationRequired ?? t.eventDetailsNoPreparation}
+                    </p>
+                  </div>
+                </div>
+
+                <p className="mt-4 text-xs text-[#5a7383]">{t.eventReadOnly}</p>
+              </>
             )}
           </article>
         </div>

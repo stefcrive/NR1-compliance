@@ -78,10 +78,23 @@ function areSamePrompts(left: string[], right: string[]): boolean {
   return true;
 }
 
+function createSectorAssignment(sector: ClientSector, templateId: string): SectorAssignment {
+  return {
+    sectorId: sector.id,
+    sectorKey: sector.key,
+    sectorName: sector.name,
+    sectorRiskParameter: sector.riskParameter,
+    templateId,
+    promptsText: "",
+    loadingQuestions: false,
+  };
+}
+
 export function ManagerClientAssignDrps({ clientId }: { clientId: string }) {
   const [client, setClient] = useState<ClientDetail | null>(null);
   const [templates, setTemplates] = useState<DiagnosticTemplateOption[]>([]);
   const [assignments, setAssignments] = useState<SectorAssignment[]>([]);
+  const [sectorToAddId, setSectorToAddId] = useState("");
   const [questionsByTemplate, setQuestionsByTemplate] = useState<Record<string, string[]>>({});
   const [questionnaireSectorId, setQuestionnaireSectorId] = useState<string | null>(null);
   const [campaignStatus, setCampaignStatus] = useState<"draft" | "live">("live");
@@ -208,15 +221,7 @@ export function ManagerClientAssignDrps({ clientId }: { clientId: string }) {
       setClient(nextClient);
       setTemplates(nextTemplates);
       setAssignments(
-        nextClient.sectors.map((sector) => ({
-          sectorId: sector.id,
-          sectorKey: sector.key,
-          sectorName: sector.name,
-          sectorRiskParameter: sector.riskParameter,
-          templateId: firstTemplateId,
-          promptsText: "",
-          loadingQuestions: false,
-        })),
+        nextClient.sectors.map((sector) => createSectorAssignment(sector, firstTemplateId)),
       );
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "Erro ao carregar formulario.");
@@ -274,11 +279,43 @@ export function ManagerClientAssignDrps({ clientId }: { clientId: string }) {
     return templateById.get(questionnaireAssignment.templateId) ?? null;
   }, [questionnaireAssignment, templateById]);
 
+  const availableSectors = useMemo(() => {
+    if (!client) return [] as ClientSector[];
+    const assignedSectorIds = new Set(assignments.map((item) => item.sectorId));
+    return client.sectors.filter((sector) => !assignedSectorIds.has(sector.id));
+  }, [assignments, client]);
+
   useEffect(() => {
     if (!questionnaireSectorId) return;
     const stillExists = assignments.some((item) => item.sectorId === questionnaireSectorId);
     if (!stillExists) setQuestionnaireSectorId(null);
   }, [assignments, questionnaireSectorId]);
+
+  useEffect(() => {
+    if (availableSectors.length === 0) {
+      setSectorToAddId("");
+      return;
+    }
+    const stillAvailable = availableSectors.some((sector) => sector.id === sectorToAddId);
+    if (!stillAvailable) {
+      setSectorToAddId(availableSectors[0]?.id ?? "");
+    }
+  }, [availableSectors, sectorToAddId]);
+
+  function removeSectorAssignment(sectorId: string) {
+    setAssignments((prev) => prev.filter((item) => item.sectorId !== sectorId));
+  }
+
+  function addSectorAssignment() {
+    if (!client || !sectorToAddId) return;
+    const sector = client.sectors.find((item) => item.id === sectorToAddId);
+    if (!sector) return;
+
+    setAssignments((prev) => {
+      if (prev.some((item) => item.sectorId === sector.id)) return prev;
+      return [...prev, createSectorAssignment(sector, defaultTemplateId)];
+    });
+  }
 
   async function syncCampaignSectors(
     campaignId: string,
@@ -490,14 +527,60 @@ export function ManagerClientAssignDrps({ clientId }: { clientId: string }) {
       </section>
 
       <section className="space-y-4 rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
-        <h3 className="text-lg font-semibold text-[#123447]">Configuracao por setor</h3>
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <h3 className="text-lg font-semibold text-[#123447]">Configuracao por setor</h3>
+          <div className="flex flex-wrap items-end gap-2">
+            <label className="space-y-1">
+              <span className="text-xs text-[#4f6977]">Setor disponivel</span>
+              <select
+                value={sectorToAddId}
+                onChange={(event) => setSectorToAddId(event.target.value)}
+                disabled={availableSectors.length === 0}
+                className="min-w-52 rounded border border-[#c9dce8] px-3 py-2 text-sm disabled:opacity-70"
+              >
+                {availableSectors.length === 0 ? (
+                  <option value="">Todos os setores ja estao na lista</option>
+                ) : null}
+                {availableSectors.map((sector) => (
+                  <option key={sector.id} value={sector.id}>
+                    {sector.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              type="button"
+              onClick={() => addSectorAssignment()}
+              disabled={!sectorToAddId}
+              className="rounded-full border border-[#9ec8db] px-3 py-2 text-xs font-semibold text-[#0f5b73] disabled:opacity-50"
+            >
+              Add setor
+            </button>
+          </div>
+        </div>
+        {assignments.length === 0 ? (
+          <p className="text-sm text-[#4f6977]">
+            Nenhum setor selecionado. Adicione ao menos um setor para atribuir diagnosticos.
+          </p>
+        ) : null}
         {assignments.map((assignment) => {
           const selectedTemplate = templateById.get(assignment.templateId) ?? null;
           const supportsQuestionEditing = selectedTemplate?.source === "surveys";
           return (
             <article key={assignment.sectorId} className="rounded-xl border border-[#d8e4ee] p-4">
-              <p className="text-xs uppercase tracking-[0.12em] text-[#4f6977]">Setor</p>
-              <p className="text-sm font-semibold text-[#133748]">{assignment.sectorName}</p>
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.12em] text-[#4f6977]">Setor</p>
+                  <p className="text-sm font-semibold text-[#133748]">{assignment.sectorName}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => removeSectorAssignment(assignment.sectorId)}
+                  className="rounded-full border border-[#e9c0c0] px-3 py-1 text-xs font-semibold text-[#8f2a2a]"
+                >
+                  Remover setor
+                </button>
+              </div>
 
               <div className="mt-3 grid gap-3">
                 <label className="space-y-1">

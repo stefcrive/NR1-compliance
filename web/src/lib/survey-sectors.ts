@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 
+import { isMissingColumnError } from "@/lib/supabase-errors";
 import { getSupabaseAdminClient } from "@/lib/supabase-admin";
 
 type GroupDimensionRow = {
@@ -14,6 +15,7 @@ type ClientSectorTemplateRow = {
   key: string;
   name: string;
   risk_parameter: number | string;
+  is_active?: boolean | null;
 };
 
 export function generateAccessToken(): string {
@@ -104,26 +106,41 @@ export async function syncClientSectorTemplatesToSurvey(params: {
 }) {
   const supabase = getSupabaseAdminClient();
 
-  const { data: templates, error: templatesError } = await supabase
+  const templateSelect = await supabase
     .from("client_sectors")
-    .select("key,name,risk_parameter")
+    .select("key,name,risk_parameter,is_active")
     .eq("client_id", params.clientId)
     .order("created_at", { ascending: true })
     .returns<ClientSectorTemplateRow[]>();
 
-  if (templatesError) {
-    throw new Error(templatesError.message);
+  let templates = templateSelect.data ?? [];
+  if (templateSelect.error) {
+    if (!isMissingColumnError(templateSelect.error, "is_active")) {
+      throw new Error(templateSelect.error.message);
+    }
+
+    const fallbackSelect = await supabase
+      .from("client_sectors")
+      .select("key,name,risk_parameter")
+      .eq("client_id", params.clientId)
+      .order("created_at", { ascending: true })
+      .returns<ClientSectorTemplateRow[]>();
+
+    if (fallbackSelect.error) {
+      throw new Error(fallbackSelect.error.message);
+    }
+    templates = fallbackSelect.data ?? [];
   }
 
   let synced = 0;
-  for (const template of templates ?? []) {
+  for (const template of templates) {
     const { error: upsertError } = await supabase.from("survey_sectors").upsert(
       {
         survey_id: params.surveyId,
         key: template.key,
         name: template.name,
         risk_parameter: toRiskParameter(template.risk_parameter),
-        is_active: true,
+        is_active: template.is_active ?? true,
         access_token: generateAccessToken(),
       },
       {

@@ -117,7 +117,14 @@ export async function GET(
     }
   }
 
-  const sectors = sectorRows.map((item) => ({
+  const orderedSectors = sectorRows.slice().sort((left, right) => {
+    if (left.is_active !== right.is_active) {
+      return left.is_active ? -1 : 1;
+    }
+    return left.created_at.localeCompare(right.created_at);
+  });
+
+  const sectors = orderedSectors.map((item) => ({
     id: item.id,
     key: item.key,
     name: item.name,

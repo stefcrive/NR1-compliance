@@ -1,0 +1,213 @@
+{
+  "generated_at": "2026-03-04T20:33:46.330Z",
+  "keep_survey_id": "11111111-1111-1111-1111-111111111001",
+  "backup_file": "backups/db_data_snapshot_20260304_203308Z.json",
+  "before_counts": {
+    "answers": {
+      "missing": false,
+      "count": 1900
+    },
+    "calendar_events": {
+      "missing": false,
+      "count": 19
+    },
+    "client_notifications": {
+      "missing": false,
+      "count": 0
+    },
+    "client_program_availability_requests": {
+      "missing": false,
+      "count": 6
+    },
+    "client_programs": {
+      "missing": false,
+      "count": 22
+    },
+    "client_reports": {
+      "missing": false,
+      "count": 3
+    },
+    "client_sectors": {
+      "missing": false,
+      "count": 13
+    },
+    "clients": {
+      "missing": false,
+      "count": 6
+    },
+    "drps_assessments": {
+      "missing": false,
+      "count": 4
+    },
+    "drps_campaigns": {
+      "missing": false,
+      "count": 16
+    },
+    "employee_responses": {
+      "missing": false,
+      "count": 546
+    },
+    "invoices": {
+      "missing": false,
+      "count": 9
+    },
+    "manager_notifications": {
+      "missing": false,
+      "count": 5
+    },
+    "periodic_programs": {
+      "missing": false,
+      "count": 9
+    },
+    "questions": {
+      "missing": false,
+      "count": 1100
+    },
+    "rate_limit_buckets": {
+      "missing": false,
+      "count": 0
+    },
+    "responses": {
+      "missing": false,
+      "count": 38
+    },
+    "survey_group_dimensions": {
+      "missing": false,
+      "count": 44
+    },
+    "survey_group_options": {
+      "missing": false,
+      "count": 183
+    },
+    "survey_sectors": {
+      "missing": false,
+      "count": 11
+    },
+    "surveys": {
+      "missing": false,
+      "count": 32
+    },
+    "topics": {
+      "missing": false,
+      "count": 13
+    }
+  },
+  "after_counts": {
+    "answers": {
+      "missing": false,
+      "count": 0
+    },
+    "calendar_events": {
+      "missing": false,
+      "count": 0
+    },
+    "client_notifications": {
+      "missing": false,
+      "count": 0
+    },
+    "client_program_availability_requests": {
+      "missing": false,
+      "count": 0
+    },
+    "client_programs": {
+      "missing": false,
+      "count": 0
+    },
+    "client_reports": {
+      "missing": false,
+      "count": 0
+    },
+    "client_sectors": {
+      "missing": false,
+      "count": 0
+    },
+    "clients": {
+      "missing": false,
+      "count": 0
+    },
+    "drps_assessments": {
+      "missing": false,
+      "count": 0
+    },
+    "drps_campaigns": {
+      "missing": false,
+      "count": 0
+    },
+    "employee_responses": {
+      "missing": false,
+      "count": 0
+    },
+    "invoices": {
+      "missing": false,
+      "count": 0
+    },
+    "manager_notifications": {
+      "missing": false,
+      "count": 0
+    },
+    "periodic_programs": {
+      "missing": false,
+      "count": 9
+    },
+    "questions": {
+      "missing": false,
+      "count": 50
+    },
+    "rate_limit_buckets": {
+      "missing": false,
+      "count": 0
+    },
+    "responses": {
+      "missing": false,
+      "count": 0
+    },
+    "survey_group_dimensions": {
+      "missing": false,
+      "count": 1
+    },
+    "survey_group_options": {
+      "missing": false,
+      "count": 4
+    },
+    "survey_sectors": {
+      "missing": false,
+      "count": 0
+    },
+    "surveys": {
+      "missing": false,
+      "count": 1
+    },
+    "topics": {
+      "missing": false,
+      "count": 13
+    }
+  },
+  "validation": {
+    "keep_question_total": 50,
+    "topic_distribution": {
+      "1": 5,
+      "2": 5,
+      "3": 4,
+      "4": 4,
+      "5": 3,
+      "6": 4,
+      "7": 4,
+      "8": 3,
+      "9": 4,
+      "10": 4,
+      "11": 3,
+      "12": 4,
+      "13": 3
+    },
+    "scoring_rules_present": [
+      "direct",
+      "inverted"
+    ]
+  },
+  "notes": [
+    "All mock transactional data removed.",
+    "All clients/campaigns/responses/assessments cleared.",
+    "All periodic_programs preserved.",
+    "Exactly one DRPS questionnaire retained and validated."
+  ]
+}

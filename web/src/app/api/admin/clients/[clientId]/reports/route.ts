@@ -4,7 +4,7 @@ import { z } from "zod";
 import { isAdminApiAuthorized } from "@/lib/admin-auth";
 import { createClientNotification } from "@/lib/client-notifications";
 import { classifyScore, resolveRisk } from "@/lib/risk";
-import { isMissingTableError } from "@/lib/supabase-errors";
+import { isMissingFunctionError, isMissingTableError } from "@/lib/supabase-errors";
 import { getSupabaseAdminClient } from "@/lib/supabase-admin";
 import { toRiskParameter } from "@/lib/survey-sectors";
 
@@ -54,6 +54,15 @@ type LatestDrpsRow = {
   created_at: string;
 };
 
+type SectorRiskFactorTimeseriesRow = {
+  sector_name: string;
+  topic_id: number;
+  period_start: string;
+  response_count: number;
+  mean_exposure: number | string;
+  std_dev_exposure: number | string;
+};
+
 type ClientReportRow = {
   id: string;
   client_id: string;
@@ -97,6 +106,11 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
+function toNumeric(value: number | string): number | null {
+  const numeric = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
 function computeAdjustedSectorRisk(
   topics: Array<ReturnType<typeof normalizeTopic>>,
   riskParameter: number,
@@ -126,7 +140,28 @@ async function buildReportSummaryForSurvey(params: {
 }) {
   const { supabase, survey } = params;
 
-  const [globalResult, sectorCountsResult, latestDrpsResult, sectorConfigResult] = await Promise.all([
+  const refreshTimeseriesResult = await supabase.rpc("refresh_survey_sector_risk_factor_timeseries", {
+    p_survey_id: survey.id,
+  });
+  const timeseriesFeatureAvailable =
+    !refreshTimeseriesResult.error ||
+    !isMissingFunctionError(
+      refreshTimeseriesResult.error,
+      "refresh_survey_sector_risk_factor_timeseries",
+    );
+  const timeseriesPromise = timeseriesFeatureAvailable
+    ? supabase
+        .from("survey_sector_risk_factor_timeseries")
+        .select("sector_name,topic_id,period_start,response_count,mean_exposure,std_dev_exposure")
+        .eq("survey_id", survey.id)
+        .order("period_start", { ascending: true })
+        .returns<SectorRiskFactorTimeseriesRow[]>()
+    : Promise.resolve({
+        data: [] as SectorRiskFactorTimeseriesRow[],
+        error: null,
+      });
+
+  const [globalResult, sectorCountsResult, latestDrpsResult, sectorConfigResult, timeseriesResult] = await Promise.all([
     supabase
       .rpc("get_topic_aggregates", {
         p_survey_id: survey.id,
@@ -155,6 +190,7 @@ async function buildReportSummaryForSurvey(params: {
       .eq("survey_id", survey.id)
       .eq("is_active", true)
       .returns<SectorConfigRow[]>(),
+    timeseriesPromise,
   ]);
 
   if (
@@ -170,6 +206,35 @@ async function buildReportSummaryForSurvey(params: {
   const normalizedGlobal = globalRows.map(normalizeTopic);
   const sectorCounts = Array.isArray(sectorCountsResult.data) ? sectorCountsResult.data : [];
   const sectorConfigs = Array.isArray(sectorConfigResult.data) ? sectorConfigResult.data : [];
+  const riskFactorSectorTimeseries =
+    timeseriesResult.error && !isMissingTableError(timeseriesResult.error, "survey_sector_risk_factor_timeseries")
+      ? []
+      : (Array.isArray(timeseriesResult.data) ? timeseriesResult.data : [])
+          .map((row) => {
+            const meanExposure = toNumeric(row.mean_exposure);
+            const stdDevExposure = toNumeric(row.std_dev_exposure);
+            if (meanExposure === null || stdDevExposure === null) return null;
+            return {
+              sector: row.sector_name,
+              topicId: row.topic_id,
+              period: row.period_start.slice(0, 7),
+              responseCount: row.response_count,
+              meanExposure: Number(meanExposure.toFixed(4)),
+              stdDevExposure: Number(Math.max(stdDevExposure, 0).toFixed(4)),
+            };
+          })
+          .filter(
+            (
+              row,
+            ): row is {
+              sector: string;
+              topicId: number;
+              period: string;
+              responseCount: number;
+              meanExposure: number;
+              stdDevExposure: number;
+            } => Boolean(row),
+          );
 
   const riskDistribution = {
     low: normalizedGlobal.filter((item) => item.risk === "low").length,
@@ -270,6 +335,7 @@ async function buildReportSummaryForSurvey(params: {
     riskDistribution,
     topics: normalizedGlobal,
     sectors,
+    riskFactorSectorTimeseries,
     latestDrps,
   };
 

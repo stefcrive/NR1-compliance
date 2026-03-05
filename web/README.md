@@ -34,6 +34,7 @@ npm install
    - `supabase/migrations/20260302110000_client_sector_onboarding_fields.sql`
    - `supabase/migrations/20260302220000_master_calendar_availability.sql`
    - `supabase/migrations/20260303090000_manager_notifications.sql`
+   - `supabase/migrations/20260304180000_auth_access_and_client_invites.sql`
    - Opcional via CLI:
 ```bash
 npx supabase db push --db-url "$SUPABASE_DB_URL" --include-all --workdir .
@@ -84,6 +85,9 @@ npm run dev
 5. Endpoints `/api/admin/*`:
    - Em desenvolvimento: liberados sem `ADMIN_API_KEY`.
    - Em producao: configure `ADMIN_API_KEY` e envie no header `x-admin-api-key`.
+6. Login Manager/Client:
+   - Configure `MANAGER_LOGIN_EMAIL` e `MANAGER_LOGIN_PASSWORD`.
+   - `AUTH_SESSION_SECRET` e opcional (usa `FORM_SESSION_SECRET` como fallback).
 
 ## Seeds multiempresa para teste de DRPS
 1. A migration `20260301170500_seed_multi_company_drps.sql` adiciona campanhas ativas com respostas e snapshots DRPS para:

@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { type EventRecordAttachment } from "@/lib/event-record-journal";
+
 type EventRecordPayload = {
   record: {
     id: string;
@@ -18,6 +20,11 @@ type EventRecordPayload = {
       eventLifecycle: "provisory" | "committed";
       proposalKind: "assignment" | "reschedule" | null;
       availabilityRequestId: string | null;
+    };
+    journal: {
+      notes: string | null;
+      attachments: EventRecordAttachment[];
+      available: boolean;
     };
     related: {
       campaign: {
@@ -66,6 +73,14 @@ function durationMinutes(startsAt: string, endsAt: string) {
   if (!Number.isFinite(starts) || !Number.isFinite(ends)) return "-";
   const duration = Math.max(0, Math.round((ends - starts) / (60 * 1000)));
   return `${duration} min`;
+}
+
+function formatFileSize(sizeBytes: number) {
+  if (!Number.isFinite(sizeBytes) || sizeBytes <= 0) return "0 B";
+  if (sizeBytes < 1024) return `${sizeBytes} B`;
+  const kb = sizeBytes / 1024;
+  if (kb < 1024) return `${kb.toFixed(1)} KB`;
+  return `${(kb / 1024).toFixed(1)} MB`;
 }
 
 function eventTypeLabel(value: "drps_start" | "drps_close" | "continuous_meeting" | "blocked") {
@@ -143,6 +158,7 @@ export function ClientHistoryEventRecord({
 
   if (loading) return <p className="text-sm text-[#49697a]">Carregando ficha do evento...</p>;
   if (error || !record) return <p className="text-sm text-red-600">{error || "Ficha indisponivel."}</p>;
+  const eventTitleWithDate = `${record.title} (${fmt(record.startsAt)})`;
 
   return (
     <div className="space-y-6">
@@ -150,12 +166,11 @@ export function ClientHistoryEventRecord({
         <Link href={`/client/${clientSlug}/history`} className="text-[#0f5b73] hover:underline">
           Historico
         </Link>{" "}
-        / <span>Ficha do evento</span>
+        / <span>{eventTitleWithDate}</span>
       </nav>
 
       <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
-        <h2 className="text-2xl font-semibold text-[#141d24]">Ficha do evento</h2>
-        <p className="mt-1 text-sm text-[#475660]">{record.title}</p>
+        <h2 className="text-2xl font-semibold text-[#141d24]">{eventTitleWithDate}</h2>
       </section>
 
       <section className="grid gap-3 rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm md:grid-cols-2 xl:grid-cols-3">
@@ -200,6 +215,55 @@ export function ClientHistoryEventRecord({
             {record.details.preparationRequired ?? "Sem detalhes cadastrados."}
           </p>
         </article>
+      </section>
+
+      <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+        <h3 className="text-base font-semibold text-[#123447]">Diario do evento</h3>
+        {!record.journal.available ? (
+          <p className="mt-3 text-sm text-[#4f6977]">
+            Armazenamento do diario indisponivel no momento.
+          </p>
+        ) : (
+          <div className="mt-3 space-y-3">
+            <article className="rounded-xl border border-[#d8e4ee] bg-white p-3">
+              <p className="text-xs text-[#4f6977]">Notas</p>
+              <p className="mt-1 whitespace-pre-wrap text-sm text-[#123447]">
+                {record.journal.notes ?? "Sem anotacoes registradas."}
+              </p>
+            </article>
+            <article className="rounded-xl border border-[#d8e4ee] bg-white p-3">
+              <p className="text-xs text-[#4f6977]">Arquivos</p>
+              {record.journal.attachments.length === 0 ? (
+                <p className="mt-1 text-sm text-[#4f6977]">Nenhum arquivo registrado.</p>
+              ) : (
+                <div className="mt-2 space-y-2">
+                  {record.journal.attachments.map((attachment) => (
+                    <div
+                      key={attachment.id}
+                      className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[#e3edf3] p-2"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-semibold text-[#123447]">{attachment.title}</p>
+                        <p className="truncate text-xs text-[#4f6977]">
+                          {attachment.fileName} | {formatFileSize(attachment.sizeBytes)} |{" "}
+                          {fmt(attachment.uploadedAt)}
+                        </p>
+                      </div>
+                      <a
+                        href={attachment.downloadUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
+                      >
+                        Abrir arquivo
+                      </a>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </article>
+          </div>
+        )}
       </section>
 
       <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">

@@ -19,6 +19,15 @@ type AvailabilitySlot = {
   endsAt: string;
 };
 
+type AssignmentCalendarEvent = {
+  id: string;
+  startsAt: string;
+  endsAt: string;
+  status: "scheduled" | "completed" | "cancelled";
+  lifecycle: "provisory" | "committed";
+  proposalKind: "assignment" | "reschedule" | null;
+};
+
 type AssignmentStatus = "Recommended" | "Active" | "Completed";
 
 type AssignedContinuousProgram = {
@@ -33,6 +42,8 @@ type AssignedContinuousProgram = {
   cadenceSuggestedSlots?: AvailabilitySlot[];
   calendarProvisorySlots?: AvailabilitySlot[];
   calendarCommittedSlots?: AvailabilitySlot[];
+  calendarTimelineEvents?: AssignmentCalendarEvent[];
+  annualPlanMonths?: string[];
   status: AssignmentStatus;
   deployedAt: string | null;
 };
@@ -75,6 +86,8 @@ type AssignmentPatchPayload = {
     scheduleAnchorDate?: string | null;
     cadenceSuggestedSlots?: AvailabilitySlot[];
     calendarProvisorySlots?: AvailabilitySlot[];
+    calendarTimelineEvents?: AssignmentCalendarEvent[];
+    annualPlanMonths?: string[];
   };
   error?: string;
   provisorySlots?: AvailabilitySlot[];
@@ -98,18 +111,29 @@ type Snapshot = {
 };
 
 const STATUS_OPTIONS: AssignmentStatus[] = ["Recommended", "Active", "Completed"];
+const annualPlanMonthRegex = /^\d{4}-(0[1-9]|1[0-2])$/;
+
+function toMonthKey(value: Date): string {
+  const year = value.getUTCFullYear();
+  const month = String(value.getUTCMonth() + 1).padStart(2, "0");
+  return `${year}-${month}`;
+}
+
+function normalizeAnnualPlanMonths(value: string[] | null | undefined): string[] {
+  if (!Array.isArray(value)) return [];
+  const unique = new Set<string>();
+  for (const raw of value) {
+    const normalized = typeof raw === "string" ? raw.trim() : "";
+    if (!annualPlanMonthRegex.test(normalized)) continue;
+    unique.add(normalized);
+  }
+  return Array.from(unique.values()).sort();
+}
 
 function toFrequency(value: string | null | undefined): ContinuousProgramScheduleFrequency {
   if (!value) return DEFAULT_CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCY;
   const found = CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCIES.find((item) => item === value);
   return found ?? DEFAULT_CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCY;
-}
-
-function fmtDateTime(value: string | null | undefined) {
-  if (!value) return "-";
-  return new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short" }).format(
-    new Date(value),
-  );
 }
 
 function toDatetimeLocal(value: string | null | undefined) {
@@ -146,6 +170,57 @@ function normalizeSlots(slots: AvailabilitySlot[]) {
   return Array.from(unique.values()).sort(
     (left, right) => new Date(left.startsAt).getTime() - new Date(right.startsAt).getTime(),
   );
+}
+
+function normalizeTimelineEvents(events: AssignmentCalendarEvent[]) {
+  const byId = new Map<string, AssignmentCalendarEvent>();
+  for (const event of events) {
+    if (!event?.id) continue;
+    const start = new Date(event.startsAt);
+    const end = new Date(event.endsAt);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end <= start) continue;
+    byId.set(event.id, {
+      ...event,
+      startsAt: start.toISOString(),
+      endsAt: end.toISOString(),
+    });
+  }
+  return Array.from(byId.values()).sort(
+    (left, right) => new Date(left.startsAt).getTime() - new Date(right.startsAt).getTime(),
+  );
+}
+
+function splitTimelineSlots(events: AssignmentCalendarEvent[]) {
+  const committed: AvailabilitySlot[] = [];
+  const provisory: AvailabilitySlot[] = [];
+  for (const event of events) {
+    if (event.status === "cancelled") continue;
+    const slot = { startsAt: event.startsAt, endsAt: event.endsAt };
+    if (event.lifecycle === "committed") {
+      committed.push(slot);
+    } else {
+      provisory.push(slot);
+    }
+  }
+  return { committed: normalizeSlots(committed), provisory: normalizeSlots(provisory) };
+}
+
+function eventProgressLabel(event: AssignmentCalendarEvent): {
+  label: string;
+  className: string;
+} {
+  if (event.status === "completed") {
+    return { label: "Completed", className: "border-[#bde4c9] bg-[#e8f8ee] text-[#1f6b3d]" };
+  }
+  if (event.status === "cancelled") {
+    return { label: "Cancelled", className: "border-[#e2d2d2] bg-[#f8eded] text-[#8a2d2d]" };
+  }
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  if (new Date(event.startsAt).getTime() < today.getTime()) {
+    return { label: "Skipped", className: "border-[#e5d8bd] bg-[#f9f1df] text-[#7a4d00]" };
+  }
+  return { label: "Scheduled", className: "border-[#c8dce8] bg-[#edf5fa] text-[#2c546a]" };
 }
 
 function durationMinutesFromRange(startsAt: string, endsAt: string, fallback = 60) {
@@ -198,14 +273,45 @@ export function ManagerAssignedContinuousProgram({
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [updatingLifecycleEventId, setUpdatingLifecycleEventId] = useState<string | null>(null);
+  const [updatingTimingEventId, setUpdatingTimingEventId] = useState<string | null>(null);
+  const [eventTimingDraftById, setEventTimingDraftById] = useState<
+    Record<string, { startsAt: string; durationMinutes: string }>
+  >({});
   const [removingMaterialId, setRemovingMaterialId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
-  const sortedCommittedSlots = useMemo(
-    () => normalizeSlots(assignment?.calendarCommittedSlots ?? []),
-    [assignment?.calendarCommittedSlots],
+  const timelineEvents = useMemo(
+    () => normalizeTimelineEvents(assignment?.calendarTimelineEvents ?? []),
+    [assignment?.calendarTimelineEvents],
   );
+  const annualPlanMonths = useMemo(
+    () => normalizeAnnualPlanMonths(assignment?.annualPlanMonths),
+    [assignment?.annualPlanMonths],
+  );
+  const chronogramEvents = useMemo(() => {
+    if (annualPlanMonths.length === 0) return timelineEvents;
+    const allowedMonths = new Set(annualPlanMonths);
+    return timelineEvents.filter((event) => {
+      const start = new Date(event.startsAt);
+      if (Number.isNaN(start.getTime())) return false;
+      return allowedMonths.has(toMonthKey(start));
+    });
+  }, [annualPlanMonths, timelineEvents]);
+
+  useEffect(() => {
+    setEventTimingDraftById(() => {
+      const next: Record<string, { startsAt: string; durationMinutes: string }> = {};
+      for (const event of timelineEvents) {
+        next[event.id] = {
+          startsAt: toDatetimeLocal(event.startsAt),
+          durationMinutes: String(durationMinutesFromRange(event.startsAt, event.endsAt, 60)),
+        };
+      }
+      return next;
+    });
+  }, [timelineEvents]);
 
   const changeState = useMemo(() => {
     if (!baseline) return { assignmentChanged: false, templateChanged: false, hasChanges: false };
@@ -239,6 +345,8 @@ export function ManagerAssignedContinuousProgram({
     loadedAssignment: AssignedContinuousProgram,
     loadedTemplate: ContinuousProgramTemplate,
   ) {
+    const nextTimelineEvents = normalizeTimelineEvents(loadedAssignment.calendarTimelineEvents ?? []);
+    const timelineSlots = splitTimelineSlots(nextTimelineEvents);
     const nextQuestions =
       loadedTemplate.evaluationQuestions.length > 0
         ? normalizeQuestions(loadedTemplate.evaluationQuestions)
@@ -248,10 +356,17 @@ export function ManagerAssignedContinuousProgram({
     const nextDeployedAt = toDatetimeLocal(loadedAssignment.deployedAt);
     const nextFrequency = toFrequency(loadedAssignment.scheduleFrequency);
     const nextSlots = normalizeSlots(
-      loadedAssignment.calendarProvisorySlots ?? loadedAssignment.cadenceSuggestedSlots ?? [],
+      timelineSlots.provisory.length > 0
+        ? timelineSlots.provisory
+        : loadedAssignment.calendarProvisorySlots ?? loadedAssignment.cadenceSuggestedSlots ?? [],
     );
 
-    setAssignment(loadedAssignment);
+    setAssignment({
+      ...loadedAssignment,
+      calendarTimelineEvents: nextTimelineEvents,
+      calendarCommittedSlots: timelineSlots.committed,
+      calendarProvisorySlots: timelineSlots.provisory,
+    });
     setTemplate(loadedTemplate);
     setStatus(nextStatus);
     setDeployedAt(nextDeployedAt);
@@ -489,6 +604,8 @@ export function ManagerAssignedContinuousProgram({
             scheduleAnchorDate: payload.assignment.scheduleAnchorDate,
             cadenceSuggestedSlots: payload.assignment.cadenceSuggestedSlots,
             calendarProvisorySlots: payload.assignment.calendarProvisorySlots,
+            calendarTimelineEvents: payload.assignment.calendarTimelineEvents,
+            annualPlanMonths: payload.assignment.annualPlanMonths,
           };
         }
       }
@@ -537,6 +654,174 @@ export function ManagerAssignedContinuousProgram({
     }
   }
 
+  async function toggleEventLifecycle(event: AssignmentCalendarEvent) {
+    if (!assignment) return;
+    const nextLifecycle = event.lifecycle === "committed" ? "provisory" : "committed";
+    setUpdatingLifecycleEventId(event.id);
+    setError("");
+    setNotice("");
+    try {
+      const response = await fetch("/api/admin/calendar", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          eventId: event.id,
+          eventLifecycle: nextLifecycle,
+        }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as {
+        error?: string;
+        event?: {
+          id: string;
+          startsAt: string;
+          endsAt: string;
+          status: "scheduled" | "completed" | "cancelled";
+          details: {
+            eventLifecycle: "provisory" | "committed";
+            proposalKind: "assignment" | "reschedule" | null;
+          };
+        };
+      };
+      if (!response.ok || !payload.event) {
+        throw new Error(payload.error ?? "Nao foi possivel atualizar ciclo do evento.");
+      }
+
+      const updatedTimeline = normalizeTimelineEvents(
+        (assignment.calendarTimelineEvents ?? []).map((item) =>
+          item.id === payload.event?.id
+            ? {
+                ...item,
+                startsAt: payload.event.startsAt,
+                endsAt: payload.event.endsAt,
+                status: payload.event.status,
+                lifecycle: payload.event.details.eventLifecycle,
+                proposalKind: payload.event.details.proposalKind,
+              }
+            : item,
+        ),
+      );
+      const slots = splitTimelineSlots(updatedTimeline);
+      setAssignment((previous) =>
+        previous
+          ? {
+              ...previous,
+              calendarTimelineEvents: updatedTimeline,
+              calendarCommittedSlots: slots.committed,
+              calendarProvisorySlots: slots.provisory,
+            }
+          : previous,
+      );
+      setProvisorySlots(slots.provisory);
+      setEventTimingDraftById((previous) => ({
+        ...previous,
+        [payload.event.id]: {
+          startsAt: toDatetimeLocal(payload.event.startsAt),
+          durationMinutes: String(
+            durationMinutesFromRange(payload.event.startsAt, payload.event.endsAt, 60),
+          ),
+        },
+      }));
+      setNotice("Ciclo do evento atualizado.");
+    } catch (toggleError) {
+      setError(
+        toggleError instanceof Error
+          ? toggleError.message
+          : "Nao foi possivel atualizar ciclo do evento.",
+      );
+    } finally {
+      setUpdatingLifecycleEventId(null);
+    }
+  }
+
+  async function updateEventTiming(event: AssignmentCalendarEvent) {
+    if (!assignment) return;
+    const draft = eventTimingDraftById[event.id];
+    if (!draft) return;
+
+    const markedAt = new Date(draft.startsAt);
+    const durationMinutes = Number.parseInt(draft.durationMinutes, 10);
+    if (Number.isNaN(markedAt.getTime()) || !Number.isFinite(durationMinutes) || durationMinutes < 15) {
+      setError("Data/hora ou duracao invalida para o evento.");
+      return;
+    }
+
+    setUpdatingTimingEventId(event.id);
+    setError("");
+    setNotice("");
+    try {
+      const response = await fetch("/api/admin/calendar", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          eventId: event.id,
+          markedAt: markedAt.toISOString(),
+          workshopDurationMinutes: durationMinutes,
+        }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as {
+        error?: string;
+        event?: {
+          id: string;
+          startsAt: string;
+          endsAt: string;
+          status: "scheduled" | "completed" | "cancelled";
+          details: {
+            eventLifecycle: "provisory" | "committed";
+            proposalKind: "assignment" | "reschedule" | null;
+          };
+        };
+      };
+      if (!response.ok || !payload.event) {
+        throw new Error(payload.error ?? "Nao foi possivel atualizar horario do evento.");
+      }
+
+      const updatedTimeline = normalizeTimelineEvents(
+        (assignment.calendarTimelineEvents ?? []).map((item) =>
+          item.id === payload.event?.id
+            ? {
+                ...item,
+                startsAt: payload.event.startsAt,
+                endsAt: payload.event.endsAt,
+                status: payload.event.status,
+                lifecycle: payload.event.details.eventLifecycle,
+                proposalKind: payload.event.details.proposalKind,
+              }
+            : item,
+        ),
+      );
+      const slots = splitTimelineSlots(updatedTimeline);
+      setAssignment((previous) =>
+        previous
+          ? {
+              ...previous,
+              calendarTimelineEvents: updatedTimeline,
+              calendarCommittedSlots: slots.committed,
+              calendarProvisorySlots: slots.provisory,
+            }
+          : previous,
+      );
+      setProvisorySlots(slots.provisory);
+      setEventTimingDraftById((previous) => ({
+        ...previous,
+        [payload.event.id]: {
+          startsAt: toDatetimeLocal(payload.event.startsAt),
+          durationMinutes: String(
+            durationMinutesFromRange(payload.event.startsAt, payload.event.endsAt, 60),
+          ),
+        },
+      }));
+      setNotice("Horario do evento atualizado.");
+    } catch (updateError) {
+      setError(
+        updateError instanceof Error
+          ? updateError.message
+          : "Nao foi possivel atualizar horario do evento.",
+      );
+    } finally {
+      setUpdatingTimingEventId(null);
+    }
+  }
+
   if (isLoading) {
     return <p className="text-sm text-[#49697a]">Carregando detalhes do processo continuo...</p>;
   }
@@ -574,7 +859,7 @@ export function ManagerAssignedContinuousProgram({
             </Link>{" "}
             /{" "}
             <Link href={`/manager/clients/${clientId}?tab=assigned-continuous`} className="text-[#0f5b73]">
-              Assigned processo continuous
+              Assigned processo continuos
             </Link>{" "}
             / <span>{assignment.programTitle}</span>
           </>
@@ -638,64 +923,135 @@ export function ManagerAssignedContinuousProgram({
 
       <section className="space-y-3 rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
         <div className="flex items-center justify-between gap-3">
-          <h3 className="text-lg font-semibold text-[#123447]">Chronograma (4 proximos eventos)</h3>
+          <h3 className="text-lg font-semibold text-[#123447]">
+            Chronograma ({chronogramEvents.length} eventos)
+          </h3>
         </div>
-        {sortedCommittedSlots.length > 0 ? (
-          <div className="rounded-xl border border-[#d8e4ee] bg-[#f8fbfd] p-3">
-            <p className="text-xs font-semibold uppercase tracking-[0.08em] text-[#365668]">
-              Eventos comprometidos
-            </p>
-            <div className="mt-2 flex flex-wrap gap-2">
-              {sortedCommittedSlots.map((slot) => (
-                <div
-                  key={`committed-${slot.startsAt}`}
-                  className="flex items-center gap-2 rounded-full border border-[#c6dbe8] bg-[#eef7fb] px-2 py-1 text-[11px] text-[#244f63]"
-                >
-                  <span>
-                    {fmtDateTime(slot.startsAt)} | {durationMinutesFromRange(slot.startsAt, slot.endsAt, 60)} min
-                  </span>
-                  <Link
-                    href={{
-                      pathname: "/manager/calendar",
-                      query: { assignmentId, markedAt: slot.startsAt },
-                    }}
-                    className="rounded-full border border-[#9ec8db] bg-white px-2 py-0.5 text-[10px] font-semibold text-[#0f5b73]"
-                  >
-                    Ver no calendario
-                  </Link>
-                </div>
-              ))}
-            </div>
+        {chronogramEvents.length === 0 ? (
+          <p className="text-xs text-[#5a7383]">Sem eventos no cronograma para este programa.</p>
+        ) : (
+          <div className="overflow-x-auto rounded-xl border border-[#d8e4ee]">
+            <table className="min-w-full text-xs">
+              <thead className="bg-[#f3f8fb]">
+                <tr className="border-b border-[#d8e4ee]">
+                  <th className="px-3 py-2 text-left font-semibold text-[#244354]">Data/hora</th>
+                  <th className="px-3 py-2 text-left font-semibold text-[#244354]">Duracao</th>
+                  <th className="px-3 py-2 text-left font-semibold text-[#244354]">Ciclo</th>
+                  <th className="px-3 py-2 text-left font-semibold text-[#244354]">Status</th>
+                  <th className="px-3 py-2 text-left font-semibold text-[#244354]">Acoes</th>
+                </tr>
+              </thead>
+              <tbody>
+                {chronogramEvents.map((event) => {
+                  const progress = eventProgressLabel(event);
+                  const isCommitted = event.lifecycle === "committed";
+                  const timingDraft = eventTimingDraftById[event.id] ?? {
+                    startsAt: toDatetimeLocal(event.startsAt),
+                    durationMinutes: String(durationMinutesFromRange(event.startsAt, event.endsAt, 60)),
+                  };
+                  return (
+                    <tr
+                      key={event.id}
+                      className={`border-b border-[#e2edf3] ${
+                        isCommitted ? "bg-[#ebf6fd]" : "bg-white"
+                      }`}
+                    >
+                      <td className="px-3 py-2 text-[#123447]">
+                        <input
+                          type="datetime-local"
+                          value={timingDraft.startsAt}
+                          onChange={(inputEvent) =>
+                            setEventTimingDraftById((previous) => ({
+                              ...previous,
+                              [event.id]: {
+                                ...timingDraft,
+                                startsAt: inputEvent.target.value,
+                              },
+                            }))
+                          }
+                          disabled={event.status === "cancelled"}
+                          className="w-full rounded border border-[#c9dce8] bg-white px-2 py-1 text-xs disabled:opacity-50"
+                        />
+                      </td>
+                      <td className="px-3 py-2 text-[#123447]">
+                        <input
+                          type="number"
+                          min={15}
+                          max={24 * 60}
+                          step={5}
+                          value={timingDraft.durationMinutes}
+                          onChange={(inputEvent) =>
+                            setEventTimingDraftById((previous) => ({
+                              ...previous,
+                              [event.id]: {
+                                ...timingDraft,
+                                durationMinutes: inputEvent.target.value,
+                              },
+                            }))
+                          }
+                          disabled={event.status === "cancelled"}
+                          className="w-24 rounded border border-[#c9dce8] bg-white px-2 py-1 text-xs disabled:opacity-50"
+                        />
+                      </td>
+                      <td className="px-3 py-2">
+                        <span
+                          className={`inline-flex rounded-full border px-2 py-0.5 font-semibold ${
+                            isCommitted
+                              ? "border-[#9ec8db] bg-[#e4f2fb] text-[#0f5b73]"
+                              : "border-[#d8dbe0] bg-[#f4f5f7] text-[#3c4e59]"
+                          }`}
+                        >
+                          {isCommitted ? "Committed" : "Provisory"}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2">
+                        <span
+                          className={`inline-flex rounded-full border px-2 py-0.5 font-semibold ${progress.className}`}
+                        >
+                          {progress.label}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => void updateEventTiming(event)}
+                            disabled={event.status === "cancelled" || updatingTimingEventId === event.id}
+                            className="inline-flex items-center justify-center rounded-full border border-[#c9dce8] px-3 py-1 font-semibold text-[#123447] disabled:opacity-50"
+                          >
+                            {updatingTimingEventId === event.id ? "Atualizando..." : "Update"}
+                          </button>
+                          <Link
+                            href={`/manager/history/events/${event.id}?from=${fromHistory ? "history" : "client-area"}`}
+                            className="inline-flex items-center justify-center rounded-full border border-[#9ec8db] px-3 py-1 font-semibold text-[#0f5b73]"
+                          >
+                            Event record
+                          </Link>
+                          <button
+                            type="button"
+                            onClick={() => void toggleEventLifecycle(event)}
+                            disabled={
+                              event.status === "cancelled" ||
+                              updatingLifecycleEventId === event.id ||
+                              updatingTimingEventId === event.id
+                            }
+                            className="inline-flex items-center justify-center rounded-full border border-[#c9dce8] px-3 py-1 font-semibold text-[#123447] disabled:opacity-50"
+                          >
+                            {updatingLifecycleEventId === event.id
+                              ? "Atualizando..."
+                              : isCommitted
+                                ? "Set provisory"
+                                : "Commit"}
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
-        ) : null}
-        <div className="space-y-2">
-          {provisorySlots.length === 0 ? (
-            <p className="text-xs text-[#5a7383]">Sem marcos provisiorios.</p>
-          ) : (
-            provisorySlots.map((slot, index) => (
-              <div
-                key={`slot-${slot.startsAt}-${index}`}
-                className="grid gap-2 rounded-lg border border-[#d7e6ee] bg-[#f8fbfd] p-2 md:grid-cols-[1fr_180px_auto]"
-              >
-                <p className="rounded border border-[#c9dce8] bg-white px-3 py-2 text-xs text-[#123447]">
-                  {fmtDateTime(slot.startsAt)}
-                </p>
-                <p className="rounded border border-[#c9dce8] bg-white px-3 py-2 text-xs text-[#123447]">
-                  {durationMinutesFromRange(slot.startsAt, slot.endsAt, 60)} min
-                </p>
-                <Link
-                  href={{
-                    pathname: "/manager/calendar",
-                    query: { assignmentId, markedAt: slot.startsAt },
-                  }}
-                  className="inline-flex items-center justify-center rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
-                >
-                  Ver no calendario
-                </Link>
-              </div>
-            ))
-          )}
-        </div>
+        )}
       </section>
 
       <section className="space-y-4 rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">

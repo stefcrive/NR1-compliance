@@ -46,3 +46,24 @@ export function isMissingColumnError(
   }
   return mentionsMissingColumn;
 }
+
+export function isMissingFunctionError(
+  error: DbLikeError | null | undefined,
+  functionName?: string,
+): boolean {
+  if (!error) {
+    return false;
+  }
+  if (error.code === "42883" || error.code === "PGRST202") {
+    return true;
+  }
+
+  if (functionName) {
+    return (
+      includes(error.message, functionName) &&
+      (includes(error.message, "does not exist") || includes(error.message, "could not find"))
+    );
+  }
+
+  return includes(error.message, "function") && includes(error.message, "does not exist");
+}

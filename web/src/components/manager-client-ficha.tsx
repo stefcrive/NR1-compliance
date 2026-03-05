@@ -19,6 +19,7 @@ type ClientSector = {
   id: string;
   key: string;
   name: string;
+  isActive?: boolean;
   remoteWorkers: number;
   onsiteWorkers: number;
   hybridWorkers: number;
@@ -52,6 +53,14 @@ type ClientDetail = {
   contractStartDate: string | null;
   contractEndDate: string | null;
   updatedAt: string | null;
+  access: {
+    hasCredentials: boolean;
+    loginEmail: string | null;
+    invitationStatus: "pending" | "accepted" | "expired" | "revoked" | "none" | "unavailable";
+    invitationLink: string | null;
+    invitationExpiresAt: string | null;
+    invitationAcceptedAt: string | null;
+  };
   sectors: ClientSector[];
   campaigns: Diagnostic[];
 };
@@ -144,6 +153,7 @@ type ClientProfileForm = {
 type SectorProfileForm = {
   id: string;
   name: string;
+  isActive: boolean;
   riskParameter: string;
   mainContactName: string;
   mainContactEmail: string;
@@ -179,6 +189,17 @@ function fmt(value: string | null) {
 function fmtDate(value: string | null) {
   if (!value) return "-";
   return new Intl.DateTimeFormat("pt-BR", { dateStyle: "short" }).format(new Date(value));
+}
+
+function accessInvitationStatusLabel(
+  status: "pending" | "accepted" | "expired" | "revoked" | "none" | "unavailable",
+) {
+  if (status === "pending") return "Pending";
+  if (status === "accepted") return "Accepted";
+  if (status === "expired") return "Expired";
+  if (status === "revoked") return "Revoked";
+  if (status === "none") return "No invitation";
+  return "Unavailable";
 }
 
 function toMonthKey(value: Date): string {
@@ -286,6 +307,7 @@ function buildSectorProfileForm(sector: ClientSector): SectorProfileForm {
   return {
     id: sector.id,
     name: sector.name,
+    isActive: sector.isActive ?? true,
     riskParameter: sector.riskParameter.toFixed(2),
     mainContactName: sector.mainContactName ?? "",
     mainContactEmail: sector.mainContactEmail ?? "",
@@ -308,6 +330,7 @@ function createSectorProfileForm(): SectorProfileForm {
   return {
     id: `new-${Date.now()}-${randomPart}`,
     name: "",
+    isActive: true,
     riskParameter: "1.00",
     mainContactName: "",
     mainContactEmail: "",
@@ -360,6 +383,7 @@ export function ManagerClientFicha({
   const [linksPayload, setLinksPayload] = useState<SectorPayload | null>(null);
   const [isLinksModalOpen, setIsLinksModalOpen] = useState(false);
   const [copiedSectorId, setCopiedSectorId] = useState<string | null>(null);
+  const [accessInviteCopied, setAccessInviteCopied] = useState(false);
   const [isLoadingLinksFor, setIsLoadingLinksFor] = useState<string | null>(null);
   const [openCampaignActionsFor, setOpenCampaignActionsFor] = useState<string | null>(null);
   const [openAssignedProgramActionsFor, setOpenAssignedProgramActionsFor] = useState<string | null>(
@@ -561,6 +585,10 @@ export function ManagerClientFicha({
   }, [client, isEditingCompanyProfile]);
 
   useEffect(() => {
+    setAccessInviteCopied(false);
+  }, [client?.id]);
+
+  useEffect(() => {
     setActiveTab(initialTab);
   }, [initialTab]);
 
@@ -640,6 +668,9 @@ export function ManagerClientFicha({
   }
 
   async function copySectorLink(sector: SectorLink) {
+    if (!sector.isActive) {
+      return;
+    }
     await navigator.clipboard.writeText(sector.accessLink);
     setCopiedSectorId(sector.id);
     window.setTimeout(() => setCopiedSectorId(null), 1200);
@@ -648,7 +679,18 @@ export function ManagerClientFicha({
   async function copyAllLinks() {
     if (!linksPayload) return;
     const lines = linksPayload.sectors.filter((sector) => sector.isActive).map((sector) => `${sector.name}: ${sector.accessLink}`);
+    if (lines.length === 0) {
+      setError("Nenhum setor ativo para copiar.");
+      return;
+    }
     await navigator.clipboard.writeText(lines.join("\n"));
+  }
+
+  async function copyAccessInvitationLink() {
+    if (!client?.access.invitationLink) return;
+    await navigator.clipboard.writeText(client.access.invitationLink);
+    setAccessInviteCopied(true);
+    window.setTimeout(() => setAccessInviteCopied(false), 1200);
   }
 
   function updateSectorForm(id: string, patch: Partial<SectorProfileForm>) {
@@ -703,6 +745,7 @@ export function ManagerClientFicha({
       contractEndDate: companyForm.contractEndDate,
       sectors: sectorForms.map((sector) => ({
         name: sector.name.trim(),
+        isActive: sector.isActive,
         remoteWorkers: sector.remoteWorkers,
         onsiteWorkers: sector.onsiteWorkers,
         hybridWorkers: sector.hybridWorkers,
@@ -758,7 +801,7 @@ export function ManagerClientFicha({
     if (!linksPayload) return;
     const header = ["campaign_id", "campaign_slug", "sector", "active", "submission_count", "access_link"].join(",");
     const rows = linksPayload.sectors.map((sector) =>
-      [csvEscape(linksPayload.campaign.id), csvEscape(linksPayload.campaign.slug), csvEscape(sector.name), csvEscape(sector.isActive ? "true" : "false"), csvEscape(sector.submissionCount), csvEscape(sector.accessLink)].join(","),
+      [csvEscape(linksPayload.campaign.id), csvEscape(linksPayload.campaign.slug), csvEscape(sector.name), csvEscape(sector.isActive ? "true" : "false"), csvEscape(sector.submissionCount), csvEscape(sector.isActive ? sector.accessLink : null)].join(","),
     );
     const blob = new Blob([[header, ...rows].join("\n")], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
@@ -770,11 +813,8 @@ export function ManagerClientFicha({
   }
 
   function focusResults(campaign: Diagnostic) {
-    if (!client?.portalSlug) {
-      setError("Cliente sem slug de portal para abrir resultados.");
-      return;
-    }
-    router.push(`/client/${client.portalSlug}/diagnostic/${campaign.id}`);
+    if (!client) return;
+    router.push(`/manager/clients/${client.id}/diagnostic/${campaign.id}`);
   }
 
   function openAssignedProgramDetails(assignment: AssignedContinuousProgram) {
@@ -1268,6 +1308,19 @@ export function ManagerClientFicha({
                             />
                           </label>
                           <label className="text-xs text-[#4f6977]">
+                            Status
+                            <select
+                              className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
+                              value={sector.isActive ? "active" : "inactive"}
+                              onChange={(event) =>
+                                updateSectorForm(sector.id, { isActive: event.target.value === "active" })
+                              }
+                            >
+                              <option value="active">Ativo</option>
+                              <option value="inactive">Inativo</option>
+                            </select>
+                          </label>
+                          <label className="text-xs text-[#4f6977]">
                             Risk parameter
                             <input
                               type="number"
@@ -1475,12 +1528,53 @@ export function ManagerClientFicha({
               <p className="mt-1 text-sm">
                 Contrato: {fmtDate(client.contractStartDate)} - {fmtDate(client.contractEndDate)}
               </p>
+              <div className="mt-3 rounded-xl border border-[#d8e4ee] bg-[#f8fbfd] p-3">
+                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[#4f6977]">
+                  Client access
+                </p>
+                <p className="mt-1 text-sm text-[#153748]">
+                  Credentials:{" "}
+                  {client.access.hasCredentials
+                    ? `Configured (${client.access.loginEmail ?? "-"})`
+                    : "Pending setup"}
+                </p>
+                <p className="mt-1 text-sm text-[#153748]">
+                  Invitation status: {accessInvitationStatusLabel(client.access.invitationStatus)}
+                </p>
+                {client.access.invitationExpiresAt ? (
+                  <p className="mt-1 text-xs text-[#4f6977]">
+                    Invitation expires: {fmt(client.access.invitationExpiresAt)}
+                  </p>
+                ) : null}
+                {client.access.invitationAcceptedAt ? (
+                  <p className="mt-1 text-xs text-[#4f6977]">
+                    Invitation accepted: {fmt(client.access.invitationAcceptedAt)}
+                  </p>
+                ) : null}
+                {client.access.invitationLink ? (
+                  <div className="mt-2 flex items-center gap-2">
+                    <input
+                      readOnly
+                      value={client.access.invitationLink}
+                      className="w-full rounded border border-[#c9dce8] bg-white px-2 py-1 text-xs"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => void copyAccessInvitationLink()}
+                      className="rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
+                    >
+                      {accessInviteCopied ? "Copiado" : "Copiar"}
+                    </button>
+                  </div>
+                ) : null}
+              </div>
               <p className="mt-1 text-sm">Setores: {client.sectors.length}</p>
               <div className="mt-3 overflow-x-auto rounded-xl border border-[#d8e4ee]">
                 <table className="min-w-full text-sm">
                   <thead>
                     <tr className="border-b bg-[#f8fbfd]">
                       <th className="px-3 py-2 text-left text-xs font-semibold text-[#4f6977]">Setor</th>
+                      <th className="px-3 py-2 text-left text-xs font-semibold text-[#4f6977]">Status</th>
                       <th className="px-3 py-2 text-left text-xs font-semibold text-[#4f6977]">Contato</th>
                       <th className="px-3 py-2 text-left text-xs font-semibold text-[#4f6977]">Email</th>
                       <th className="px-3 py-2 text-left text-xs font-semibold text-[#4f6977]">Telefone</th>
@@ -1490,7 +1584,7 @@ export function ManagerClientFicha({
                   <tbody>
                     {client.sectors.length === 0 ? (
                       <tr>
-                        <td colSpan={5} className="px-3 py-3 text-xs text-[#5a7383]">
+                        <td colSpan={6} className="px-3 py-3 text-xs text-[#5a7383]">
                           Nenhum setor cadastrado.
                         </td>
                       </tr>
@@ -1498,6 +1592,7 @@ export function ManagerClientFicha({
                       client.sectors.map((sector) => (
                         <tr key={sector.id} className="border-b last:border-b-0">
                           <td className="px-3 py-2">{sector.name}</td>
+                          <td className="px-3 py-2">{sector.isActive ?? true ? "Ativo" : "Inativo"}</td>
                           <td className="px-3 py-2">{sector.mainContactName || "-"}</td>
                           <td className="px-3 py-2">{sector.mainContactEmail || "-"}</td>
                           <td className="px-3 py-2">{sector.mainContactPhone || "-"}</td>
@@ -1785,15 +1880,16 @@ export function ManagerClientFicha({
                           <div className="flex items-center gap-2">
                             <input
                               readOnly
-                              value={sector.accessLink}
+                              value={sector.isActive ? sector.accessLink : "Setor inativo (link bloqueado)"}
                               className="w-full min-w-[280px] rounded border border-[#d5e2ea] bg-[#f7fbfe] px-2 py-1 text-xs"
                             />
                             <button
                               type="button"
+                              disabled={!sector.isActive}
                               onClick={() => void copySectorLink(sector)}
-                              className="rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
+                              className="rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73] disabled:cursor-not-allowed disabled:border-[#d6dde2] disabled:text-[#95a4ae]"
                             >
-                              {copiedSectorId === sector.id ? "Copiado" : "Copiar"}
+                              {!sector.isActive ? "Inativo" : copiedSectorId === sector.id ? "Copiado" : "Copiar"}
                             </button>
                           </div>
                         </td>

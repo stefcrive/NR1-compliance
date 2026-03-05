@@ -1,8 +1,19 @@
 import Link from "next/link";
+import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
+
 import { CompanyLogoLink } from "@/components/company-logo-link";
 import { RoleLoginForm } from "@/components/role-login-form";
+import { CLIENT_SESSION_COOKIE, parseClientSessionToken } from "@/lib/auth/session";
 
-export default function ClientAccessPage() {
+export default async function ClientAccessPage() {
+  const cookieStore = await cookies();
+  const session = parseClientSessionToken(cookieStore.get(CLIENT_SESSION_COOKIE)?.value);
+
+  if (session) {
+    redirect(`/client/${session.clientSlug}/company`);
+  }
+
   return (
     <main className="min-h-screen bg-[#f6f6f6] px-4 py-10">
       <div className="mx-auto w-full max-w-4xl space-y-5">

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { parseEventRecordAttachments, type EventRecordJournal } from "@/lib/event-record-journal";
 import { extractCalendarEventDetails } from "@/lib/master-calendar";
 import { slugify } from "@/lib/slug";
 import { isMissingColumnError, isMissingTableError } from "@/lib/supabase-errors";
@@ -76,6 +77,13 @@ type DrpsAssessmentRow = {
   created_at: string;
 };
 
+type EventJournalRow = {
+  event_id: string;
+  client_id: string | null;
+  notes: string | null;
+  attachments: unknown;
+};
+
 function normalizeTextArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value
@@ -87,6 +95,54 @@ function normalizeTextArray(value: unknown): string[] {
 function plusOneHour(iso: string): string {
   const date = new Date(iso);
   return new Date(date.getTime() + 60 * 60 * 1000).toISOString();
+}
+
+function normalizeNotes(value: string | null | undefined): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim();
+  return normalized.length > 0 ? normalized : null;
+}
+
+async function loadEventJournalForClient(eventId: string, clientId: string): Promise<EventRecordJournal> {
+  const supabase = getSupabaseAdminClient();
+  const result = await supabase
+    .from("history_event_records")
+    .select("event_id,client_id,notes,attachments")
+    .eq("event_id", eventId)
+    .maybeSingle<EventJournalRow>();
+
+  if (result.error) {
+    if (isMissingTableError(result.error, "history_event_records")) {
+      return {
+        notes: null,
+        attachments: [],
+        available: false,
+      };
+    }
+    throw new Error("Could not load event journal.");
+  }
+
+  if (!result.data) {
+    return {
+      notes: null,
+      attachments: [],
+      available: true,
+    };
+  }
+
+  if (result.data.client_id && result.data.client_id !== clientId) {
+    return {
+      notes: null,
+      attachments: [],
+      available: true,
+    };
+  }
+
+  return {
+    notes: normalizeNotes(result.data.notes),
+    attachments: parseEventRecordAttachments(result.data.attachments),
+    available: true,
+  };
 }
 
 async function loadClientBySlug(clientSlug: string): Promise<ClientRow | null> {
@@ -347,11 +403,12 @@ export async function GET(
         return NextResponse.json({ error: "Event record has no date." }, { status: 404 });
       }
 
-      const [summary, latestDrps] = await Promise.all([
+      const [summary, latestDrps, journal] = await Promise.all([
         loadCampaignResponseSummary(campaignLoaded.campaign.id, campaignLoaded.source),
         campaignLoaded.source === "modern"
           ? loadLatestDrps(campaignLoaded.campaign.id)
           : Promise.resolve({ latest: null, unavailable: false }),
+        loadEventJournalForClient(eventId, client.client_id),
       ]);
 
       return NextResponse.json({
@@ -373,6 +430,7 @@ export async function GET(
             proposalKind: null,
             availabilityRequestId: null,
           },
+          journal,
           related: {
             campaign: campaignLoaded.campaign,
             programAssignment: null,
@@ -418,6 +476,7 @@ export async function GET(
       ? await loadProgramAssignment(client.client_id, eventResult.data.source_client_program_id)
       : { assignment: null, programTitle: null };
     const assignment = programAssignmentLoaded.assignment;
+    const journal = await loadEventJournalForClient(eventId, client.client_id);
 
     return NextResponse.json({
       record: {
@@ -429,6 +488,7 @@ export async function GET(
         startsAt: eventResult.data.starts_at,
         endsAt: eventResult.data.ends_at,
         details,
+        journal,
         related: {
           campaign: null,
           programAssignment: assignment

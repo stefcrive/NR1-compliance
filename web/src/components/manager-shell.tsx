@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ManagerLocaleProvider, useManagerLocale } from "@/components/manager-locale";
 
@@ -147,6 +147,7 @@ function formatNotificationDate(value: string, locale: "en" | "pt") {
 function ManagerShellInner({ children }: { children: React.ReactNode }) {
   const { locale, toggleLocale } = useManagerLocale();
   const pathname = usePathname();
+  const searchParams = useSearchParams();
   const t = COPY[locale];
   const notificationsPanelRef = useRef<HTMLDivElement | null>(null);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
@@ -215,8 +216,14 @@ function ManagerShellInner({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  const isNavItemActive = (href: string) =>
-    href === "/manager" ? pathname === href : pathname === href || pathname.startsWith(`${href}/`);
+  const isNavItemActive = (href: string) => {
+    if (pathname.startsWith("/manager/history/events/")) {
+      const source = searchParams.get("from");
+      if (source === "client-area") return href === "/manager/clients";
+      if (source === "calendar") return href === "/manager/calendar";
+    }
+    return href === "/manager" ? pathname === href : pathname === href || pathname.startsWith(`${href}/`);
+  };
 
   return (
     <div className="min-h-screen bg-[#f6f6f6]">

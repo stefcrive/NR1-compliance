@@ -100,13 +100,20 @@ export async function GET(
     return NextResponse.json({ error: "Could not load sectors." }, { status: 500 });
   }
 
+  const sortedSectors = (data ?? []).slice().sort((left, right) => {
+    if (left.is_active !== right.is_active) {
+      return left.is_active ? -1 : 1;
+    }
+    return left.created_at.localeCompare(right.created_at);
+  });
+
   return NextResponse.json({
     campaign: {
       id: resolved.campaign.id,
       name: resolved.campaign.name,
       slug: resolved.campaign.public_slug,
     },
-    sectors: (data ?? []).map((item) => ({
+    sectors: sortedSectors.map((item) => ({
       id: item.id,
       key: item.key,
       name: item.name,

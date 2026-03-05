@@ -106,6 +106,10 @@ function plusOneHour(value: Date): Date {
   return new Date(value.getTime() + 60 * 60 * 1000);
 }
 
+function plusDays(value: Date, days: number): Date {
+  return new Date(value.getTime() + days * 24 * 60 * 60 * 1000);
+}
+
 function sortByStart(events: MasterCalendarEvent[]): MasterCalendarEvent[] {
   return events.slice().sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime());
 }
@@ -121,6 +125,12 @@ export function buildDrpsCalendarEvents(
     const clientName = clientId ? clientNameById?.get(clientId) ?? null : null;
     const start = toDate(campaign.starts_at);
     const close = toDate(campaign.closes_at);
+    const closeOrDefault =
+      close && start && close.getTime() > start.getTime()
+        ? close
+        : start
+          ? plusDays(start, 7)
+          : close;
 
     if (start) {
       events.push({
@@ -130,7 +140,7 @@ export function buildDrpsCalendarEvents(
         eventType: "drps_start",
         title: `Inicio DRPS: ${campaign.name}`,
         startsAt: start.toISOString(),
-        endsAt: plusOneHour(start).toISOString(),
+        endsAt: (closeOrDefault ?? plusOneHour(start)).toISOString(),
         status: "scheduled",
         sourceClientProgramId: null,
         details: {
@@ -143,15 +153,15 @@ export function buildDrpsCalendarEvents(
       });
     }
 
-    if (close) {
+    if (closeOrDefault) {
       events.push({
         id: `drps-close-${campaign.id}`,
         clientId,
         clientName,
         eventType: "drps_close",
         title: `Fechamento DRPS: ${campaign.name}`,
-        startsAt: close.toISOString(),
-        endsAt: plusOneHour(close).toISOString(),
+        startsAt: closeOrDefault.toISOString(),
+        endsAt: plusOneHour(closeOrDefault).toISOString(),
         status: "scheduled",
         sourceClientProgramId: null,
         details: {

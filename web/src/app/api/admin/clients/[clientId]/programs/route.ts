@@ -63,6 +63,15 @@ type CalendarMeetingRow = {
   metadata?: unknown;
 };
 
+type AssignmentCalendarEvent = {
+  id: string;
+  startsAt: string;
+  endsAt: string;
+  status: "scheduled" | "completed" | "cancelled";
+  lifecycle: "provisory" | "committed";
+  proposalKind: "assignment" | "reschedule" | null;
+};
+
 const cadenceFrequencyValues = [
   "weekly",
   "biweekly",
@@ -76,6 +85,40 @@ const annualPlanMonthRegex = /^\d{4}-(0[1-9]|1[0-2])$/;
 
 function todayIsoDate(): string {
   return new Date().toISOString().slice(0, 10);
+}
+
+function parseScheduleFrequency(value: unknown): string {
+  if (typeof value !== "string") return DEFAULT_CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCY;
+  const normalized = value.trim().toLowerCase();
+  if (
+    cadenceFrequencyValues.includes(
+      normalized as (typeof cadenceFrequencyValues)[number],
+    )
+  ) {
+    return normalized;
+  }
+  return DEFAULT_CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCY;
+}
+
+function parseIsoDate(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(normalized)) return null;
+  return normalized;
+}
+
+function resolveCadenceValues(params: {
+  assignment: ClientProgramRow;
+  program: PeriodicProgramRow | null;
+}): { scheduleFrequency: string; scheduleAnchorDate: string } {
+  const scheduleFrequency = parseScheduleFrequency(
+    params.assignment.schedule_frequency_override ?? params.program?.schedule_frequency,
+  );
+  const scheduleAnchorDate =
+    parseIsoDate(
+      params.assignment.schedule_anchor_date_override ?? params.program?.schedule_anchor_date,
+    ) ?? todayIsoDate();
+  return { scheduleFrequency, scheduleAnchorDate };
 }
 
 const assignProgramSchema = z.object({
@@ -110,8 +153,8 @@ function mapAvailableProgram(program: PeriodicProgramRow) {
     description: program.description,
     targetRiskTopic: Number(program.target_risk_topic),
     triggerThreshold: Number(program.trigger_threshold),
-    scheduleFrequency: DEFAULT_CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCY,
-    scheduleAnchorDate: program.schedule_anchor_date ?? todayIsoDate(),
+    scheduleFrequency: parseScheduleFrequency(program.schedule_frequency),
+    scheduleAnchorDate: parseIsoDate(program.schedule_anchor_date) ?? todayIsoDate(),
   };
 }
 
@@ -122,12 +165,11 @@ function mapAssignedProgram(
     cadenceSuggestedSlots?: AvailabilitySlot[];
     calendarProvisorySlots?: AvailabilitySlot[];
     calendarCommittedSlots?: AvailabilitySlot[];
+    calendarTimelineEvents?: AssignmentCalendarEvent[];
   },
 ) {
   const program = programById.get(assignment.program_id) ?? null;
-  const scheduleFrequency =
-    assignment.schedule_frequency_override ?? DEFAULT_CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCY;
-  const scheduleAnchorDate = todayIsoDate();
+  const cadence = resolveCadenceValues({ assignment, program });
   return {
     id: assignment.client_program_id,
     programId: assignment.program_id,
@@ -135,14 +177,15 @@ function mapAssignedProgram(
     programDescription: program?.description ?? null,
     targetRiskTopic: program ? Number(program.target_risk_topic) : null,
     triggerThreshold: program ? Number(program.trigger_threshold) : null,
-    scheduleFrequency,
-    scheduleAnchorDate,
+    scheduleFrequency: cadence.scheduleFrequency,
+    scheduleAnchorDate: cadence.scheduleAnchorDate,
     status: assignment.status,
     deployedAt: assignment.deployed_at ?? null,
     annualPlanMonths: normalizeAnnualPlanMonths(assignment.annual_plan_months),
     cadenceSuggestedSlots: options?.cadenceSuggestedSlots ?? [],
     calendarProvisorySlots: options?.calendarProvisorySlots ?? [],
     calendarCommittedSlots: options?.calendarCommittedSlots ?? [],
+    calendarTimelineEvents: options?.calendarTimelineEvents ?? [],
   };
 }
 
@@ -314,12 +357,14 @@ async function loadCommittedMeetingsByAssignment(
 ): Promise<{
   committedByAssignment: Map<string, AvailabilitySlot[]>;
   provisoryByAssignment: Map<string, AvailabilitySlot[]>;
+  timelineByAssignment: Map<string, AssignmentCalendarEvent[]>;
   unavailable: boolean;
 }> {
   if (assignmentIds.length === 0) {
     return {
       committedByAssignment: new Map(),
       provisoryByAssignment: new Map(),
+      timelineByAssignment: new Map(),
       unavailable: false,
     };
   }
@@ -339,6 +384,7 @@ async function loadCommittedMeetingsByAssignment(
       return {
         committedByAssignment: new Map(),
         provisoryByAssignment: new Map(),
+        timelineByAssignment: new Map(),
         unavailable: true,
       };
     }
@@ -347,27 +393,46 @@ async function loadCommittedMeetingsByAssignment(
 
   const committedByAssignment = new Map<string, AvailabilitySlot[]>();
   const provisoryByAssignment = new Map<string, AvailabilitySlot[]>();
+  const timelineByAssignment = new Map<string, AssignmentCalendarEvent[]>();
   for (const row of result.data ?? []) {
     if (!row.source_client_program_id) continue;
-    if (row.status === "cancelled") continue;
     const details = extractCalendarEventDetails(row.metadata);
+    const timeline = timelineByAssignment.get(row.source_client_program_id) ?? [];
+    timeline.push({
+      id: row.event_id,
+      startsAt: row.starts_at,
+      endsAt: row.ends_at,
+      status: row.status,
+      lifecycle: details.eventLifecycle,
+      proposalKind: details.proposalKind,
+    });
+    timelineByAssignment.set(row.source_client_program_id, timeline);
+    if (row.status === "cancelled") continue;
     const targetMap =
       details.eventLifecycle === "provisory" ? provisoryByAssignment : committedByAssignment;
     const list = targetMap.get(row.source_client_program_id) ?? [];
     list.push({ startsAt: row.starts_at, endsAt: row.ends_at });
     targetMap.set(row.source_client_program_id, list);
   }
-  return { committedByAssignment, provisoryByAssignment, unavailable: false };
+  for (const [assignmentId, timeline] of timelineByAssignment.entries()) {
+    timelineByAssignment.set(
+      assignmentId,
+      timeline.slice().sort((left, right) => {
+        const leftTime = new Date(left.startsAt).getTime();
+        const rightTime = new Date(right.startsAt).getTime();
+        return leftTime - rightTime;
+      }),
+    );
+  }
+  return { committedByAssignment, provisoryByAssignment, timelineByAssignment, unavailable: false };
 }
 
 function resolveCadenceForAssignment(
   assignment: ClientProgramRow,
+  programById: Map<string, PeriodicProgramRow>,
 ): { scheduleFrequency: string; scheduleAnchorDate: string | null } {
-  return {
-    scheduleFrequency:
-      assignment.schedule_frequency_override ?? DEFAULT_CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCY,
-    scheduleAnchorDate: todayIsoDate(),
-  };
+  const program = programById.get(assignment.program_id) ?? null;
+  return resolveCadenceValues({ assignment, program });
 }
 
 async function insertProvisoryAssignmentEvents(params: {
@@ -458,6 +523,7 @@ export async function GET(
 
   let committedByAssignment = new Map<string, AvailabilitySlot[]>();
   let provisoryByAssignment = new Map<string, AvailabilitySlot[]>();
+  let timelineByAssignment = new Map<string, AssignmentCalendarEvent[]>();
   try {
     const loaded = await loadCommittedMeetingsByAssignment(
       clientId,
@@ -465,15 +531,17 @@ export async function GET(
     );
     committedByAssignment = loaded.committedByAssignment;
     provisoryByAssignment = loaded.provisoryByAssignment;
+    timelineByAssignment = loaded.timelineByAssignment;
   } catch {
     committedByAssignment = new Map<string, AvailabilitySlot[]>();
     provisoryByAssignment = new Map<string, AvailabilitySlot[]>();
+    timelineByAssignment = new Map<string, AssignmentCalendarEvent[]>();
   }
 
   return NextResponse.json({
     availablePrograms: (programsResult.data ?? []).map(mapAvailableProgram),
     assignedPrograms: assignments.map((item) => {
-      const cadence = resolveCadenceForAssignment(item);
+      const cadence = resolveCadenceForAssignment(item, programById);
       const storedProvisorySlots = provisoryByAssignment.get(item.client_program_id) ?? [];
       const cadenceSuggestedSlots =
         item.status === "Active" && !assignmentsLoaded.annualPlanSupported
@@ -499,6 +567,7 @@ export async function GET(
         cadenceSuggestedSlots,
         calendarProvisorySlots: provisorySlots,
         calendarCommittedSlots: committedByAssignment.get(item.client_program_id) ?? [],
+        calendarTimelineEvents: timelineByAssignment.get(item.client_program_id) ?? [],
       });
     }),
   });
@@ -671,7 +740,7 @@ export async function POST(
 
   const programById = new Map([[programResult.data.program_id, programResult.data]]);
   let cadenceSuggestedSlots: AvailabilitySlot[] = [];
-  const cadence = resolveCadenceForAssignment(insertResult.data);
+  const cadence = resolveCadenceForAssignment(insertResult.data, programById);
   let calendarUnavailable = false;
   try {
     if (insertResult.data.status === "Active" && !annualPlanSupported) {

@@ -31,6 +31,16 @@ type TopicGroup = {
   questions: CampaignQuestion[];
 };
 
+type CampaignMutationPayload = {
+  campaign?: {
+    id: string;
+    name: string;
+    public_slug: string;
+    status: string;
+  };
+  error?: string;
+};
+
 const TOPIC_LABELS = {
   en: {
     1: "T01 Harassment",
@@ -78,6 +88,22 @@ const COPY = {
     linkedAssigned: "Assigned to client",
     linkedTemplate: "Template",
     reload: "Reload",
+    editTitle: "Edit title",
+    cloneQuestionnaire: "Clone questionnaire",
+    titleField: "DRPS title",
+    cloneField: "Clone title",
+    saveTitle: "Save title",
+    createClone: "Create clone",
+    cancelAction: "Cancel",
+    updating: "Updating...",
+    cloning: "Cloning...",
+    titleValidationError: "Title must have at least 3 characters.",
+    titleUpdated: "DRPS title updated.",
+    cloneValidationError: "Clone title must have at least 3 characters.",
+    cloneCreateError: "Could not clone questionnaire.",
+    cloneCreated: "Questionnaire clone created.",
+    openClone: "Open clone",
+    cloneUnavailableLegacy: "Only survey-based diagnostics can be cloned.",
     questionnaireTitle: "Questionnaire editor",
     questionnaireSubtitle:
       "Edit prompts and save to persist question updates in the database.",
@@ -107,6 +133,22 @@ const COPY = {
     linkedAssigned: "Atribuido ao cliente",
     linkedTemplate: "Template",
     reload: "Recarregar",
+    editTitle: "Editar titulo",
+    cloneQuestionnaire: "Clonar questionario",
+    titleField: "Titulo do DRPS",
+    cloneField: "Titulo do clone",
+    saveTitle: "Salvar titulo",
+    createClone: "Criar clone",
+    cancelAction: "Cancelar",
+    updating: "Atualizando...",
+    cloning: "Clonando...",
+    titleValidationError: "Titulo deve ter pelo menos 3 caracteres.",
+    titleUpdated: "Titulo do DRPS atualizado.",
+    cloneValidationError: "Titulo do clone deve ter pelo menos 3 caracteres.",
+    cloneCreateError: "Nao foi possivel clonar o questionario.",
+    cloneCreated: "Clone do questionario criado.",
+    openClone: "Abrir clone",
+    cloneUnavailableLegacy: "Somente diagnosticos baseados em surveys podem ser clonados.",
     questionnaireTitle: "Editor de questionario",
     questionnaireSubtitle:
       "Edite os prompts e salve para persistir as perguntas no banco de dados.",
@@ -145,6 +187,15 @@ export function ManagerDrpsDiagnosticEditor({ campaignId }: { campaignId: string
   const [error, setError] = useState("");
   const [questionError, setQuestionError] = useState("");
   const [saveNotice, setSaveNotice] = useState("");
+  const [isEditingTitle, setIsEditingTitle] = useState(false);
+  const [isUpdatingTitle, setIsUpdatingTitle] = useState(false);
+  const [editTitleValue, setEditTitleValue] = useState("");
+  const [isClonePanelOpen, setIsClonePanelOpen] = useState(false);
+  const [isCloning, setIsCloning] = useState(false);
+  const [cloneName, setCloneName] = useState("");
+  const [actionError, setActionError] = useState("");
+  const [actionNotice, setActionNotice] = useState("");
+  const [createdCloneId, setCreatedCloneId] = useState<string | null>(null);
 
   const topicGroups = useMemo<TopicGroup[]>(() => {
     const byTopic = new Map<number, CampaignQuestion[]>();
@@ -306,6 +357,103 @@ export function ManagerDrpsDiagnosticEditor({ campaignId }: { campaignId: string
     }
   }
 
+  function openEditTitle() {
+    setActionError("");
+    setActionNotice("");
+    setCreatedCloneId(null);
+    setIsClonePanelOpen(false);
+    setEditTitleValue(diagnostic?.name ?? "");
+    setIsEditingTitle(true);
+  }
+
+  async function saveTitle() {
+    const normalizedTitle = editTitleValue.trim();
+    if (normalizedTitle.length < 3) {
+      setActionError(t.titleValidationError);
+      setActionNotice("");
+      return;
+    }
+
+    setIsUpdatingTitle(true);
+    setActionError("");
+    setActionNotice("");
+    try {
+      const response = await fetch(`/api/admin/campaigns/${campaignId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: normalizedTitle }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as CampaignMutationPayload;
+      if (!response.ok) {
+        throw new Error(payload.error ?? t.notFound);
+      }
+      setDiagnostic((previous) =>
+        previous
+          ? {
+              ...previous,
+              name: payload.campaign?.name ?? normalizedTitle,
+            }
+          : previous,
+      );
+      setIsEditingTitle(false);
+      setActionNotice(t.titleUpdated);
+    } catch (updateError) {
+      setActionError(updateError instanceof Error ? updateError.message : t.notFound);
+    } finally {
+      setIsUpdatingTitle(false);
+    }
+  }
+
+  function openClonePanel() {
+    setActionError("");
+    setActionNotice("");
+    setCreatedCloneId(null);
+    setIsEditingTitle(false);
+    setCloneName(`${diagnostic?.name ?? ""} (${locale === "pt" ? "copia" : "copy"})`);
+    setIsClonePanelOpen(true);
+  }
+
+  async function createClone() {
+    if (diagnostic?.source !== "surveys") {
+      setActionError(t.cloneUnavailableLegacy);
+      setActionNotice("");
+      return;
+    }
+
+    const normalizedTitle = cloneName.trim();
+    if (normalizedTitle.length < 3) {
+      setActionError(t.cloneValidationError);
+      setActionNotice("");
+      return;
+    }
+
+    setIsCloning(true);
+    setActionError("");
+    setActionNotice("");
+    try {
+      const response = await fetch("/api/admin/campaigns", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: normalizedTitle,
+          status: "draft",
+          sourceSurveyId: campaignId,
+        }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as CampaignMutationPayload;
+      if (response.status === 207 || !response.ok || !payload.campaign?.id) {
+        throw new Error(payload.error ?? t.cloneCreateError);
+      }
+      setCreatedCloneId(payload.campaign.id);
+      setIsClonePanelOpen(false);
+      setActionNotice(t.cloneCreated);
+    } catch (cloneError) {
+      setActionError(cloneError instanceof Error ? cloneError.message : t.cloneCreateError);
+    } finally {
+      setIsCloning(false);
+    }
+  }
+
   if (isLoading) {
     return <p className="text-sm text-[#49697a]">{t.loading}</p>;
   }
@@ -340,14 +488,97 @@ export function ManagerDrpsDiagnosticEditor({ campaignId }: { campaignId: string
               {diagnostic.linkedClientId ? t.linkedAssigned : t.linkedTemplate}
             </p>
           </div>
-          <button
-            type="button"
-            onClick={() => void loadData()}
-            className="rounded-full border border-[#9ec8db] px-4 py-2 text-xs font-semibold text-[#0f5b73]"
-          >
-            {t.reload}
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={openEditTitle}
+              className="rounded-full border border-[#9ec8db] px-4 py-2 text-xs font-semibold text-[#0f5b73]"
+            >
+              {t.editTitle}
+            </button>
+            <button
+              type="button"
+              onClick={openClonePanel}
+              disabled={diagnostic.source !== "surveys"}
+              className="rounded-full border border-[#9ec8db] px-4 py-2 text-xs font-semibold text-[#0f5b73] disabled:opacity-50"
+            >
+              {t.cloneQuestionnaire}
+            </button>
+            <button
+              type="button"
+              onClick={() => void loadData()}
+              className="rounded-full border border-[#9ec8db] px-4 py-2 text-xs font-semibold text-[#0f5b73]"
+            >
+              {t.reload}
+            </button>
+          </div>
         </div>
+        {isEditingTitle ? (
+          <div className="mt-4 flex flex-wrap items-end gap-2">
+            <label className="min-w-[220px] flex-1 text-xs text-[#4f6977]">
+              {t.titleField}
+              <input
+                value={editTitleValue}
+                onChange={(event) => setEditTitleValue(event.target.value)}
+                className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
+              />
+            </label>
+            <button
+              type="button"
+              onClick={() => void saveTitle()}
+              disabled={isUpdatingTitle}
+              className="rounded-full bg-[#0f5b73] px-4 py-2 text-xs font-semibold text-white disabled:opacity-60"
+            >
+              {isUpdatingTitle ? t.updating : t.saveTitle}
+            </button>
+            <button
+              type="button"
+              onClick={() => setIsEditingTitle(false)}
+              className="rounded-full border border-[#9ec8db] px-4 py-2 text-xs font-semibold text-[#0f5b73]"
+            >
+              {t.cancelAction}
+            </button>
+          </div>
+        ) : null}
+        {isClonePanelOpen ? (
+          <div className="mt-4 flex flex-wrap items-end gap-2">
+            <label className="min-w-[220px] flex-1 text-xs text-[#4f6977]">
+              {t.cloneField}
+              <input
+                value={cloneName}
+                onChange={(event) => setCloneName(event.target.value)}
+                className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
+              />
+            </label>
+            <button
+              type="button"
+              onClick={() => void createClone()}
+              disabled={isCloning}
+              className="rounded-full bg-[#0f5b73] px-4 py-2 text-xs font-semibold text-white disabled:opacity-60"
+            >
+              {isCloning ? t.cloning : t.createClone}
+            </button>
+            <button
+              type="button"
+              onClick={() => setIsClonePanelOpen(false)}
+              className="rounded-full border border-[#9ec8db] px-4 py-2 text-xs font-semibold text-[#0f5b73]"
+            >
+              {t.cancelAction}
+            </button>
+          </div>
+        ) : null}
+        {actionError ? <p className="mt-3 text-sm text-red-600">{actionError}</p> : null}
+        {actionNotice ? <p className="mt-3 text-sm text-[#1f6b3d]">{actionNotice}</p> : null}
+        {createdCloneId ? (
+          <div className="mt-2">
+            <Link
+              href={`/manager/programs/drps/${createdCloneId}`}
+              className="rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
+            >
+              {t.openClone}
+            </Link>
+          </div>
+        ) : null}
       </section>
 
       <section className="space-y-4 rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">

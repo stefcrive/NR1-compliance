@@ -7,7 +7,7 @@ import { extractTrustedIp, hashIp } from "@/lib/ip";
 import { submittedCookieMaxAgeSeconds, submittedCookieNameForSurvey } from "@/lib/public-form-submit-cookie";
 import { filterPublicSurveyGroups, sanitizePublicGroupValues } from "@/lib/public-survey-groups";
 import { correctedScore } from "@/lib/scoring";
-import { isMissingColumnError, isMissingTableError } from "@/lib/supabase-errors";
+import { isMissingColumnError, isMissingFunctionError, isMissingTableError } from "@/lib/supabase-errors";
 import { getLiveSurveyBySlug, getSurveyPublicBundle } from "@/lib/survey-repo";
 import { getSupabaseAdminClient } from "@/lib/supabase-admin";
 import { verifyTurnstileToken } from "@/lib/turnstile";
@@ -348,6 +348,16 @@ export async function POST(
     await supabase.rpc("bump_sector_submission", {
       p_sector_id: matchedSector.id,
     });
+  }
+
+  const refreshTimeseriesResult = await supabase.rpc("refresh_survey_sector_risk_factor_timeseries", {
+    p_survey_id: survey.id,
+  });
+  if (
+    refreshTimeseriesResult.error &&
+    !isMissingFunctionError(refreshTimeseriesResult.error, "refresh_survey_sector_risk_factor_timeseries")
+  ) {
+    return NextResponse.json({ error: "Could not update risk-factor time series." }, { status: 500 });
   }
 
   const response = NextResponse.json({

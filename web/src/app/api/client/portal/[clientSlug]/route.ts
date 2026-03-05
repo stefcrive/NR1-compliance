@@ -13,7 +13,7 @@ import {
 } from "@/lib/continuous-programs";
 import { classifyScore, resolveRisk } from "@/lib/risk";
 import { slugify } from "@/lib/slug";
-import { isMissingColumnError, isMissingTableError } from "@/lib/supabase-errors";
+import { isMissingColumnError, isMissingFunctionError, isMissingTableError } from "@/lib/supabase-errors";
 import { getSupabaseAdminClient } from "@/lib/supabase-admin";
 import { buildAccessLink, toRiskParameter } from "@/lib/survey-sectors";
 
@@ -54,6 +54,7 @@ type CampaignRow = {
   starts_at: string | null;
   closes_at: string | null;
   created_at: string;
+  responses?: number;
 };
 
 type TopicAggregateRow = {
@@ -150,12 +151,22 @@ type AvailabilitySlot = {
   endsAt: string;
 };
 const annualPlanMonthRegex = /^\d{4}-(0[1-9]|1[0-2])$/;
+const DRPS_COLLECTION_WINDOW_DAYS = 7;
+const DAY_IN_MS = 24 * 60 * 60 * 1000;
 
 type ResponseRawRow = {
   id: string;
   survey_id: string;
   submitted_at: string;
   group_values: Record<string, unknown> | null;
+};
+
+type CampaignResponseRow = {
+  survey_id: string | null;
+};
+
+type LegacyCampaignResponseRow = {
+  campaign_id: string | null;
 };
 
 type QuestionTopicRow = {
@@ -207,6 +218,34 @@ type RiskFactorMetric = {
   riskCategory: RiskMatrixClass | null;
   concentration: number | null;
   distribution: ScoreDistribution;
+};
+
+type RiskFactorTrendPoint = {
+  period: string;
+  meanExposure: number;
+  stdDevExposure: number;
+  prevalence: number | null;
+  severityIndex: number | null;
+  probability: number;
+  severity: number;
+  riskScore: number;
+  responses: number;
+};
+
+type RiskFactorTrendSeries = {
+  topicId: number;
+  riskFactor: string;
+  sector: string;
+  points: RiskFactorTrendPoint[];
+};
+
+type SectorRiskFactorTimeseriesRow = {
+  sector_name: string;
+  topic_id: number;
+  period_start: string;
+  response_count: number;
+  mean_exposure: number | string;
+  std_dev_exposure: number | string;
 };
 
 type CriticalExposureStats = {
@@ -519,37 +558,82 @@ function buildRiskFactorMetrics(rows: ResponseRiskDatasetRow[], topicIds: number
   });
 }
 
-function buildTrendSeries(rows: ResponseRiskDatasetRow[], topicIds: number[]) {
-  const aggregateByTopicAndPeriod = new Map<string, { topicId: number; period: string; sum: number; count: number }>();
+function buildTrendSeries(
+  rows: ResponseRiskDatasetRow[],
+  topicIds: number[],
+  sector = "Global",
+): RiskFactorTrendSeries[] {
+  const topicSet = new Set(topicIds);
+  const aggregateByTopicAndPeriod = new Map<
+    string,
+    {
+      topicId: number;
+      period: string;
+      scores: number[];
+      affectedEmployees: number;
+      distribution: ScoreDistribution;
+    }
+  >();
 
   for (const row of rows) {
-    const key = `${row.topicId}:${row.timestamp}`;
+    if (!topicSet.has(row.topicId)) continue;
+    const period = toMonthlyPeriod(row.timestamp);
+    const key = `${row.topicId}:${period}`;
     const entry = aggregateByTopicAndPeriod.get(key);
     if (!entry) {
       aggregateByTopicAndPeriod.set(key, {
         topicId: row.topicId,
-        period: row.timestamp,
-        sum: row.score,
-        count: 1,
+        period,
+        scores: [row.score],
+        affectedEmployees: row.score >= 4 ? 1 : 0,
+        distribution: {
+          1: row.scoreBucket === 1 ? 1 : 0,
+          2: row.scoreBucket === 2 ? 1 : 0,
+          3: row.scoreBucket === 3 ? 1 : 0,
+          4: row.scoreBucket === 4 ? 1 : 0,
+          5: row.scoreBucket === 5 ? 1 : 0,
+        },
       });
       continue;
     }
-    entry.sum += row.score;
-    entry.count += 1;
+    entry.scores.push(row.score);
+    if (row.score >= 4) {
+      entry.affectedEmployees += 1;
+    }
+    entry.distribution[row.scoreBucket] += 1;
   }
 
-  const byTopic = new Map<number, Array<{ period: string; meanExposure: number; probability: number; riskScore: number; responses: number }>>();
+  const byTopic = new Map<number, RiskFactorTrendPoint[]>();
   for (const entry of aggregateByTopicAndPeriod.values()) {
-    const meanExposure = entry.count > 0 ? entry.sum / entry.count : 0;
-    const probability = clamp((meanExposure - 1) / 4, 0, 1);
-    const riskScore = probability * toTopicSeverity(entry.topicId);
+    const responses = entry.scores.length;
+    const meanExposureRaw = safeMean(entry.scores) ?? 0;
+    const stdDevRaw = safeStdDev(entry.scores) ?? 0;
+    const prevalence = responses > 0 ? round(entry.affectedEmployees / responses) : null;
+    const severityIndex =
+      responses > 0
+        ? round(
+            (entry.distribution[1] +
+              entry.distribution[2] * 2 +
+              entry.distribution[3] * 3 +
+              entry.distribution[4] * 4 +
+              entry.distribution[5] * 5) /
+              (5 * responses),
+          )
+        : null;
+    const probability = clamp((meanExposureRaw - 1) / 4, 0, 1);
+    const severity = toTopicSeverity(entry.topicId);
+    const riskScore = probability * severity;
     const list = byTopic.get(entry.topicId) ?? [];
     list.push({
       period: entry.period,
-      meanExposure: round(meanExposure),
+      meanExposure: round(meanExposureRaw),
+      stdDevExposure: round(stdDevRaw),
+      prevalence,
+      severityIndex,
       probability: round(probability),
+      severity,
       riskScore: round(riskScore),
-      responses: entry.count,
+      responses,
     });
     byTopic.set(entry.topicId, list);
   }
@@ -557,16 +641,98 @@ function buildTrendSeries(rows: ResponseRiskDatasetRow[], topicIds: number[]) {
   return topicIds.map((topicId) => ({
     topicId,
     riskFactor: toTopicLabel(topicId),
-    points: (byTopic.get(topicId) ?? [])
-      .slice()
-      .sort((a, b) => a.period.localeCompare(b.period)),
+    sector,
+    points: (byTopic.get(topicId) ?? []).slice().sort((a, b) => a.period.localeCompare(b.period)),
   }));
+}
+
+function buildTrendSeriesFromStoredTimeseries(
+  rows: SectorRiskFactorTimeseriesRow[],
+  topicIds: number[],
+): RiskFactorTrendSeries[] {
+  const topicSet = new Set(topicIds);
+  const bySectorAndTopic = new Map<string, RiskFactorTrendSeries>();
+
+  for (const row of rows) {
+    if (!topicSet.has(row.topic_id)) continue;
+    const meanExposure = toNumber(row.mean_exposure);
+    const stdDevExposure = toNumber(row.std_dev_exposure);
+    if (meanExposure === null || stdDevExposure === null) continue;
+
+    const sector = (row.sector_name ?? "").trim() || "Sem setor";
+    const key = `${sector}:${row.topic_id}`;
+    const probability = clamp((meanExposure - 1) / 4, 0, 1);
+    const severity = toTopicSeverity(row.topic_id);
+    const riskScore = probability * severity;
+
+    let series = bySectorAndTopic.get(key);
+    if (!series) {
+      series = {
+        topicId: row.topic_id,
+        riskFactor: toTopicLabel(row.topic_id),
+        sector,
+        points: [],
+      };
+      bySectorAndTopic.set(key, series);
+    }
+
+    series.points.push({
+      period: toMonthlyPeriod(row.period_start),
+      meanExposure: round(meanExposure),
+      stdDevExposure: round(Math.max(0, stdDevExposure)),
+      prevalence: null,
+      severityIndex: round(clamp(meanExposure / 5, 0, 1)),
+      probability: round(probability),
+      severity,
+      riskScore: round(riskScore),
+      responses: Number.isFinite(row.response_count) ? row.response_count : 0,
+    });
+  }
+
+  return Array.from(bySectorAndTopic.values())
+    .map((series) => ({
+      ...series,
+      points: series.points.slice().sort((a, b) => a.period.localeCompare(b.period)),
+    }))
+    .sort((a, b) => {
+      if (a.topicId !== b.topicId) return a.topicId - b.topicId;
+      return a.sector.localeCompare(b.sector, "pt-BR");
+    });
 }
 
 function parseScheduleFrequency(value: unknown): string {
   if (typeof value !== "string") return DEFAULT_CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCY;
   const normalized = value.trim().toLowerCase();
   return normalized.length > 0 ? normalized : DEFAULT_CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCY;
+}
+
+function parseIsoDateTime(value: unknown): Date | null {
+  if (typeof value !== "string") return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return date;
+}
+
+function addDays(value: Date, days: number): Date {
+  return new Date(value.getTime() + days * DAY_IN_MS);
+}
+
+function resolveCampaignCollectionWindow(campaign: CampaignRow): {
+  startsAt: string | null;
+  closesAt: string | null;
+} {
+  const assignedAt = parseIsoDateTime(campaign.created_at);
+  if (!assignedAt) {
+    return {
+      startsAt: campaign.starts_at,
+      closesAt: campaign.closes_at,
+    };
+  }
+
+  return {
+    startsAt: assignedAt.toISOString(),
+    closesAt: addDays(assignedAt, DRPS_COLLECTION_WINDOW_DAYS).toISOString(),
+  };
 }
 
 function parseIsoDate(value: unknown): string | null {
@@ -889,10 +1055,63 @@ export async function GET(
   const campaigns = isMissingColumnError(campaignsResult.error, "client_id")
     ? []
     : campaignsResult.data ?? [];
-  const campaignsWithLinks = campaigns.map((campaign) => ({
-    ...campaign,
-    employeeFormLink: `${request.nextUrl.origin}/s/${campaign.public_slug}`,
-  }));
+  const campaignIds = campaigns.map((campaign) => campaign.id);
+  const responseCountByCampaignId = new Map<string, number>();
+
+  if (campaignIds.length > 0) {
+    const modernResponsesResult = await supabase
+      .from("responses")
+      .select("survey_id")
+      .in("survey_id", campaignIds)
+      .returns<CampaignResponseRow[]>();
+    const modernResponsesMissing = isMissingTableError(modernResponsesResult.error, "responses");
+    if (modernResponsesResult.error && !modernResponsesMissing) {
+      return NextResponse.json({ error: "Could not load client campaigns." }, { status: 500 });
+    }
+
+    for (const row of modernResponsesResult.data ?? []) {
+      const surveyId = row.survey_id;
+      if (!surveyId) continue;
+      responseCountByCampaignId.set(surveyId, (responseCountByCampaignId.get(surveyId) ?? 0) + 1);
+    }
+
+    const campaignsWithoutModernCounts =
+      modernResponsesMissing || responseCountByCampaignId.size === 0
+        ? campaignIds
+        : campaignIds.filter((campaignId) => !responseCountByCampaignId.has(campaignId));
+
+    if (campaignsWithoutModernCounts.length > 0) {
+      const legacyResponsesResult = await supabase
+        .from("employee_responses")
+        .select("campaign_id")
+        .in("campaign_id", campaignsWithoutModernCounts)
+        .returns<LegacyCampaignResponseRow[]>();
+      const legacyResponsesMissing = isMissingTableError(legacyResponsesResult.error, "employee_responses");
+      if (legacyResponsesResult.error && !legacyResponsesMissing) {
+        return NextResponse.json({ error: "Could not load client campaigns." }, { status: 500 });
+      }
+
+      for (const row of legacyResponsesResult.data ?? []) {
+        const campaignId = row.campaign_id;
+        if (!campaignId) continue;
+        responseCountByCampaignId.set(
+          campaignId,
+          (responseCountByCampaignId.get(campaignId) ?? 0) + 1,
+        );
+      }
+    }
+  }
+
+  const campaignsWithLinks = campaigns.map((campaign) => {
+    const collectionWindow = resolveCampaignCollectionWindow(campaign);
+    return {
+      ...campaign,
+      starts_at: collectionWindow.startsAt,
+      closes_at: collectionWindow.closesAt,
+      responses: responseCountByCampaignId.get(campaign.id) ?? 0,
+      employeeFormLink: `${request.nextUrl.origin}/s/${campaign.public_slug}`,
+    };
+  });
   const selectedCampaign =
     campaignsWithLinks.find((item) => item.id === selectedCampaignId) ??
     campaignsWithLinks.find((item) => item.status === "live") ??
@@ -957,6 +1176,9 @@ export async function GET(
     calendarEventsUnavailable = true;
   }
   const masterCalendarEvents = mergeAndSortMasterCalendarEvents(drpsEvents, storedEvents);
+  const committedMasterCalendarEvents = masterCalendarEvents.filter(
+    (event) => event.details.eventLifecycle === "committed",
+  );
 
   const availabilityRows: AvailabilityRequestRow[] = (availabilityMissing
     ? []
@@ -1018,7 +1240,7 @@ export async function GET(
     availabilityRequestsUnavailable: availabilityMissing,
     invoices,
     masterCalendar: {
-      events: masterCalendarEvents,
+      events: committedMasterCalendarEvents,
       calendarEventsUnavailable,
     },
   };
@@ -1031,6 +1253,27 @@ export async function GET(
     });
   }
 
+  const refreshTimeseriesResult = await supabase.rpc("refresh_survey_sector_risk_factor_timeseries", {
+    p_survey_id: selectedCampaign.id,
+  });
+  const storedTimeseriesFeatureAvailable =
+    !refreshTimeseriesResult.error ||
+    !isMissingFunctionError(
+      refreshTimeseriesResult.error,
+      "refresh_survey_sector_risk_factor_timeseries",
+    );
+
+  const storedTimeseriesPromise = storedTimeseriesFeatureAvailable
+    ? supabase
+        .from("survey_sector_risk_factor_timeseries")
+        .select("sector_name,topic_id,period_start,response_count,mean_exposure,std_dev_exposure")
+        .eq("survey_id", selectedCampaign.id)
+        .returns<SectorRiskFactorTimeseriesRow[]>()
+    : Promise.resolve({
+        data: [] as SectorRiskFactorTimeseriesRow[],
+        error: null,
+      });
+
   const [
     globalResult,
     sectorCountsResult,
@@ -1039,6 +1282,7 @@ export async function GET(
     sectorConfigResult,
     responseRowsResult,
     questionTopicsResult,
+    storedTimeseriesResult,
   ] = await Promise.all([
     supabase
       .rpc("get_topic_aggregates", {
@@ -1084,6 +1328,7 @@ export async function GET(
       .select("id,topic_id")
       .eq("survey_id", selectedCampaign.id)
       .returns<QuestionTopicRow[]>(),
+    storedTimeseriesPromise,
   ]);
 
   if (
@@ -1097,6 +1342,13 @@ export async function GET(
   ) {
     return NextResponse.json({ error: "Could not load campaign dashboard." }, { status: 500 });
   }
+
+  const storedTimeseriesRows =
+    storedTimeseriesResult.error && !isMissingTableError(storedTimeseriesResult.error, "survey_sector_risk_factor_timeseries")
+      ? []
+      : Array.isArray(storedTimeseriesResult.data)
+        ? storedTimeseriesResult.data
+        : [];
 
   const globalRows = Array.isArray(globalResult.data) ? globalResult.data : [];
   const normalizedGlobal = globalRows.map(normalizeTopic);
@@ -1336,17 +1588,35 @@ export async function GET(
   const globalRiskIndex = computeCompositeIndex(globalRiskFactors, (metric) => metric.riskScore);
   const psychosocialLoadIndex = computeCompositeIndex(globalRiskFactors, (metric) => metric.meanExposure);
 
-  const topRankedTopicIds = rankedRiskFactors.slice(0, 5).map((metric) => metric.topicId);
-  const trendSeries = buildTrendSeries(responseRiskDataset, topRankedTopicIds);
-
   const suppressedSectorSet = new Set(
     allSectorNames.filter((sectorName) => {
       const nResponses = countBySectorName.get(sectorName) ?? responseCountBySectorName.get(sectorName) ?? 0;
       return nResponses > 0 && nResponses < selectedCampaign.k_anonymity_min;
     }),
   );
-  const visibleDatasetRows = responseRiskDataset
-    .filter((row) => !suppressedSectorSet.has(row.sector))
+  const visibleResponseRows = responseRiskDataset.filter((row) => !suppressedSectorSet.has(row.sector));
+
+  const trendTopicIds = globalRiskFactors.map((metric) => metric.topicId);
+  const storedTrendSeries = buildTrendSeriesFromStoredTimeseries(
+    storedTimeseriesRows.filter(
+      (row) => trendTopicIds.includes(row.topic_id) && !suppressedSectorSet.has(row.sector_name),
+    ),
+    trendTopicIds,
+  );
+  const fallbackTrendSeries = Array.from(new Set(visibleResponseRows.map((row) => row.sector)))
+    .slice()
+    .sort((a, b) => a.localeCompare(b, "pt-BR"))
+    .flatMap((sector) =>
+      buildTrendSeries(
+        visibleResponseRows.filter((row) => row.sector === sector),
+        trendTopicIds,
+        sector,
+      ),
+    )
+    .filter((series) => series.points.length > 0);
+  const trendSeries = fallbackTrendSeries.length > 0 ? fallbackTrendSeries : storedTrendSeries;
+
+  const visibleDatasetRows = visibleResponseRows
     .slice()
     .sort((a, b) => {
       const byTimestamp = b.timestamp.localeCompare(a.timestamp);

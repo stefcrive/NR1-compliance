@@ -13,6 +13,7 @@ type Campaign = {
   starts_at: string | null;
   closes_at: string | null;
   created_at: string;
+  responses?: number;
   employeeFormLink?: string;
 };
 
@@ -158,6 +159,25 @@ function durationMinutesFromRange(
   return diff;
 }
 
+function chronogramStatusBadge(value: "scheduled" | "completed" | "cancelled") {
+  if (value === "completed") {
+    return {
+      label: "Completed",
+      className: "border-[#bde4c9] bg-[#e8f8ee] text-[#1f6b3d]",
+    };
+  }
+  if (value === "cancelled") {
+    return {
+      label: "Cancelled",
+      className: "border-[#e2d2d2] bg-[#f8eded] text-[#8a2d2d]",
+    };
+  }
+  return {
+    label: "Scheduled",
+    className: "border-[#c8dce8] bg-[#edf5fa] text-[#2c546a]",
+  };
+}
+
 function dayKey(value: Date) {
   return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
 }
@@ -179,13 +199,11 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
   const [selectedCampaignId, setSelectedCampaignId] = useState("");
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(true);
-  const [openDiagnosticActionsFor, setOpenDiagnosticActionsFor] = useState<string | null>(null);
   const [linksPayload, setLinksPayload] = useState<SectorPayload | null>(null);
   const [isLinksModalOpen, setIsLinksModalOpen] = useState(false);
   const [isLoadingLinksFor, setIsLoadingLinksFor] = useState<string | null>(null);
   const [copiedSectorId, setCopiedSectorId] = useState<string | null>(null);
   const [drpsActionError, setDrpsActionError] = useState("");
-  const [openProgramActionsFor, setOpenProgramActionsFor] = useState<string | null>(null);
   const [calendarMonth, setCalendarMonth] = useState(() => {
     const now = new Date();
     return new Date(now.getFullYear(), now.getMonth(), 1);
@@ -245,6 +263,8 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
   }, [payload, selectedCampaign]);
 
   const resultsHref = resultsCampaign ? `/client/${clientSlug}/diagnostic/${resultsCampaign.id}` : null;
+  const linksActionCampaign =
+    selectedCampaign?.status === "live" ? selectedCampaign : openCampaigns[0] ?? null;
 
   useEffect(() => {
     if (!payload || !resultsCampaign) return;
@@ -277,6 +297,9 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
   }
 
   async function copySectorLink(sector: SectorLink) {
+    if (!sector.isActive) {
+      return;
+    }
     await navigator.clipboard.writeText(sector.accessLink);
     setCopiedSectorId(sector.id);
     window.setTimeout(() => setCopiedSectorId(null), 1200);
@@ -287,6 +310,10 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
     const lines = linksPayload.sectors
       .filter((sector) => sector.isActive)
       .map((sector) => `${sector.name}: ${sector.accessLink}`);
+    if (lines.length === 0) {
+      setDrpsActionError("Nenhum setor ativo para copiar.");
+      return;
+    }
     await navigator.clipboard.writeText(lines.join("\n"));
   }
 
@@ -302,7 +329,7 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
         csvEscape(sector.name),
         csvEscape(sector.isActive ? "true" : "false"),
         csvEscape(sector.submissionCount),
-        csvEscape(sector.accessLink),
+        csvEscape(sector.isActive ? sector.accessLink : null),
       ].join(","),
     );
     const blob = new Blob([[header, ...rows].join("\n")], { type: "text/csv;charset=utf-8;" });
@@ -453,6 +480,18 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
     return list;
   }, [payload]);
 
+  const committedContinuousMeetings = useMemo(() => {
+    return (payload?.masterCalendar.events ?? [])
+      .filter(
+        (event) =>
+          event.eventType === "continuous_meeting" &&
+          event.details.eventLifecycle === "committed" &&
+          event.status !== "cancelled",
+      )
+      .slice()
+      .sort((left, right) => new Date(left.startsAt).getTime() - new Date(right.startsAt).getTime());
+  }, [payload?.masterCalendar.events]);
+
   const eventsByDay = useMemo(() => {
     const map = new Map<string, typeof calendarEvents>();
     for (const event of calendarEvents) map.set(event.day, [...(map.get(event.day) ?? []), event]);
@@ -591,7 +630,7 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
   const calendarEventLinkById = useMemo(() => {
     const map = new Map<
       string,
-      { href: string; label: "Abrir resultado DRPS" | "Abrir detalhes do processo" }
+      { href: string; label: string }
     >();
     for (const event of calendarEvents) {
       const link = calendarEventLinkFor(event);
@@ -714,6 +753,19 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
       <section className="rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h3 className="text-lg font-semibold text-[#123447]">Diagnosticos DRPS</h3>
+          <button
+            type="button"
+            disabled={!linksActionCampaign || isLoadingLinksFor === linksActionCampaign.id}
+            onClick={() => {
+              if (!linksActionCampaign) return;
+              void loadQuestionnaireLinks(linksActionCampaign);
+            }}
+            className="rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73] disabled:cursor-not-allowed disabled:border-[#d6dde2] disabled:text-[#95a4ae]"
+          >
+            {linksActionCampaign && isLoadingLinksFor === linksActionCampaign.id
+              ? "Carregando..."
+              : "Gerar link questionario"}
+          </button>
         </div>
         <p className="mt-2 text-xs text-[#4f6977]">
           {selectedCampaign
@@ -728,13 +780,14 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
                 <th className="px-2 py-2 text-left">Status</th>
                 <th className="px-2 py-2 text-left">Inicio</th>
                 <th className="px-2 py-2 text-left">Fechamento</th>
+                <th className="px-2 py-2 text-left">Respostas</th>
                 <th className="px-2 py-2 text-left">Acoes</th>
               </tr>
             </thead>
             <tbody>
               {openCampaigns.length === 0 ? (
                 <tr>
-                  <td className="px-2 py-3 text-xs text-[#5a7383]" colSpan={5}>
+                  <td className="px-2 py-3 text-xs text-[#5a7383]" colSpan={6}>
                     Sem questionarios abertos coletando respostas no momento.
                   </td>
                 </tr>
@@ -752,47 +805,17 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
                     <td className="px-2 py-2">{campaignCollectionStatus(campaign.status)}</td>
                     <td className="px-2 py-2">{fmt(campaign.starts_at)}</td>
                     <td className="px-2 py-2">{fmt(campaign.closes_at)}</td>
+                    <td className="px-2 py-2">{campaign.responses ?? 0}</td>
                     <td className="px-2 py-2">
-                      <div className="relative inline-flex">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setOpenDiagnosticActionsFor((previous) =>
-                              previous === campaign.id ? null : campaign.id,
-                            );
-                          }}
-                          className="rounded-full border border-[#c8c8c8] px-3 py-1 text-xs font-semibold text-[#1b2832]"
-                        >
-                          ...
-                        </button>
-                        {openDiagnosticActionsFor === campaign.id ? (
-                          <div className="absolute right-0 top-full z-20 mt-2 w-56 overflow-hidden rounded-xl border border-[#d8e4ee] bg-white shadow-lg">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setOpenDiagnosticActionsFor(null);
-                                router.push(`/client/${clientSlug}/diagnostic/${campaign.id}`);
-                              }}
-                              className="block w-full px-3 py-2 text-left text-xs font-semibold text-[#123447] hover:bg-[#f4f9fc]"
-                            >
-                              Ver resultados
-                            </button>
-                            <button
-                              type="button"
-                              disabled={isLoadingLinksFor === campaign.id}
-                              onClick={() => {
-                                setOpenDiagnosticActionsFor(null);
-                                void loadQuestionnaireLinks(campaign);
-                              }}
-                              className="block w-full px-3 py-2 text-left text-xs font-semibold text-[#5a2b8a] hover:bg-[#f8f2ff] disabled:cursor-not-allowed disabled:text-[#a8b7c0]"
-                            >
-                              {isLoadingLinksFor === campaign.id
-                                ? "Carregando..."
-                                : "Gerar links questionario"}
-                            </button>
-                          </div>
-                        ) : null}
-                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          router.push(`/client/${clientSlug}/diagnostic/${campaign.id}`);
+                        }}
+                        className="rounded-full border border-[#c9dce8] px-3 py-1 text-xs font-semibold text-[#123447]"
+                      >
+                        Ver resultados
+                      </button>
                     </td>
                   </tr>
                 ))
@@ -803,9 +826,9 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
         {drpsActionError ? <p className="mt-3 text-sm text-red-600">{drpsActionError}</p> : null}
       </section>
 
-      <section className="rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
+      <section className="h-auto max-h-none overflow-visible rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
         <h3 className="text-lg font-semibold text-[#123447]">Processos continuos atribuidos</h3>
-        <div className="mt-3 overflow-x-auto">
+        <div className="mt-3 max-h-none overflow-x-auto overflow-y-visible">
           <table className="min-w-full text-sm">
             <thead>
               <tr className="border-b">
@@ -831,33 +854,15 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
                     <td className="px-2 py-2">{fmt(assignment.deployedAt)}</td>
                     <td className="px-2 py-2">{assignment.scheduleFrequency}</td>
                     <td className="px-2 py-2">
-                      <div className="relative inline-flex">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setOpenProgramActionsFor((previous) =>
-                              previous === assignment.id ? null : assignment.id,
-                            );
-                          }}
-                          className="rounded-full border border-[#c8c8c8] px-3 py-1 text-xs font-semibold text-[#1b2832]"
-                        >
-                          ...
-                        </button>
-                        {openProgramActionsFor === assignment.id ? (
-                          <div className="absolute right-0 top-full z-20 mt-2 w-52 overflow-hidden rounded-xl border border-[#d8e4ee] bg-white shadow-lg">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setOpenProgramActionsFor(null);
-                                router.push(`/client/${clientSlug}/programs/${assignment.programId}`);
-                              }}
-                              className="block w-full px-3 py-2 text-left text-xs font-semibold text-[#123447] hover:bg-[#f4f9fc]"
-                            >
-                              Ver detalhes
-                            </button>
-                          </div>
-                        ) : null}
-                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          router.push(`/client/${clientSlug}/programs/${assignment.programId}`);
+                        }}
+                        className="rounded-full border border-[#c9dce8] px-3 py-1 text-xs font-semibold text-[#123447]"
+                      >
+                        Ver detalhes
+                      </button>
                     </td>
                   </tr>
                 ))
@@ -865,6 +870,56 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
             </tbody>
           </table>
         </div>
+      </section>
+
+      <section className="rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
+        <h3 className="text-lg font-semibold text-[#123447]">
+          Chronograma ({committedContinuousMeetings.length} eventos commitados)
+        </h3>
+        {committedContinuousMeetings.length === 0 ? (
+          <p className="mt-3 text-xs text-[#5a7383]">Nenhuma reuniao commitada no momento.</p>
+        ) : (
+          <div className="mt-3 overflow-x-auto rounded-xl border border-[#d8e4ee]">
+            <table className="min-w-full text-xs">
+              <thead className="bg-[#f3f8fb]">
+                <tr className="border-b border-[#d8e4ee]">
+                  <th className="px-3 py-2 text-left font-semibold text-[#244354]">Data/hora</th>
+                  <th className="px-3 py-2 text-left font-semibold text-[#244354]">Duracao</th>
+                  <th className="px-3 py-2 text-left font-semibold text-[#244354]">Status</th>
+                  <th className="px-3 py-2 text-left font-semibold text-[#244354]">Acoes</th>
+                </tr>
+              </thead>
+              <tbody>
+                {committedContinuousMeetings.map((event) => {
+                  const status = chronogramStatusBadge(event.status);
+                  return (
+                    <tr key={event.id} className="border-b border-[#e2edf3] bg-[#ebf6fd]">
+                      <td className="px-3 py-2 text-[#123447]">{fmt(event.startsAt)}</td>
+                      <td className="px-3 py-2 text-[#123447]">
+                        {durationMinutesFromRange(event.startsAt, event.endsAt, 60)} min
+                      </td>
+                      <td className="px-3 py-2">
+                        <span
+                          className={`inline-flex rounded-full border px-2 py-0.5 font-semibold ${status.className}`}
+                        >
+                          {status.label}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2">
+                        <Link
+                          href={`/client/${clientSlug}/history/events/${event.id}`}
+                          className="inline-flex items-center justify-center rounded-full border border-[#9ec8db] px-3 py-1 font-semibold text-[#0f5b73]"
+                        >
+                          Event record
+                        </Link>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </section>
 
       {isLinksModalOpen && linksPayload ? (
@@ -933,15 +988,16 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
                           <div className="flex items-center gap-2">
                             <input
                               readOnly
-                              value={sector.accessLink}
+                              value={sector.isActive ? sector.accessLink : "Setor inativo (link bloqueado)"}
                               className="w-full min-w-[280px] rounded border border-[#d5e2ea] bg-[#f7fbfe] px-2 py-1 text-xs"
                             />
                             <button
                               type="button"
+                              disabled={!sector.isActive}
                               onClick={() => void copySectorLink(sector)}
-                              className="rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
+                              className="rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73] disabled:cursor-not-allowed disabled:border-[#d6dde2] disabled:text-[#95a4ae]"
                             >
-                              {copiedSectorId === sector.id ? "Copiado" : "Copiar"}
+                              {!sector.isActive ? "Inativo" : copiedSectorId === sector.id ? "Copiado" : "Copiar"}
                             </button>
                           </div>
                         </td>

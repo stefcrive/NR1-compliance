@@ -35,7 +35,9 @@ const assignDrpsSchema = z.object({
   turnstileExpectedHostname: z.string().trim().min(3).optional(),
   startsAt: z.string().datetime().optional().or(z.literal("")),
   closesAt: z.string().datetime().optional().or(z.literal("")),
-  sourceSurveyId: z.string().uuid().optional(),
+  // Accept Postgres UUID format, including deterministic seeded IDs
+  // that do not follow RFC version bits (z.string().uuid() would reject them).
+  sourceSurveyId: z.string().trim().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i).optional(),
 });
 
 function toLegacyStatus(value: "draft" | "live" | undefined): "Draft" | "Active" {

@@ -61,6 +61,19 @@ function todayIsoDate(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+function parseScheduleFrequency(value: unknown): string {
+  if (typeof value !== "string") return DEFAULT_CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCY;
+  const normalized = value.trim().toLowerCase();
+  return normalized.length > 0 ? normalized : DEFAULT_CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCY;
+}
+
+function parseIsoDate(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(normalized)) return null;
+  return normalized;
+}
+
 const submitAvailabilitySchema = z.object({
   selectedSlots: z.array(z.string().datetime()).min(1),
 });
@@ -176,6 +189,13 @@ export async function POST(
   if (programResult.error && !isMissingTableError(programResult.error, "periodic_programs")) {
     return NextResponse.json({ error: "Could not load program details." }, { status: 500 });
   }
+  const cadenceFrequency = parseScheduleFrequency(
+    assignment.schedule_frequency_override ?? programResult.data?.schedule_frequency,
+  );
+  const cadenceAnchorDate =
+    parseIsoDate(
+      assignment.schedule_anchor_date_override ?? programResult.data?.schedule_anchor_date,
+    ) ?? todayIsoDate();
 
   let suggestedSlots = parseSlots(availabilityRequest.suggested_slots);
   if (suggestedSlots.length === 0) {
@@ -191,9 +211,8 @@ export async function POST(
     const events = mergeAndSortMasterCalendarEvents(drpsEvents, stored.events);
     suggestedSlots = buildSuggestedAvailabilitySlots({
       deployedAt: assignment.deployed_at ?? new Date().toISOString(),
-      scheduleFrequency:
-        assignment.schedule_frequency_override ?? DEFAULT_CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCY,
-      scheduleAnchorDate: todayIsoDate(),
+      scheduleFrequency: cadenceFrequency,
+      scheduleAnchorDate: cadenceAnchorDate,
       existingEvents: events,
       maxSlots: DEFAULT_ASSIGNMENT_CADENCE_SLOT_COUNT,
     });

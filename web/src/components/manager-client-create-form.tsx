@@ -25,7 +25,15 @@ type SectorDraft = {
 };
 
 type CreateResponse = {
-  client?: { id: string };
+  client?: {
+    id: string;
+    access?: {
+      invitationLink?: string | null;
+      invitationExpiresAt?: string | null;
+      invitationStatus?: string | null;
+    };
+  };
+  warning?: string;
   error?: string;
   details?: string;
 };
@@ -77,6 +85,16 @@ const COPY = {
     submit: "Create account",
     submitting: "Creating...",
     back: "Back",
+    invitationModalTitle: "Invitation link generated",
+    invitationModalBody:
+      "Send this link to the client contact. They will create their own credentials in onboarding.",
+    invitationLinkLabel: "Onboarding invitation link",
+    invitationExpiresLabel: "Expires",
+    invitationCopy: "Copy link",
+    invitationCopied: "Copied",
+    invitationOpenProfile: "Open company profile",
+    invitationBackToClients: "Back to clients",
+    invitationClose: "Close",
     required: "Company name, CNPJ, and total employees are required.",
     atLeastOneSector: "Add at least one sector with a valid name.",
     createError: "Failed to create client account.",
@@ -127,6 +145,16 @@ const COPY = {
     submit: "Criar conta",
     submitting: "Criando...",
     back: "Voltar",
+    invitationModalTitle: "Link de convite gerado",
+    invitationModalBody:
+      "Envie este link para o contato do cliente. Eles criam as proprias credenciais no onboarding.",
+    invitationLinkLabel: "Link de convite para onboarding",
+    invitationExpiresLabel: "Expira em",
+    invitationCopy: "Copiar link",
+    invitationCopied: "Copiado",
+    invitationOpenProfile: "Abrir perfil da empresa",
+    invitationBackToClients: "Voltar aos clientes",
+    invitationClose: "Fechar",
     required: "Nome da empresa, CNPJ e total de funcionarios sao obrigatorios.",
     atLeastOneSector: "Inclua pelo menos um setor com nome valido.",
     createError: "Falha ao criar conta do cliente.",
@@ -191,8 +219,23 @@ export function ManagerClientCreateForm() {
   const [sectors, setSectors] = useState<SectorDraft[]>([createSectorDraft()]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+  const [createdClientId, setCreatedClientId] = useState<string | null>(null);
+  const [invitationLink, setInvitationLink] = useState<string | null>(null);
+  const [invitationExpiresAt, setInvitationExpiresAt] = useState<string | null>(null);
+  const [isInvitationModalOpen, setIsInvitationModalOpen] = useState(false);
+  const [copiedInvitation, setCopiedInvitation] = useState(false);
 
   const validSectors = useMemo(() => sectors.filter((sector) => sector.name.trim().length >= 2), [sectors]);
+
+  const invitationExpiresLabel = useMemo(() => {
+    if (!invitationExpiresAt) return null;
+    const parsed = new Date(invitationExpiresAt);
+    if (Number.isNaN(parsed.getTime())) return invitationExpiresAt;
+    return new Intl.DateTimeFormat(locale === "pt" ? "pt-BR" : "en-US", {
+      dateStyle: "short",
+      timeStyle: "short",
+    }).format(parsed);
+  }, [invitationExpiresAt, locale]);
 
   function updateSector(id: string, patch: Partial<SectorDraft>) {
     setSectors((prev) => prev.map((sector) => (sector.id === id ? { ...sector, ...patch } : sector)));
@@ -203,6 +246,13 @@ export function ManagerClientCreateForm() {
       if (prev.length === 1) return prev;
       return prev.filter((sector) => sector.id !== id);
     });
+  }
+
+  async function copyInvitation() {
+    if (!invitationLink) return;
+    await navigator.clipboard.writeText(invitationLink);
+    setCopiedInvitation(true);
+    window.setTimeout(() => setCopiedInvitation(false), 1500);
   }
 
   async function submit() {
@@ -257,8 +307,24 @@ export function ManagerClientCreateForm() {
       if (!response.ok && response.status !== 207) {
         throw new Error(result.error || result.details || t.createError);
       }
+      if (response.status === 207 && result.error) {
+        const detailsText = result.details ? ` ${result.details}` : "";
+        setError(`${result.error}${detailsText}`);
+      }
+      if (result.warning) {
+        setError(result.warning);
+      }
       const targetId = result.client?.id;
       if (targetId) {
+        const generatedInvitation = result.client.access?.invitationLink ?? null;
+        setCreatedClientId(targetId);
+        setInvitationLink(generatedInvitation);
+        setInvitationExpiresAt(result.client.access?.invitationExpiresAt ?? null);
+        setCopiedInvitation(false);
+        if (generatedInvitation) {
+          setIsInvitationModalOpen(true);
+          return;
+        }
         router.push(`/manager/clients/${targetId}`);
         return;
       }
@@ -546,6 +612,68 @@ export function ManagerClientCreateForm() {
         </div>
         {error ? <p className="mt-3 text-sm text-red-600">{error}</p> : null}
       </section>
+
+      {isInvitationModalOpen && invitationLink && createdClientId ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4"
+          onClick={() => setIsInvitationModalOpen(false)}
+        >
+          <div
+            className="w-full max-w-3xl rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h3 className="text-lg font-semibold text-[#123447]">{t.invitationModalTitle}</h3>
+              <button
+                type="button"
+                onClick={() => setIsInvitationModalOpen(false)}
+                className="rounded-full border border-[#c9dce8] px-3 py-1 text-xs font-semibold text-[#123447]"
+              >
+                {t.invitationClose}
+              </button>
+            </div>
+            <p className="mt-2 text-sm text-[#3d5a69]">{t.invitationModalBody}</p>
+            <label className="mt-4 block space-y-1">
+              <span className="text-xs font-medium text-[#214759]">{t.invitationLinkLabel}</span>
+              <div className="flex items-center gap-2">
+                <input
+                  readOnly
+                  value={invitationLink}
+                  className="w-full rounded border border-[#c9dce8] bg-[#f8fbfd] px-3 py-2 text-sm"
+                />
+                <button
+                  type="button"
+                  onClick={() => void copyInvitation()}
+                  className="rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
+                >
+                  {copiedInvitation ? t.invitationCopied : t.invitationCopy}
+                </button>
+              </div>
+            </label>
+            {invitationExpiresLabel ? (
+              <p className="mt-2 text-xs text-[#5a7383]">
+                {t.invitationExpiresLabel}: {invitationExpiresLabel}
+              </p>
+            ) : null}
+            <div className="mt-4 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => router.push(`/manager/clients/${createdClientId}?tab=company-data`)}
+                className="rounded-full bg-[#0f5b73] px-4 py-2 text-xs font-semibold text-white"
+              >
+                {t.invitationOpenProfile}
+              </button>
+              <button
+                type="button"
+                onClick={() => router.push("/manager/clients")}
+                className="rounded-full border border-[#9ec8db] px-4 py-2 text-xs font-semibold text-[#0f5b73]"
+              >
+                {t.invitationBackToClients}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

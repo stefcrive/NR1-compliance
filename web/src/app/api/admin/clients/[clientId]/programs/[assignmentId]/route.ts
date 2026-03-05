@@ -51,6 +51,16 @@ type CalendarEventRow = {
   metadata: unknown;
   starts_at?: string;
   ends_at?: string;
+  status?: "scheduled" | "completed" | "cancelled";
+};
+
+type AssignmentCalendarEvent = {
+  id: string;
+  startsAt: string;
+  endsAt: string;
+  status: "scheduled" | "completed" | "cancelled";
+  lifecycle: "provisory" | "committed";
+  proposalKind: "assignment" | "reschedule" | null;
 };
 
 const cadenceFrequencyValues = [
@@ -67,6 +77,26 @@ const annualPlanCandidateHoursUtc = [13, 17, 19] as const;
 
 function todayIsoDate(): string {
   return new Date().toISOString().slice(0, 10);
+}
+
+function parseScheduleFrequency(value: unknown): string {
+  if (typeof value !== "string") return DEFAULT_CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCY;
+  const normalized = value.trim().toLowerCase();
+  if (
+    cadenceFrequencyValues.includes(
+      normalized as (typeof cadenceFrequencyValues)[number],
+    )
+  ) {
+    return normalized;
+  }
+  return DEFAULT_CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCY;
+}
+
+function parseIsoDate(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(normalized)) return null;
+  return normalized;
 }
 
 const slotSchema = z
@@ -135,11 +165,15 @@ async function loadManagerMasterCalendarEvents() {
   return mergeAndSortMasterCalendarEvents(drpsEvents, stored.events);
 }
 
-function resolveCadence(assignment: ClientProgramRow) {
+function resolveCadence(assignment: ClientProgramRow, program: ProgramRow | null) {
   return {
-    scheduleFrequency:
-      assignment.schedule_frequency_override ?? DEFAULT_CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCY,
-    scheduleAnchorDate: todayIsoDate(),
+    scheduleFrequency: parseScheduleFrequency(
+      assignment.schedule_frequency_override ?? program?.schedule_frequency,
+    ),
+    scheduleAnchorDate:
+      parseIsoDate(
+        assignment.schedule_anchor_date_override ?? program?.schedule_anchor_date,
+      ) ?? todayIsoDate(),
   };
 }
 
@@ -297,6 +331,44 @@ async function loadProvisoryAssignmentSlots(params: {
   }
 
   return { slots: sortSlots(slots), unavailable: false };
+}
+
+async function loadAssignmentTimelineEvents(params: {
+  clientId: string;
+  assignmentId: string;
+}): Promise<{ events: AssignmentCalendarEvent[]; unavailable: boolean }> {
+  const supabase = getSupabaseAdminClient();
+  const eventsResult = await supabase
+    .from("calendar_events")
+    .select("event_id,metadata,starts_at,ends_at,status")
+    .eq("client_id", params.clientId)
+    .eq("source_client_program_id", params.assignmentId)
+    .eq("event_type", "continuous_meeting")
+    .order("starts_at", { ascending: true })
+    .returns<CalendarEventRow[]>();
+
+  if (eventsResult.error) {
+    if (isMissingTableError(eventsResult.error, "calendar_events")) {
+      return { events: [], unavailable: true };
+    }
+    throw eventsResult.error;
+  }
+
+  const events: AssignmentCalendarEvent[] = [];
+  for (const row of eventsResult.data ?? []) {
+    if (!row.starts_at || !row.ends_at || !row.status) continue;
+    const details = extractCalendarEventDetails(row.metadata);
+    events.push({
+      id: row.event_id,
+      startsAt: row.starts_at,
+      endsAt: row.ends_at,
+      status: row.status,
+      lifecycle: details.eventLifecycle,
+      proposalKind: details.proposalKind,
+    });
+  }
+
+  return { events, unavailable: false };
 }
 
 async function replaceAssignmentProvisoryEvents(params: {
@@ -597,7 +669,7 @@ export async function PATCH(
     return NextResponse.json({ error: "Program not found." }, { status: 404 });
   }
 
-  const cadence = resolveCadence(assignment);
+  const cadence = resolveCadence(assignment, programResult.data);
   const annualPlanMonths = annualPlanSupported
     ? normalizeAnnualPlanMonths(assignment.annual_plan_months)
     : [];
@@ -612,10 +684,11 @@ export async function PATCH(
   let provisorySlots: AvailabilitySlot[] = [];
   if (shouldRefreshProvisorySlots) {
     let desiredSlots: AvailabilitySlot[] = [];
+    const shouldUseAnnualPlan = annualPlanSupported && parsed.annualPlanMonths !== undefined;
 
     if (assignment.status !== "Active") {
       desiredSlots = [];
-    } else if (annualPlanSupported) {
+    } else if (shouldUseAnnualPlan) {
       const masterEvents = await loadManagerMasterCalendarEvents();
       const eventsWithoutCurrentProvisory = filterCurrentAssignmentProvisoryEvents(
         masterEvents,
@@ -676,6 +749,12 @@ export async function PATCH(
     provisorySlots = loaded.slots;
   }
 
+  const timelineLoaded = await loadAssignmentTimelineEvents({
+    clientId,
+    assignmentId: assignment.client_program_id,
+  });
+  const timelineEvents = timelineLoaded.unavailable ? [] : timelineLoaded.events;
+
   return NextResponse.json({
     assignment: {
       id: assignment.client_program_id,
@@ -687,6 +766,7 @@ export async function PATCH(
       annualPlanMonths,
       cadenceSuggestedSlots: provisorySlots,
       calendarProvisorySlots: provisorySlots,
+      calendarTimelineEvents: timelineEvents,
     },
   });
 }

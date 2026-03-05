@@ -1,8 +1,19 @@
 import Link from "next/link";
+import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
+
 import { CompanyLogoLink } from "@/components/company-logo-link";
 import { RoleLoginForm } from "@/components/role-login-form";
+import { MANAGER_SESSION_COOKIE, parseManagerSessionToken } from "@/lib/auth/session";
 
-export default function ManagerAccessPage() {
+export default async function ManagerAccessPage() {
+  const cookieStore = await cookies();
+  const session = parseManagerSessionToken(cookieStore.get(MANAGER_SESSION_COOKIE)?.value);
+
+  if (session) {
+    redirect("/manager/clients");
+  }
+
   return (
     <main className="min-h-screen bg-[#f6f6f6] px-4 py-10">
       <div className="mx-auto w-full max-w-4xl space-y-5">
