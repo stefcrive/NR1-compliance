@@ -66,13 +66,28 @@ type RiskProfilePayload = {
   progressUnavailable?: boolean;
 };
 
+type TrendCardModel = {
+  factorKey: string;
+  factorLabel: string;
+  latestPoint: {
+    createdAt: string;
+    occurrenceProbability: 1 | 2 | 3;
+    probabilityClass: CompanyRiskProbabilityClass;
+  } | null;
+  strokeColor: string;
+  points: Array<{
+    createdAt: string;
+    x: number;
+    y: number;
+    probabilityClass: CompanyRiskProbabilityClass;
+    occurrenceProbability: 1 | 2 | 3;
+  }>;
+  polyline: string;
+};
+
 function formatDateTime(value: string | null) {
   if (!value) return "-";
   return new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short" }).format(new Date(value));
-}
-
-function formatDate(value: string) {
-  return new Intl.DateTimeFormat("pt-BR", { dateStyle: "short" }).format(new Date(value));
 }
 
 function probabilityClassTone(value: CompanyRiskProbabilityClass) {
@@ -91,10 +106,28 @@ function probabilityClassLabel(value: CompanyRiskProbabilityClass) {
   return "Alta";
 }
 
+function probabilityClassColor(value: CompanyRiskProbabilityClass) {
+  if (value === "baixa") return "#2a7d2a";
+  if (value === "media") return "#a56a0b";
+  return "#b02323";
+}
+
 function statusLabel(value: RiskProfilePayload["progress"]["status"]) {
   if (value === "not_started") return "Nao iniciado";
   if (value === "in_progress") return "Em andamento";
   return "Concluido";
+}
+
+function parseIsoToMs(value: string): number | null {
+  const ms = new Date(value).getTime();
+  if (!Number.isFinite(ms)) return null;
+  return ms;
+}
+
+function formatAxisLabel(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value.slice(0, 10);
+  return new Intl.DateTimeFormat("pt-BR", { month: "2-digit", year: "2-digit" }).format(date);
 }
 
 export function ManagerCompanyRiskProfile({ clientId }: { clientId: string }) {
@@ -103,6 +136,7 @@ export function ManagerCompanyRiskProfile({ clientId }: { clientId: string }) {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [selectedReportId, setSelectedReportId] = useState<string | null>(null);
+  const [showSelectedResponses, setShowSelectedResponses] = useState(false);
   const [reassignAfterDays, setReassignAfterDays] = useState("30");
   const [isReassigning, setIsReassigning] = useState(false);
 
@@ -135,28 +169,118 @@ export function ManagerCompanyRiskProfile({ clientId }: { clientId: string }) {
     return payload.reports.find((report) => report.id === selectedReportId) ?? payload.reports[0] ?? null;
   }, [payload, selectedReportId]);
 
-  const trendDates = useMemo(() => {
-    if (!payload) return [] as string[];
-    const unique = new Set<string>();
-    for (const series of payload.trendSeries) {
-      for (const point of series.points) {
-        unique.add(point.createdAt);
-      }
-    }
-    return Array.from(unique).sort((left, right) => left.localeCompare(right));
-  }, [payload]);
+  const trendChartsModel = useMemo(() => {
+    if (!payload || payload.trendSeries.length === 0) return null;
 
-  const trendValueLookup = useMemo(() => {
-    const lookup = new Map<string, Map<string, RiskOccurrenceTrendSeries["points"][number]>>();
-    if (!payload) return lookup;
-    for (const series of payload.trendSeries) {
-      const byDate = new Map<string, RiskOccurrenceTrendSeries["points"][number]>();
-      for (const point of series.points) {
-        byDate.set(point.createdAt, point);
-      }
-      lookup.set(series.factorKey, byDate);
-    }
-    return lookup;
+    const chartWidth = 420;
+    const chartHeight = 246;
+    const chartPadding = { left: 42, right: 16, top: 20, bottom: 42 };
+    const plotWidth = chartWidth - chartPadding.left - chartPadding.right;
+    const plotHeight = chartHeight - chartPadding.top - chartPadding.bottom;
+
+    const parsedSeries = payload.trendSeries
+      .map((series) => {
+        const points = series.points
+          .reduce<
+            Array<
+              RiskOccurrenceTrendSeries["points"][number] & {
+                timeMs: number;
+              }
+            >
+          >((acc, point) => {
+            const timeMs = parseIsoToMs(point.createdAt);
+            if (timeMs === null) return acc;
+            acc.push({
+              ...point,
+              timeMs,
+            });
+            return acc;
+          }, [])
+          .sort((left, right) => left.timeMs - right.timeMs);
+        return {
+          factorKey: series.factorKey,
+          factorLabel: series.factorLabel,
+          points,
+        };
+      })
+      .filter((series) => series.points.length > 0);
+
+    if (parsedSeries.length === 0) return null;
+
+    const allTimes = Array.from(
+      new Set(parsedSeries.flatMap((series) => series.points.map((point) => point.timeMs))),
+    ).sort((a, b) => a - b);
+    if (allTimes.length === 0) return null;
+
+    const minX = allTimes[0];
+    const maxX = allTimes[allTimes.length - 1];
+    const xSpan = Math.max(maxX - minX, 1);
+    const xScale =
+      allTimes.length === 1
+        ? () => chartPadding.left + plotWidth / 2
+        : (value: number) => chartPadding.left + ((value - minX) / xSpan) * plotWidth;
+
+    const yMin = 1;
+    const yMax = 3;
+    const yScale = (value: number) =>
+      chartPadding.top + (1 - (value - yMin) / Math.max(yMax - yMin, 1)) * plotHeight;
+
+    const xTickTarget = Math.min(5, allTimes.length);
+    const rawXTicks = Array.from({ length: xTickTarget }, (_, index) => {
+      if (allTimes.length === 1) return allTimes[0];
+      const sourceIndex = Math.round((index * (allTimes.length - 1)) / Math.max(xTickTarget - 1, 1));
+      return allTimes[sourceIndex];
+    });
+    const xTicks = Array.from(new Set(rawXTicks))
+      .sort((a, b) => a - b)
+      .map((timeMs) => ({
+        timeMs,
+        x: xScale(timeMs),
+        label: formatAxisLabel(new Date(timeMs).toISOString()),
+      }));
+
+    const yTicks = [1, 2, 3].map((value) => ({
+      value,
+      y: yScale(value),
+    }));
+
+    const cards: TrendCardModel[] = parsedSeries.map((series) => {
+      const points = series.points.map((point) => ({
+        createdAt: point.createdAt,
+        probabilityClass: point.probabilityClass,
+        occurrenceProbability: point.occurrenceProbability,
+        x: xScale(point.timeMs),
+        y: yScale(point.occurrenceProbability),
+      }));
+      const latestPoint = points[points.length - 1] ?? null;
+      const strokeColor = probabilityClassColor(latestPoint?.probabilityClass ?? "media");
+
+      return {
+        factorKey: series.factorKey,
+        factorLabel: series.factorLabel,
+        latestPoint: latestPoint
+          ? {
+              createdAt: latestPoint.createdAt,
+              occurrenceProbability: latestPoint.occurrenceProbability,
+              probabilityClass: latestPoint.probabilityClass,
+            }
+          : null,
+        strokeColor,
+        points,
+        polyline: points.map((point) => `${point.x},${point.y}`).join(" "),
+      };
+    });
+
+    return {
+      width: chartWidth,
+      height: chartHeight,
+      padding: chartPadding,
+      xAxisY: chartHeight - chartPadding.bottom,
+      yAxisX: chartPadding.left,
+      xTicks,
+      yTicks,
+      cards,
+    };
   }, [payload]);
 
   const reassignQuestionnaire = useCallback(async () => {
@@ -265,6 +389,16 @@ export function ManagerCompanyRiskProfile({ clientId }: { clientId: string }) {
                 </p>
                 {selectedReport.notes ? <p className="mt-1 text-xs text-[#4f6977]">Notas: {selectedReport.notes}</p> : null}
 
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowSelectedResponses((previous) => !previous)}
+                    className="rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
+                  >
+                    {showSelectedResponses ? "Ocultar respostas" : "Ver respostas do questionario"}
+                  </button>
+                </div>
+
                 <div className="mt-3 overflow-x-auto rounded-xl border border-[#d8e4ee] bg-white">
                   <table className="min-w-full text-sm">
                     <thead>
@@ -291,6 +425,47 @@ export function ManagerCompanyRiskProfile({ clientId }: { clientId: string }) {
                     </tbody>
                   </table>
                 </div>
+
+                {showSelectedResponses ? (
+                  <div className="mt-4 space-y-3 rounded-xl border border-[#cfe2ec] bg-[#f4f9fc] p-3">
+                    <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[#4f6977]">
+                      Respostas detalhadas
+                    </p>
+                    {selectedReport.factorScores.map((factorScore) => (
+                      <article
+                        key={`responses-${selectedReport.id}-${factorScore.factorKey}`}
+                        className="rounded-xl border border-[#d8e4ee] bg-white p-3"
+                      >
+                        <h4 className="text-sm font-semibold text-[#123447]">{factorScore.factorLabel}</h4>
+                        <div className="mt-2 overflow-x-auto">
+                          <table className="min-w-full text-xs">
+                            <thead>
+                              <tr className="border-b bg-[#f8fbfd]">
+                                <th className="px-2 py-2 text-left text-[#4f6977]">Criterio</th>
+                                <th className="px-2 py-2 text-left text-[#4f6977]">Pergunta</th>
+                                <th className="px-2 py-2 text-left text-[#4f6977]">Resposta marcada</th>
+                                <th className="px-2 py-2 text-left text-[#4f6977]">Score</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {factorScore.questionScores.map((questionScore) => (
+                                <tr
+                                  key={`response-row-${factorScore.factorKey}-${questionScore.questionKey}`}
+                                  className="border-b last:border-b-0"
+                                >
+                                  <td className="px-2 py-2 text-[#123447]">{questionScore.criterion}</td>
+                                  <td className="px-2 py-2 text-[#123447]">{questionScore.prompt}</td>
+                                  <td className="px-2 py-2 text-[#123447]">{questionScore.optionLabel}</td>
+                                  <td className="px-2 py-2 text-[#123447]">{questionScore.score.toFixed(2)}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                ) : null}
               </article>
             ) : null}
 
@@ -323,13 +498,28 @@ export function ManagerCompanyRiskProfile({ clientId }: { clientId: string }) {
                         {report.createdByRole === "client" ? "Cliente" : "Gestor"}
                       </td>
                       <td className="px-3 py-2">
-                        <button
-                          type="button"
-                          onClick={() => setSelectedReportId(report.id)}
-                          className="rounded-full border border-[#c9dce8] px-3 py-1 text-xs font-semibold text-[#123447]"
-                        >
-                          Ver
-                        </button>
+                        <div className="flex flex-wrap gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedReportId(report.id);
+                              setShowSelectedResponses(false);
+                            }}
+                            className="rounded-full border border-[#c9dce8] px-3 py-1 text-xs font-semibold text-[#123447]"
+                          >
+                            Ver resumo
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedReportId(report.id);
+                              setShowSelectedResponses(true);
+                            }}
+                            className="rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
+                          >
+                            Ver respostas
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -399,48 +589,97 @@ export function ManagerCompanyRiskProfile({ clientId }: { clientId: string }) {
           Serie temporal de probabilidade de ocorrencia por risco psicossocial
         </h3>
         <p className="mt-1 text-xs text-[#4f6977]">
-          Esta serie historica pode ser usada como entrada de probabilidade para a matriz de risco do DRPS.
+          Grade de charts (tempo x score de risco) para apoiar analise de tendencia no estilo DRPS.
         </p>
 
-        {payload.trendSeries.length === 0 || trendDates.length === 0 ? (
-          <p className="mt-3 text-sm text-[#5a7383]">Sem historico suficiente para construir a serie temporal.</p>
+        {!trendChartsModel || trendChartsModel.cards.length === 0 ? (
+          <p className="mt-3 text-sm text-[#5a7383]">Sem historico suficiente para construir os charts.</p>
         ) : (
-          <div className="mt-4 overflow-x-auto rounded-xl border border-[#d8e4ee]">
-            <table className="min-w-full text-sm">
-              <thead>
-                <tr className="border-b bg-[#f8fbfd]">
-                  <th className="px-3 py-2 text-left text-xs font-semibold text-[#4f6977]">Risco psicossocial</th>
-                  {trendDates.map((date) => (
-                    <th key={`ts-head-${date}`} className="px-3 py-2 text-left text-xs font-semibold text-[#4f6977]">
-                      {formatDate(date)}
-                    </th>
+          <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {trendChartsModel.cards.map((card) => (
+              <article key={`trend-card-${card.factorKey}`} className="rounded-xl border border-[#d8e4ee] bg-[#f8fbfd] p-3">
+                <div className="flex items-start justify-between gap-2">
+                  <h4 className="text-sm font-semibold text-[#123447]">{card.factorLabel}</h4>
+                  {card.latestPoint ? (
+                    <span
+                      className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${probabilityClassTone(card.latestPoint.probabilityClass)}`}
+                    >
+                      P{card.latestPoint.occurrenceProbability} {probabilityClassLabel(card.latestPoint.probabilityClass)}
+                    </span>
+                  ) : null}
+                </div>
+                <p className="mt-1 text-[11px] text-[#5f7785]">
+                  Ultima medicao: {formatDateTime(card.latestPoint?.createdAt ?? null)}
+                </p>
+
+                <svg viewBox={`0 0 ${trendChartsModel.width} ${trendChartsModel.height}`} className="mt-2 h-[220px] w-full">
+                  {trendChartsModel.yTicks.map((tick) => (
+                    <g key={`y-${card.factorKey}-${tick.value}`}>
+                      <line
+                        x1={trendChartsModel.padding.left}
+                        y1={tick.y}
+                        x2={trendChartsModel.width - trendChartsModel.padding.right}
+                        y2={tick.y}
+                        stroke="#e7eef2"
+                        strokeWidth={1}
+                      />
+                      <text
+                        x={trendChartsModel.padding.left - 8}
+                        y={tick.y + 4}
+                        textAnchor="end"
+                        fontSize={10}
+                        fill="#5f7785"
+                      >
+                        {tick.value}
+                      </text>
+                    </g>
                   ))}
-                </tr>
-              </thead>
-              <tbody>
-                {payload.trendSeries.map((series) => (
-                  <tr key={`ts-row-${series.factorKey}`} className="border-b last:border-b-0">
-                    <td className="px-3 py-2 text-[#123447]">{series.factorLabel}</td>
-                    {trendDates.map((date) => {
-                      const point = trendValueLookup.get(series.factorKey)?.get(date) ?? null;
-                      return (
-                        <td key={`ts-cell-${series.factorKey}-${date}`} className="px-3 py-2">
-                          {point ? (
-                            <span
-                              className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold ${probabilityClassTone(point.probabilityClass)}`}
-                            >
-                              P{point.occurrenceProbability} ({probabilityClassLabel(point.probabilityClass)})
-                            </span>
-                          ) : (
-                            <span className="text-xs text-[#7a8f9b]">-</span>
-                          )}
-                        </td>
-                      );
-                    })}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+
+                  {trendChartsModel.xTicks.map((tick) => (
+                    <g key={`x-${card.factorKey}-${tick.timeMs}`}>
+                      <line
+                        x1={tick.x}
+                        y1={trendChartsModel.padding.top}
+                        x2={tick.x}
+                        y2={trendChartsModel.xAxisY}
+                        stroke="#f0f4f7"
+                        strokeWidth={1}
+                      />
+                      <text x={tick.x} y={trendChartsModel.height - 20} textAnchor="middle" fontSize={10} fill="#5f7785">
+                        {tick.label}
+                      </text>
+                    </g>
+                  ))}
+
+                  <line
+                    x1={trendChartsModel.padding.left}
+                    y1={trendChartsModel.xAxisY}
+                    x2={trendChartsModel.width - trendChartsModel.padding.right}
+                    y2={trendChartsModel.xAxisY}
+                    stroke="#9fb8c6"
+                    strokeWidth={1}
+                  />
+                  <line
+                    x1={trendChartsModel.yAxisX}
+                    y1={trendChartsModel.padding.top}
+                    x2={trendChartsModel.yAxisX}
+                    y2={trendChartsModel.xAxisY}
+                    stroke="#9fb8c6"
+                    strokeWidth={1}
+                  />
+
+                  {card.polyline.length > 0 ? (
+                    <polyline fill="none" stroke={card.strokeColor} strokeWidth={2.4} points={card.polyline} />
+                  ) : null}
+
+                  {card.points.map((point) => (
+                    <g key={`point-${card.factorKey}-${point.createdAt}`}>
+                      <circle cx={point.x} cy={point.y} r={3.8} fill={probabilityClassColor(point.probabilityClass)} />
+                    </g>
+                  ))}
+                </svg>
+              </article>
+            ))}
           </div>
         )}
       </section>
