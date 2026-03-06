@@ -1,0 +1,123 @@
+{
+    "client_id":  "690bc6fc-debf-496a-825f-291ea9f38059",
+    "last_skipped_at":  null,
+    "completed_at":  "2026-03-06T00:07:34.222293+00:00",
+    "started_at":  "2026-03-06T00:06:32.571+00:00",
+    "latest_report_id":  "86d63f57-70fb-4994-bcdc-8263b17c2895",
+    "last_reminder_at":  "2026-03-06T00:06:12.049+00:00",
+    "completion_ratio":  1,
+    "updated_at":  "2026-03-06T00:10:11.5396410Z",
+    "answers_json":  {
+                         "assedio-moral":  {
+                                               "duracao-episodios":  1,
+                                               "nivel-conhecimento":  2,
+                                               "recursos-dedicados":  2,
+                                               "medidas-preventivas":  3,
+                                               "causas-identificadas":  3,
+                                               "gravidade-incidentes":  2,
+                                               "historico-incidentes":  2,
+                                               "frequencia-ocorrencia":  2,
+                                               "colaboradores-afetados":  1,
+                                               "frequencia-revisao-medidas":  3
+                                           },
+                         "pressao-metas":  {
+                                               "duracao-episodios":  1,
+                                               "nivel-conhecimento":  2,
+                                               "recursos-dedicados":  2,
+                                               "medidas-preventivas":  3,
+                                               "causas-identificadas":  3,
+                                               "gravidade-incidentes":  2,
+                                               "historico-incidentes":  2,
+                                               "frequencia-ocorrencia":  2,
+                                               "colaboradores-afetados":  1,
+                                               "frequencia-revisao-medidas":  3
+                                           },
+                         "carga-excessiva":  {
+                                                 "duracao-episodios":  1,
+                                                 "nivel-conhecimento":  2,
+                                                 "recursos-dedicados":  2,
+                                                 "medidas-preventivas":  3,
+                                                 "causas-identificadas":  3,
+                                                 "gravidade-incidentes":  2,
+                                                 "historico-incidentes":  2,
+                                                 "frequencia-ocorrencia":  2,
+                                                 "colaboradores-afetados":  1,
+                                                 "frequencia-revisao-medidas":  3
+                                             },
+                         "falta-autonomia":  {
+                                                 "duracao-episodios":  1,
+                                                 "nivel-conhecimento":  2,
+                                                 "recursos-dedicados":  2,
+                                                 "medidas-preventivas":  3,
+                                                 "causas-identificadas":  3,
+                                                 "gravidade-incidentes":  2,
+                                                 "historico-incidentes":  2,
+                                                 "frequencia-ocorrencia":  2,
+                                                 "colaboradores-afetados":  1,
+                                                 "frequencia-revisao-medidas":  3
+                                             },
+                         "inseguranca-ameacas":  {
+                                                     "duracao-episodios":  1,
+                                                     "nivel-conhecimento":  2,
+                                                     "recursos-dedicados":  2,
+                                                     "medidas-preventivas":  3,
+                                                     "causas-identificadas":  3,
+                                                     "gravidade-incidentes":  2,
+                                                     "historico-incidentes":  2,
+                                                     "frequencia-ocorrencia":  2,
+                                                     "colaboradores-afetados":  1,
+                                                     "frequencia-revisao-medidas":  3
+                                                 },
+                         "clima-organizacional":  {
+                                                      "duracao-episodios":  1,
+                                                      "nivel-conhecimento":  2,
+                                                      "recursos-dedicados":  2,
+                                                      "medidas-preventivas":  3,
+                                                      "causas-identificadas":  3,
+                                                      "gravidade-incidentes":  2,
+                                                      "historico-incidentes":  2,
+                                                      "frequencia-ocorrencia":  2,
+                                                      "colaboradores-afetados":  1,
+                                                      "frequencia-revisao-medidas":  3
+                                                  },
+                         "falta-reconhecimento":  {
+                                                      "duracao-episodios":  1,
+                                                      "nivel-conhecimento":  2,
+                                                      "recursos-dedicados":  2,
+                                                      "medidas-preventivas":  3,
+                                                      "causas-identificadas":  3,
+                                                      "gravidade-incidentes":  2,
+                                                      "historico-incidentes":  2,
+                                                      "frequencia-ocorrencia":  2,
+                                                      "colaboradores-afetados":  1,
+                                                      "frequencia-revisao-medidas":  3
+                                                  },
+                         "conflitos-comunicacao":  {
+                                                       "duracao-episodios":  1,
+                                                       "nivel-conhecimento":  2,
+                                                       "recursos-dedicados":  2,
+                                                       "medidas-preventivas":  3,
+                                                       "causas-identificadas":  3,
+                                                       "gravidade-incidentes":  2,
+                                                       "historico-incidentes":  2,
+                                                       "frequencia-ocorrencia":  2,
+                                                       "colaboradores-afetados":  1,
+                                                       "frequencia-revisao-medidas":  3
+                                                   },
+                         "vida-pessoal-profissional":  {
+                                                           "duracao-episodios":  1,
+                                                           "nivel-conhecimento":  2,
+                                                           "recursos-dedicados":  2,
+                                                           "medidas-preventivas":  3,
+                                                           "causas-identificadas":  3,
+                                                           "gravidade-incidentes":  2,
+                                                           "historico-incidentes":  2,
+                                                           "frequencia-ocorrencia":  2,
+                                                           "colaboradores-afetados":  1,
+                                                           "frequencia-revisao-medidas":  3
+                                                       }
+                     },
+    "questionnaire_version":  "questionario-impresa-2026-v1",
+    "last_saved_at":  "2026-03-06T00:07:34.222293+00:00",
+    "status":  "completed"
+}

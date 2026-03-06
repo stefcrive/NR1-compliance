@@ -289,7 +289,7 @@ export async function POST(request: NextRequest) {
   );
 
   const response = NextResponse.json({
-    redirectTo: `/client/${invitationState.clientSlug}/company`,
+    redirectTo: `/client/${invitationState.clientSlug}/company-risk-profile?from=onboarding`,
     warning: warning ?? undefined,
   });
   response.cookies.set(

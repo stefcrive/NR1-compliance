@@ -4,7 +4,8 @@ import { isMissingTableError } from "@/lib/supabase-errors";
 
 export type ManagerNotificationType =
   | "client_reschedule_submitted"
-  | "client_report_downloaded";
+  | "client_report_downloaded"
+  | "client_company_risk_profile_completed";
 
 type ManagerNotificationRow = {
   notification_id: string;

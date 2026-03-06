@@ -120,6 +120,22 @@ type Payload = {
   };
 };
 
+type CompanyRiskProfileSummary = {
+  progress: {
+    status: "not_started" | "in_progress" | "completed";
+    completionRatio: number;
+    completedAt: string | null;
+    lastSavedAt: string | null;
+  };
+  latestReport: {
+    id: string;
+    overallScore: number;
+    overallClass: "baixa" | "media" | "alta";
+    createdAt: string;
+  } | null;
+  progressUnavailable?: boolean;
+};
+
 function fmt(value: string | null) {
   if (!value) return "-";
   return new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short" }).format(new Date(value));
@@ -170,6 +186,18 @@ function campaignCollectionStatus(status: Campaign["status"]) {
   if (status === "closed") return "Questionario fechado";
   if (status === "draft") return "Questionario em rascunho";
   return "Questionario arquivado";
+}
+
+function riskProfileStatusLabel(status: "not_started" | "in_progress" | "completed") {
+  if (status === "completed") return "Concluido";
+  if (status === "in_progress") return "Em andamento";
+  return "Nao iniciado";
+}
+
+function riskProfileClassLabel(value: "baixa" | "media" | "alta") {
+  if (value === "baixa") return "Baixa";
+  if (value === "media") return "Media";
+  return "Alta";
 }
 
 function durationMinutesFromRange(
@@ -246,6 +274,9 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
   const [reportFeedback, setReportFeedback] = useState("");
   const [selectedCalendarEventId, setSelectedCalendarEventId] = useState<string | null>(null);
   const [appliedCalendarDeepLinkId, setAppliedCalendarDeepLinkId] = useState<string | null>(null);
+  const [riskProfileSummary, setRiskProfileSummary] = useState<CompanyRiskProfileSummary | null>(null);
+  const [isLoadingRiskProfile, setIsLoadingRiskProfile] = useState(true);
+  const [riskProfileError, setRiskProfileError] = useState("");
 
   const loadData = useCallback(
     async (campaignId?: string) => {
@@ -275,6 +306,36 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
     void loadData();
   }, [loadData]);
 
+  const loadRiskProfileSummary = useCallback(async () => {
+    setIsLoadingRiskProfile(true);
+    setRiskProfileError("");
+    try {
+      const response = await fetch(`/api/client/portal/${encodeURIComponent(clientSlug)}/company-risk-profile`, {
+        cache: "no-store",
+      });
+      const body = (await response.json().catch(() => ({}))) as CompanyRiskProfileSummary & { error?: string };
+      if (!response.ok) {
+        throw new Error(body.error ?? "Nao foi possivel carregar o status do questionario da empresa.");
+      }
+      setRiskProfileSummary({
+        progress: body.progress,
+        latestReport: body.latestReport ?? null,
+        progressUnavailable: Boolean(body.progressUnavailable),
+      });
+    } catch (loadError) {
+      setRiskProfileSummary(null);
+      setRiskProfileError(
+        loadError instanceof Error ? loadError.message : "Falha ao carregar status do questionario da empresa.",
+      );
+    } finally {
+      setIsLoadingRiskProfile(false);
+    }
+  }, [clientSlug]);
+
+  useEffect(() => {
+    void loadRiskProfileSummary();
+  }, [loadRiskProfileSummary]);
+
   const selectedCampaign = useMemo(
     () => payload?.campaigns.find((item) => item.id === selectedCampaignId) ?? payload?.selectedCampaign ?? null,
     [payload, selectedCampaignId],
@@ -297,6 +358,8 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
   }, [payload, selectedCampaign]);
 
   const resultsHref = resultsCampaign ? `/client/${clientSlug}/diagnostic/${resultsCampaign.id}` : null;
+  const companyRiskProfileHref = `/client/${clientSlug}/company-risk-profile`;
+  const companyRiskProfilePending = riskProfileSummary?.progress.status !== "completed";
   const linksActionCampaign =
     selectedCampaign?.status === "live" ? selectedCampaign : openCampaigns[0] ?? null;
 
@@ -774,6 +837,81 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
           </article>
         </div>
       </section>
+
+      {isLoadingRiskProfile ? (
+        <section className="rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
+          <p className="text-sm text-[#4f6977]">Carregando status do questionario de perfil de risco...</p>
+        </section>
+      ) : riskProfileError ? (
+        <section className="rounded-2xl border border-[#e8d6ad] bg-[#fff7e8] p-5 shadow-sm">
+          <p className="text-sm text-[#8a5b2d]">{riskProfileError}</p>
+          <button
+            type="button"
+            onClick={() => void loadRiskProfileSummary()}
+            className="mt-3 rounded-full border border-[#d2b983] px-3 py-1 text-xs font-semibold text-[#7a4b00]"
+          >
+            Tentar novamente
+          </button>
+        </section>
+      ) : riskProfileSummary?.progressUnavailable ? (
+        <section className="rounded-2xl border border-[#e8d6ad] bg-[#fff7e8] p-5 shadow-sm">
+          <p className="text-sm text-[#8a5b2d]">
+            O questionario de perfil de risco ainda nao esta disponivel neste ambiente.
+          </p>
+        </section>
+      ) : companyRiskProfilePending ? (
+        <section className="rounded-2xl border border-[#f0d2b2] bg-[#fff6ee] p-5 shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-xs uppercase tracking-[0.16em] text-[#9a5a1d]">Acao pendente</p>
+              <h3 className="mt-1 text-lg font-semibold text-[#7a3f08]">
+                Complete o questionario de perfil de risco da empresa
+              </h3>
+              <p className="mt-1 text-sm text-[#8a5b2d]">
+                Status:{" "}
+                <strong>{riskProfileStatusLabel(riskProfileSummary?.progress.status ?? "not_started")}</strong>
+                {" "} | Progresso:{" "}
+                <strong>
+                  {Math.round((riskProfileSummary?.progress.completionRatio ?? 0) * 100)}%
+                </strong>
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Link
+                href={companyRiskProfileHref}
+                className="rounded-full border border-[#c79055] bg-[#b6651c] px-4 py-2 text-xs font-semibold text-white"
+              >
+                Abrir questionario
+              </Link>
+              <button
+                type="button"
+                onClick={() => void loadRiskProfileSummary()}
+                className="rounded-full border border-[#d2b983] px-3 py-1 text-xs font-semibold text-[#7a4b00]"
+              >
+                Atualizar status
+              </button>
+            </div>
+          </div>
+        </section>
+      ) : (
+        <section className="rounded-2xl border border-[#cfe2ec] bg-[#f4f9fc] p-5 shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-xs uppercase tracking-[0.16em] text-[#4f6977]">Questionario da empresa</p>
+              <h3 className="mt-1 text-lg font-semibold text-[#123447]">Perfil de risco concluido</h3>
+              <p className="mt-1 text-sm text-[#35515f]">
+                Concluido em {fmt(riskProfileSummary?.progress.completedAt ?? null)}
+              </p>
+            </div>
+            {riskProfileSummary?.latestReport ? (
+              <p className="text-sm text-[#123447]">
+                Score {riskProfileSummary.latestReport.overallScore.toFixed(2)} (
+                {riskProfileClassLabel(riskProfileSummary.latestReport.overallClass)})
+              </p>
+            ) : null}
+          </div>
+        </section>
+      )}
 
       <section className="rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
         <h3 className="text-lg font-semibold text-[#123447]">Resultados atuais</h3>

@@ -5,7 +5,8 @@ import { isMissingTableError } from "@/lib/supabase-errors";
 export type ClientNotificationType =
   | "manager_drps_assigned"
   | "manager_program_assigned"
-  | "manager_report_issued";
+  | "manager_report_issued"
+  | "company_risk_profile_reminder";
 
 type ClientNotificationRow = {
   notification_id: string;

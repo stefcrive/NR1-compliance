@@ -1,0 +1,14 @@
+{
+    "is_read":  false,
+    "message":  "evostudio concluiu o questionario de perfil de risco da empresa.",
+    "client_id":  "690bc6fc-debf-496a-825f-291ea9f38059",
+    "metadata":  {
+                     "reportId":  "86d63f57-70fb-4994-bcdc-8263b17c2895",
+                     "clientSlug":  "evostudio",
+                     "completedAt":  "2026-03-06T00:07:34.222293+00:00",
+                     "overallClass":  "media",
+                     "overallScore":  1.7
+                 },
+    "title":  "Questionario de perfil de risco concluido: evostudio",
+    "notification_type":  "client_company_risk_profile_completed"
+}

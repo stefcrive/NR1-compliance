@@ -1,0 +1,919 @@
+{
+  "client_id": "690bc6fc-debf-496a-825f-291ea9f38059",
+  "questionnaire_version": "questionario-impresa-2026-v1",
+  "sector": "Financeiro",
+  "notes": "Resposta de teste inserida via terminal.",
+  "answers_json": {
+    "assedio-moral": {
+      "frequencia-ocorrencia": 2,
+      "duracao-episodios": 1,
+      "colaboradores-afetados": 1,
+      "historico-incidentes": 2,
+      "gravidade-incidentes": 2,
+      "causas-identificadas": 3,
+      "medidas-preventivas": 3,
+      "frequencia-revisao-medidas": 3,
+      "nivel-conhecimento": 2,
+      "recursos-dedicados": 2
+    },
+    "carga-excessiva": {
+      "frequencia-ocorrencia": 2,
+      "duracao-episodios": 1,
+      "colaboradores-afetados": 1,
+      "historico-incidentes": 2,
+      "gravidade-incidentes": 2,
+      "causas-identificadas": 3,
+      "medidas-preventivas": 3,
+      "frequencia-revisao-medidas": 3,
+      "nivel-conhecimento": 2,
+      "recursos-dedicados": 2
+    },
+    "falta-reconhecimento": {
+      "frequencia-ocorrencia": 2,
+      "duracao-episodios": 1,
+      "colaboradores-afetados": 1,
+      "historico-incidentes": 2,
+      "gravidade-incidentes": 2,
+      "causas-identificadas": 3,
+      "medidas-preventivas": 3,
+      "frequencia-revisao-medidas": 3,
+      "nivel-conhecimento": 2,
+      "recursos-dedicados": 2
+    },
+    "clima-organizacional": {
+      "frequencia-ocorrencia": 2,
+      "duracao-episodios": 1,
+      "colaboradores-afetados": 1,
+      "historico-incidentes": 2,
+      "gravidade-incidentes": 2,
+      "causas-identificadas": 3,
+      "medidas-preventivas": 3,
+      "frequencia-revisao-medidas": 3,
+      "nivel-conhecimento": 2,
+      "recursos-dedicados": 2
+    },
+    "falta-autonomia": {
+      "frequencia-ocorrencia": 2,
+      "duracao-episodios": 1,
+      "colaboradores-afetados": 1,
+      "historico-incidentes": 2,
+      "gravidade-incidentes": 2,
+      "causas-identificadas": 3,
+      "medidas-preventivas": 3,
+      "frequencia-revisao-medidas": 3,
+      "nivel-conhecimento": 2,
+      "recursos-dedicados": 2
+    },
+    "pressao-metas": {
+      "frequencia-ocorrencia": 2,
+      "duracao-episodios": 1,
+      "colaboradores-afetados": 1,
+      "historico-incidentes": 2,
+      "gravidade-incidentes": 2,
+      "causas-identificadas": 3,
+      "medidas-preventivas": 3,
+      "frequencia-revisao-medidas": 3,
+      "nivel-conhecimento": 2,
+      "recursos-dedicados": 2
+    },
+    "inseguranca-ameacas": {
+      "frequencia-ocorrencia": 2,
+      "duracao-episodios": 1,
+      "colaboradores-afetados": 1,
+      "historico-incidentes": 2,
+      "gravidade-incidentes": 2,
+      "causas-identificadas": 3,
+      "medidas-preventivas": 3,
+      "frequencia-revisao-medidas": 3,
+      "nivel-conhecimento": 2,
+      "recursos-dedicados": 2
+    },
+    "conflitos-comunicacao": {
+      "frequencia-ocorrencia": 2,
+      "duracao-episodios": 1,
+      "colaboradores-afetados": 1,
+      "historico-incidentes": 2,
+      "gravidade-incidentes": 2,
+      "causas-identificadas": 3,
+      "medidas-preventivas": 3,
+      "frequencia-revisao-medidas": 3,
+      "nivel-conhecimento": 2,
+      "recursos-dedicados": 2
+    },
+    "vida-pessoal-profissional": {
+      "frequencia-ocorrencia": 2,
+      "duracao-episodios": 1,
+      "colaboradores-afetados": 1,
+      "historico-incidentes": 2,
+      "gravidade-incidentes": 2,
+      "causas-identificadas": 3,
+      "medidas-preventivas": 3,
+      "frequencia-revisao-medidas": 3,
+      "nivel-conhecimento": 2,
+      "recursos-dedicados": 2
+    }
+  },
+  "factor_scores": [
+    {
+      "factorKey": "assedio-moral",
+      "factorLabel": "Assedio Moral",
+      "score": 1.7,
+      "probabilityClass": "media",
+      "questionScores": [
+        {
+          "questionKey": "frequencia-ocorrencia",
+          "criterion": "Frequencia",
+          "prompt": "Com que regularidade o risco psicossocial ocorre no ambiente de trabalho?",
+          "optionIndex": 2,
+          "optionLabel": "Ocasionalmente",
+          "score": 2
+        },
+        {
+          "questionKey": "duracao-episodios",
+          "criterion": "Frequencia",
+          "prompt": "Qual e a duracao tipica dos episodios desse risco?",
+          "optionIndex": 1,
+          "optionLabel": "Algumas horas",
+          "score": 2
+        },
+        {
+          "questionKey": "colaboradores-afetados",
+          "criterion": "Frequencia",
+          "prompt": "Quantos colaboradores sao afetados simultaneamente quando o risco ocorre?",
+          "optionIndex": 1,
+          "optionLabel": "1-2 colaboradores",
+          "score": 2
+        },
+        {
+          "questionKey": "historico-incidentes",
+          "criterion": "Historico do Risco no Setor",
+          "prompt": "Ha registros anteriores de incidentes relacionados a esse risco no setor?",
+          "optionIndex": 2,
+          "optionLabel": "Registros ocasionais",
+          "score": 2
+        },
+        {
+          "questionKey": "gravidade-incidentes",
+          "criterion": "Historico do Risco no Setor",
+          "prompt": "Qual foi a gravidade dos incidentes anteriores relacionados a esse risco?",
+          "optionIndex": 2,
+          "optionLabel": "Impacto moderado",
+          "score": 2
+        },
+        {
+          "questionKey": "causas-identificadas",
+          "criterion": "Historico do Risco no Setor",
+          "prompt": "As causas desses incidentes foram identificadas e abordadas de forma eficaz?",
+          "optionIndex": 3,
+          "optionLabel": "Identificadas e totalmente abordadas",
+          "score": 1
+        },
+        {
+          "questionKey": "medidas-preventivas",
+          "criterion": "Recursos Disponiveis",
+          "prompt": "Quais medidas preventivas estao atualmente implementadas para mitigar esse risco?",
+          "optionIndex": 3,
+          "optionLabel": "Treinamentos regulares",
+          "score": 1
+        },
+        {
+          "questionKey": "frequencia-revisao-medidas",
+          "criterion": "Recursos Disponiveis",
+          "prompt": "Com que frequencia as medidas preventivas existentes sao revisadas ou atualizadas?",
+          "optionIndex": 3,
+          "optionLabel": "Semestralmente",
+          "score": 1
+        },
+        {
+          "questionKey": "nivel-conhecimento",
+          "criterion": "Recursos Disponiveis",
+          "prompt": "Qual e o nivel de conhecimento e treinamento dos gestores e colaboradores sobre as medidas de mitigacao disponiveis?",
+          "optionIndex": 2,
+          "optionLabel": "Conhecimento intermediario",
+          "score": 2
+        },
+        {
+          "questionKey": "recursos-dedicados",
+          "criterion": "Recursos Disponiveis",
+          "prompt": "Existem recursos dedicados para apoiar a implementacao e monitoramento das medidas de mitigacao?",
+          "optionIndex": 2,
+          "optionLabel": "Recursos adequados disponiveis",
+          "score": 2
+        }
+      ]
+    },
+    {
+      "factorKey": "carga-excessiva",
+      "factorLabel": "Carga Excessiva de Trabalho",
+      "score": 1.7,
+      "probabilityClass": "media",
+      "questionScores": [
+        {
+          "questionKey": "frequencia-ocorrencia",
+          "criterion": "Frequencia",
+          "prompt": "Com que regularidade o risco psicossocial ocorre no ambiente de trabalho?",
+          "optionIndex": 2,
+          "optionLabel": "Ocasionalmente",
+          "score": 2
+        },
+        {
+          "questionKey": "duracao-episodios",
+          "criterion": "Frequencia",
+          "prompt": "Qual e a duracao tipica dos episodios desse risco?",
+          "optionIndex": 1,
+          "optionLabel": "Algumas horas",
+          "score": 2
+        },
+        {
+          "questionKey": "colaboradores-afetados",
+          "criterion": "Frequencia",
+          "prompt": "Quantos colaboradores sao afetados simultaneamente quando o risco ocorre?",
+          "optionIndex": 1,
+          "optionLabel": "1-2 colaboradores",
+          "score": 2
+        },
+        {
+          "questionKey": "historico-incidentes",
+          "criterion": "Historico do Risco no Setor",
+          "prompt": "Ha registros anteriores de incidentes relacionados a esse risco no setor?",
+          "optionIndex": 2,
+          "optionLabel": "Registros ocasionais",
+          "score": 2
+        },
+        {
+          "questionKey": "gravidade-incidentes",
+          "criterion": "Historico do Risco no Setor",
+          "prompt": "Qual foi a gravidade dos incidentes anteriores relacionados a esse risco?",
+          "optionIndex": 2,
+          "optionLabel": "Impacto moderado",
+          "score": 2
+        },
+        {
+          "questionKey": "causas-identificadas",
+          "criterion": "Historico do Risco no Setor",
+          "prompt": "As causas desses incidentes foram identificadas e abordadas de forma eficaz?",
+          "optionIndex": 3,
+          "optionLabel": "Identificadas e totalmente abordadas",
+          "score": 1
+        },
+        {
+          "questionKey": "medidas-preventivas",
+          "criterion": "Recursos Disponiveis",
+          "prompt": "Quais medidas preventivas estao atualmente implementadas para mitigar esse risco?",
+          "optionIndex": 3,
+          "optionLabel": "Treinamentos regulares",
+          "score": 1
+        },
+        {
+          "questionKey": "frequencia-revisao-medidas",
+          "criterion": "Recursos Disponiveis",
+          "prompt": "Com que frequencia as medidas preventivas existentes sao revisadas ou atualizadas?",
+          "optionIndex": 3,
+          "optionLabel": "Semestralmente",
+          "score": 1
+        },
+        {
+          "questionKey": "nivel-conhecimento",
+          "criterion": "Recursos Disponiveis",
+          "prompt": "Qual e o nivel de conhecimento e treinamento dos gestores e colaboradores sobre as medidas de mitigacao disponiveis?",
+          "optionIndex": 2,
+          "optionLabel": "Conhecimento intermediario",
+          "score": 2
+        },
+        {
+          "questionKey": "recursos-dedicados",
+          "criterion": "Recursos Disponiveis",
+          "prompt": "Existem recursos dedicados para apoiar a implementacao e monitoramento das medidas de mitigacao?",
+          "optionIndex": 2,
+          "optionLabel": "Recursos adequados disponiveis",
+          "score": 2
+        }
+      ]
+    },
+    {
+      "factorKey": "falta-reconhecimento",
+      "factorLabel": "Falta de Reconhecimento e Recompensas",
+      "score": 1.7,
+      "probabilityClass": "media",
+      "questionScores": [
+        {
+          "questionKey": "frequencia-ocorrencia",
+          "criterion": "Frequencia",
+          "prompt": "Com que regularidade o risco psicossocial ocorre no ambiente de trabalho?",
+          "optionIndex": 2,
+          "optionLabel": "Ocasionalmente",
+          "score": 2
+        },
+        {
+          "questionKey": "duracao-episodios",
+          "criterion": "Frequencia",
+          "prompt": "Qual e a duracao tipica dos episodios desse risco?",
+          "optionIndex": 1,
+          "optionLabel": "Algumas horas",
+          "score": 2
+        },
+        {
+          "questionKey": "colaboradores-afetados",
+          "criterion": "Frequencia",
+          "prompt": "Quantos colaboradores sao afetados simultaneamente quando o risco ocorre?",
+          "optionIndex": 1,
+          "optionLabel": "1-2 colaboradores",
+          "score": 2
+        },
+        {
+          "questionKey": "historico-incidentes",
+          "criterion": "Historico do Risco no Setor",
+          "prompt": "Ha registros anteriores de incidentes relacionados a esse risco no setor?",
+          "optionIndex": 2,
+          "optionLabel": "Registros ocasionais",
+          "score": 2
+        },
+        {
+          "questionKey": "gravidade-incidentes",
+          "criterion": "Historico do Risco no Setor",
+          "prompt": "Qual foi a gravidade dos incidentes anteriores relacionados a esse risco?",
+          "optionIndex": 2,
+          "optionLabel": "Impacto moderado",
+          "score": 2
+        },
+        {
+          "questionKey": "causas-identificadas",
+          "criterion": "Historico do Risco no Setor",
+          "prompt": "As causas desses incidentes foram identificadas e abordadas de forma eficaz?",
+          "optionIndex": 3,
+          "optionLabel": "Identificadas e totalmente abordadas",
+          "score": 1
+        },
+        {
+          "questionKey": "medidas-preventivas",
+          "criterion": "Recursos Disponiveis",
+          "prompt": "Quais medidas preventivas estao atualmente implementadas para mitigar esse risco?",
+          "optionIndex": 3,
+          "optionLabel": "Treinamentos regulares",
+          "score": 1
+        },
+        {
+          "questionKey": "frequencia-revisao-medidas",
+          "criterion": "Recursos Disponiveis",
+          "prompt": "Com que frequencia as medidas preventivas existentes sao revisadas ou atualizadas?",
+          "optionIndex": 3,
+          "optionLabel": "Semestralmente",
+          "score": 1
+        },
+        {
+          "questionKey": "nivel-conhecimento",
+          "criterion": "Recursos Disponiveis",
+          "prompt": "Qual e o nivel de conhecimento e treinamento dos gestores e colaboradores sobre as medidas de mitigacao disponiveis?",
+          "optionIndex": 2,
+          "optionLabel": "Conhecimento intermediario",
+          "score": 2
+        },
+        {
+          "questionKey": "recursos-dedicados",
+          "criterion": "Recursos Disponiveis",
+          "prompt": "Existem recursos dedicados para apoiar a implementacao e monitoramento das medidas de mitigacao?",
+          "optionIndex": 2,
+          "optionLabel": "Recursos adequados disponiveis",
+          "score": 2
+        }
+      ]
+    },
+    {
+      "factorKey": "clima-organizacional",
+      "factorLabel": "Clima Organizacional",
+      "score": 1.7,
+      "probabilityClass": "media",
+      "questionScores": [
+        {
+          "questionKey": "frequencia-ocorrencia",
+          "criterion": "Frequencia",
+          "prompt": "Com que regularidade o risco psicossocial ocorre no ambiente de trabalho?",
+          "optionIndex": 2,
+          "optionLabel": "Ocasionalmente",
+          "score": 2
+        },
+        {
+          "questionKey": "duracao-episodios",
+          "criterion": "Frequencia",
+          "prompt": "Qual e a duracao tipica dos episodios desse risco?",
+          "optionIndex": 1,
+          "optionLabel": "Algumas horas",
+          "score": 2
+        },
+        {
+          "questionKey": "colaboradores-afetados",
+          "criterion": "Frequencia",
+          "prompt": "Quantos colaboradores sao afetados simultaneamente quando o risco ocorre?",
+          "optionIndex": 1,
+          "optionLabel": "1-2 colaboradores",
+          "score": 2
+        },
+        {
+          "questionKey": "historico-incidentes",
+          "criterion": "Historico do Risco no Setor",
+          "prompt": "Ha registros anteriores de incidentes relacionados a esse risco no setor?",
+          "optionIndex": 2,
+          "optionLabel": "Registros ocasionais",
+          "score": 2
+        },
+        {
+          "questionKey": "gravidade-incidentes",
+          "criterion": "Historico do Risco no Setor",
+          "prompt": "Qual foi a gravidade dos incidentes anteriores relacionados a esse risco?",
+          "optionIndex": 2,
+          "optionLabel": "Impacto moderado",
+          "score": 2
+        },
+        {
+          "questionKey": "causas-identificadas",
+          "criterion": "Historico do Risco no Setor",
+          "prompt": "As causas desses incidentes foram identificadas e abordadas de forma eficaz?",
+          "optionIndex": 3,
+          "optionLabel": "Identificadas e totalmente abordadas",
+          "score": 1
+        },
+        {
+          "questionKey": "medidas-preventivas",
+          "criterion": "Recursos Disponiveis",
+          "prompt": "Quais medidas preventivas estao atualmente implementadas para mitigar esse risco?",
+          "optionIndex": 3,
+          "optionLabel": "Treinamentos regulares",
+          "score": 1
+        },
+        {
+          "questionKey": "frequencia-revisao-medidas",
+          "criterion": "Recursos Disponiveis",
+          "prompt": "Com que frequencia as medidas preventivas existentes sao revisadas ou atualizadas?",
+          "optionIndex": 3,
+          "optionLabel": "Semestralmente",
+          "score": 1
+        },
+        {
+          "questionKey": "nivel-conhecimento",
+          "criterion": "Recursos Disponiveis",
+          "prompt": "Qual e o nivel de conhecimento e treinamento dos gestores e colaboradores sobre as medidas de mitigacao disponiveis?",
+          "optionIndex": 2,
+          "optionLabel": "Conhecimento intermediario",
+          "score": 2
+        },
+        {
+          "questionKey": "recursos-dedicados",
+          "criterion": "Recursos Disponiveis",
+          "prompt": "Existem recursos dedicados para apoiar a implementacao e monitoramento das medidas de mitigacao?",
+          "optionIndex": 2,
+          "optionLabel": "Recursos adequados disponiveis",
+          "score": 2
+        }
+      ]
+    },
+    {
+      "factorKey": "falta-autonomia",
+      "factorLabel": "Falta de Autonomia e Controle sobre o Trabalho",
+      "score": 1.7,
+      "probabilityClass": "media",
+      "questionScores": [
+        {
+          "questionKey": "frequencia-ocorrencia",
+          "criterion": "Frequencia",
+          "prompt": "Com que regularidade o risco psicossocial ocorre no ambiente de trabalho?",
+          "optionIndex": 2,
+          "optionLabel": "Ocasionalmente",
+          "score": 2
+        },
+        {
+          "questionKey": "duracao-episodios",
+          "criterion": "Frequencia",
+          "prompt": "Qual e a duracao tipica dos episodios desse risco?",
+          "optionIndex": 1,
+          "optionLabel": "Algumas horas",
+          "score": 2
+        },
+        {
+          "questionKey": "colaboradores-afetados",
+          "criterion": "Frequencia",
+          "prompt": "Quantos colaboradores sao afetados simultaneamente quando o risco ocorre?",
+          "optionIndex": 1,
+          "optionLabel": "1-2 colaboradores",
+          "score": 2
+        },
+        {
+          "questionKey": "historico-incidentes",
+          "criterion": "Historico do Risco no Setor",
+          "prompt": "Ha registros anteriores de incidentes relacionados a esse risco no setor?",
+          "optionIndex": 2,
+          "optionLabel": "Registros ocasionais",
+          "score": 2
+        },
+        {
+          "questionKey": "gravidade-incidentes",
+          "criterion": "Historico do Risco no Setor",
+          "prompt": "Qual foi a gravidade dos incidentes anteriores relacionados a esse risco?",
+          "optionIndex": 2,
+          "optionLabel": "Impacto moderado",
+          "score": 2
+        },
+        {
+          "questionKey": "causas-identificadas",
+          "criterion": "Historico do Risco no Setor",
+          "prompt": "As causas desses incidentes foram identificadas e abordadas de forma eficaz?",
+          "optionIndex": 3,
+          "optionLabel": "Identificadas e totalmente abordadas",
+          "score": 1
+        },
+        {
+          "questionKey": "medidas-preventivas",
+          "criterion": "Recursos Disponiveis",
+          "prompt": "Quais medidas preventivas estao atualmente implementadas para mitigar esse risco?",
+          "optionIndex": 3,
+          "optionLabel": "Treinamentos regulares",
+          "score": 1
+        },
+        {
+          "questionKey": "frequencia-revisao-medidas",
+          "criterion": "Recursos Disponiveis",
+          "prompt": "Com que frequencia as medidas preventivas existentes sao revisadas ou atualizadas?",
+          "optionIndex": 3,
+          "optionLabel": "Semestralmente",
+          "score": 1
+        },
+        {
+          "questionKey": "nivel-conhecimento",
+          "criterion": "Recursos Disponiveis",
+          "prompt": "Qual e o nivel de conhecimento e treinamento dos gestores e colaboradores sobre as medidas de mitigacao disponiveis?",
+          "optionIndex": 2,
+          "optionLabel": "Conhecimento intermediario",
+          "score": 2
+        },
+        {
+          "questionKey": "recursos-dedicados",
+          "criterion": "Recursos Disponiveis",
+          "prompt": "Existem recursos dedicados para apoiar a implementacao e monitoramento das medidas de mitigacao?",
+          "optionIndex": 2,
+          "optionLabel": "Recursos adequados disponiveis",
+          "score": 2
+        }
+      ]
+    },
+    {
+      "factorKey": "pressao-metas",
+      "factorLabel": "Pressao e Metas Irrealistas",
+      "score": 1.7,
+      "probabilityClass": "media",
+      "questionScores": [
+        {
+          "questionKey": "frequencia-ocorrencia",
+          "criterion": "Frequencia",
+          "prompt": "Com que regularidade o risco psicossocial ocorre no ambiente de trabalho?",
+          "optionIndex": 2,
+          "optionLabel": "Ocasionalmente",
+          "score": 2
+        },
+        {
+          "questionKey": "duracao-episodios",
+          "criterion": "Frequencia",
+          "prompt": "Qual e a duracao tipica dos episodios desse risco?",
+          "optionIndex": 1,
+          "optionLabel": "Algumas horas",
+          "score": 2
+        },
+        {
+          "questionKey": "colaboradores-afetados",
+          "criterion": "Frequencia",
+          "prompt": "Quantos colaboradores sao afetados simultaneamente quando o risco ocorre?",
+          "optionIndex": 1,
+          "optionLabel": "1-2 colaboradores",
+          "score": 2
+        },
+        {
+          "questionKey": "historico-incidentes",
+          "criterion": "Historico do Risco no Setor",
+          "prompt": "Ha registros anteriores de incidentes relacionados a esse risco no setor?",
+          "optionIndex": 2,
+          "optionLabel": "Registros ocasionais",
+          "score": 2
+        },
+        {
+          "questionKey": "gravidade-incidentes",
+          "criterion": "Historico do Risco no Setor",
+          "prompt": "Qual foi a gravidade dos incidentes anteriores relacionados a esse risco?",
+          "optionIndex": 2,
+          "optionLabel": "Impacto moderado",
+          "score": 2
+        },
+        {
+          "questionKey": "causas-identificadas",
+          "criterion": "Historico do Risco no Setor",
+          "prompt": "As causas desses incidentes foram identificadas e abordadas de forma eficaz?",
+          "optionIndex": 3,
+          "optionLabel": "Identificadas e totalmente abordadas",
+          "score": 1
+        },
+        {
+          "questionKey": "medidas-preventivas",
+          "criterion": "Recursos Disponiveis",
+          "prompt": "Quais medidas preventivas estao atualmente implementadas para mitigar esse risco?",
+          "optionIndex": 3,
+          "optionLabel": "Treinamentos regulares",
+          "score": 1
+        },
+        {
+          "questionKey": "frequencia-revisao-medidas",
+          "criterion": "Recursos Disponiveis",
+          "prompt": "Com que frequencia as medidas preventivas existentes sao revisadas ou atualizadas?",
+          "optionIndex": 3,
+          "optionLabel": "Semestralmente",
+          "score": 1
+        },
+        {
+          "questionKey": "nivel-conhecimento",
+          "criterion": "Recursos Disponiveis",
+          "prompt": "Qual e o nivel de conhecimento e treinamento dos gestores e colaboradores sobre as medidas de mitigacao disponiveis?",
+          "optionIndex": 2,
+          "optionLabel": "Conhecimento intermediario",
+          "score": 2
+        },
+        {
+          "questionKey": "recursos-dedicados",
+          "criterion": "Recursos Disponiveis",
+          "prompt": "Existem recursos dedicados para apoiar a implementacao e monitoramento das medidas de mitigacao?",
+          "optionIndex": 2,
+          "optionLabel": "Recursos adequados disponiveis",
+          "score": 2
+        }
+      ]
+    },
+    {
+      "factorKey": "inseguranca-ameacas",
+      "factorLabel": "Inseguranca e Ameacas",
+      "score": 1.7,
+      "probabilityClass": "media",
+      "questionScores": [
+        {
+          "questionKey": "frequencia-ocorrencia",
+          "criterion": "Frequencia",
+          "prompt": "Com que regularidade o risco psicossocial ocorre no ambiente de trabalho?",
+          "optionIndex": 2,
+          "optionLabel": "Ocasionalmente",
+          "score": 2
+        },
+        {
+          "questionKey": "duracao-episodios",
+          "criterion": "Frequencia",
+          "prompt": "Qual e a duracao tipica dos episodios desse risco?",
+          "optionIndex": 1,
+          "optionLabel": "Algumas horas",
+          "score": 2
+        },
+        {
+          "questionKey": "colaboradores-afetados",
+          "criterion": "Frequencia",
+          "prompt": "Quantos colaboradores sao afetados simultaneamente quando o risco ocorre?",
+          "optionIndex": 1,
+          "optionLabel": "1-2 colaboradores",
+          "score": 2
+        },
+        {
+          "questionKey": "historico-incidentes",
+          "criterion": "Historico do Risco no Setor",
+          "prompt": "Ha registros anteriores de incidentes relacionados a esse risco no setor?",
+          "optionIndex": 2,
+          "optionLabel": "Registros ocasionais",
+          "score": 2
+        },
+        {
+          "questionKey": "gravidade-incidentes",
+          "criterion": "Historico do Risco no Setor",
+          "prompt": "Qual foi a gravidade dos incidentes anteriores relacionados a esse risco?",
+          "optionIndex": 2,
+          "optionLabel": "Impacto moderado",
+          "score": 2
+        },
+        {
+          "questionKey": "causas-identificadas",
+          "criterion": "Historico do Risco no Setor",
+          "prompt": "As causas desses incidentes foram identificadas e abordadas de forma eficaz?",
+          "optionIndex": 3,
+          "optionLabel": "Identificadas e totalmente abordadas",
+          "score": 1
+        },
+        {
+          "questionKey": "medidas-preventivas",
+          "criterion": "Recursos Disponiveis",
+          "prompt": "Quais medidas preventivas estao atualmente implementadas para mitigar esse risco?",
+          "optionIndex": 3,
+          "optionLabel": "Treinamentos regulares",
+          "score": 1
+        },
+        {
+          "questionKey": "frequencia-revisao-medidas",
+          "criterion": "Recursos Disponiveis",
+          "prompt": "Com que frequencia as medidas preventivas existentes sao revisadas ou atualizadas?",
+          "optionIndex": 3,
+          "optionLabel": "Semestralmente",
+          "score": 1
+        },
+        {
+          "questionKey": "nivel-conhecimento",
+          "criterion": "Recursos Disponiveis",
+          "prompt": "Qual e o nivel de conhecimento e treinamento dos gestores e colaboradores sobre as medidas de mitigacao disponiveis?",
+          "optionIndex": 2,
+          "optionLabel": "Conhecimento intermediario",
+          "score": 2
+        },
+        {
+          "questionKey": "recursos-dedicados",
+          "criterion": "Recursos Disponiveis",
+          "prompt": "Existem recursos dedicados para apoiar a implementacao e monitoramento das medidas de mitigacao?",
+          "optionIndex": 2,
+          "optionLabel": "Recursos adequados disponiveis",
+          "score": 2
+        }
+      ]
+    },
+    {
+      "factorKey": "conflitos-comunicacao",
+      "factorLabel": "Conflitos Interpessoais e Falta de Comunicacao",
+      "score": 1.7,
+      "probabilityClass": "media",
+      "questionScores": [
+        {
+          "questionKey": "frequencia-ocorrencia",
+          "criterion": "Frequencia",
+          "prompt": "Com que regularidade o risco psicossocial ocorre no ambiente de trabalho?",
+          "optionIndex": 2,
+          "optionLabel": "Ocasionalmente",
+          "score": 2
+        },
+        {
+          "questionKey": "duracao-episodios",
+          "criterion": "Frequencia",
+          "prompt": "Qual e a duracao tipica dos episodios desse risco?",
+          "optionIndex": 1,
+          "optionLabel": "Algumas horas",
+          "score": 2
+        },
+        {
+          "questionKey": "colaboradores-afetados",
+          "criterion": "Frequencia",
+          "prompt": "Quantos colaboradores sao afetados simultaneamente quando o risco ocorre?",
+          "optionIndex": 1,
+          "optionLabel": "1-2 colaboradores",
+          "score": 2
+        },
+        {
+          "questionKey": "historico-incidentes",
+          "criterion": "Historico do Risco no Setor",
+          "prompt": "Ha registros anteriores de incidentes relacionados a esse risco no setor?",
+          "optionIndex": 2,
+          "optionLabel": "Registros ocasionais",
+          "score": 2
+        },
+        {
+          "questionKey": "gravidade-incidentes",
+          "criterion": "Historico do Risco no Setor",
+          "prompt": "Qual foi a gravidade dos incidentes anteriores relacionados a esse risco?",
+          "optionIndex": 2,
+          "optionLabel": "Impacto moderado",
+          "score": 2
+        },
+        {
+          "questionKey": "causas-identificadas",
+          "criterion": "Historico do Risco no Setor",
+          "prompt": "As causas desses incidentes foram identificadas e abordadas de forma eficaz?",
+          "optionIndex": 3,
+          "optionLabel": "Identificadas e totalmente abordadas",
+          "score": 1
+        },
+        {
+          "questionKey": "medidas-preventivas",
+          "criterion": "Recursos Disponiveis",
+          "prompt": "Quais medidas preventivas estao atualmente implementadas para mitigar esse risco?",
+          "optionIndex": 3,
+          "optionLabel": "Treinamentos regulares",
+          "score": 1
+        },
+        {
+          "questionKey": "frequencia-revisao-medidas",
+          "criterion": "Recursos Disponiveis",
+          "prompt": "Com que frequencia as medidas preventivas existentes sao revisadas ou atualizadas?",
+          "optionIndex": 3,
+          "optionLabel": "Semestralmente",
+          "score": 1
+        },
+        {
+          "questionKey": "nivel-conhecimento",
+          "criterion": "Recursos Disponiveis",
+          "prompt": "Qual e o nivel de conhecimento e treinamento dos gestores e colaboradores sobre as medidas de mitigacao disponiveis?",
+          "optionIndex": 2,
+          "optionLabel": "Conhecimento intermediario",
+          "score": 2
+        },
+        {
+          "questionKey": "recursos-dedicados",
+          "criterion": "Recursos Disponiveis",
+          "prompt": "Existem recursos dedicados para apoiar a implementacao e monitoramento das medidas de mitigacao?",
+          "optionIndex": 2,
+          "optionLabel": "Recursos adequados disponiveis",
+          "score": 2
+        }
+      ]
+    },
+    {
+      "factorKey": "vida-pessoal-profissional",
+      "factorLabel": "Alinhamento entre Vida Pessoal e Profissional",
+      "score": 1.7,
+      "probabilityClass": "media",
+      "questionScores": [
+        {
+          "questionKey": "frequencia-ocorrencia",
+          "criterion": "Frequencia",
+          "prompt": "Com que regularidade o risco psicossocial ocorre no ambiente de trabalho?",
+          "optionIndex": 2,
+          "optionLabel": "Ocasionalmente",
+          "score": 2
+        },
+        {
+          "questionKey": "duracao-episodios",
+          "criterion": "Frequencia",
+          "prompt": "Qual e a duracao tipica dos episodios desse risco?",
+          "optionIndex": 1,
+          "optionLabel": "Algumas horas",
+          "score": 2
+        },
+        {
+          "questionKey": "colaboradores-afetados",
+          "criterion": "Frequencia",
+          "prompt": "Quantos colaboradores sao afetados simultaneamente quando o risco ocorre?",
+          "optionIndex": 1,
+          "optionLabel": "1-2 colaboradores",
+          "score": 2
+        },
+        {
+          "questionKey": "historico-incidentes",
+          "criterion": "Historico do Risco no Setor",
+          "prompt": "Ha registros anteriores de incidentes relacionados a esse risco no setor?",
+          "optionIndex": 2,
+          "optionLabel": "Registros ocasionais",
+          "score": 2
+        },
+        {
+          "questionKey": "gravidade-incidentes",
+          "criterion": "Historico do Risco no Setor",
+          "prompt": "Qual foi a gravidade dos incidentes anteriores relacionados a esse risco?",
+          "optionIndex": 2,
+          "optionLabel": "Impacto moderado",
+          "score": 2
+        },
+        {
+          "questionKey": "causas-identificadas",
+          "criterion": "Historico do Risco no Setor",
+          "prompt": "As causas desses incidentes foram identificadas e abordadas de forma eficaz?",
+          "optionIndex": 3,
+          "optionLabel": "Identificadas e totalmente abordadas",
+          "score": 1
+        },
+        {
+          "questionKey": "medidas-preventivas",
+          "criterion": "Recursos Disponiveis",
+          "prompt": "Quais medidas preventivas estao atualmente implementadas para mitigar esse risco?",
+          "optionIndex": 3,
+          "optionLabel": "Treinamentos regulares",
+          "score": 1
+        },
+        {
+          "questionKey": "frequencia-revisao-medidas",
+          "criterion": "Recursos Disponiveis",
+          "prompt": "Com que frequencia as medidas preventivas existentes sao revisadas ou atualizadas?",
+          "optionIndex": 3,
+          "optionLabel": "Semestralmente",
+          "score": 1
+        },
+        {
+          "questionKey": "nivel-conhecimento",
+          "criterion": "Recursos Disponiveis",
+          "prompt": "Qual e o nivel de conhecimento e treinamento dos gestores e colaboradores sobre as medidas de mitigacao disponiveis?",
+          "optionIndex": 2,
+          "optionLabel": "Conhecimento intermediario",
+          "score": 2
+        },
+        {
+          "questionKey": "recursos-dedicados",
+          "criterion": "Recursos Disponiveis",
+          "prompt": "Existem recursos dedicados para apoiar a implementacao e monitoramento das medidas de mitigacao?",
+          "optionIndex": 2,
+          "optionLabel": "Recursos adequados disponiveis",
+          "score": 2
+        }
+      ]
+    }
+  ],
+  "summary_counts": {
+    "baixa": 0,
+    "media": 9,
+    "alta": 0
+  },
+  "overall_score": 1.7,
+  "overall_class": "media",
+  "created_by_role": "client",
+  "created_by_email": "crivellaris@gmail.com"
+}

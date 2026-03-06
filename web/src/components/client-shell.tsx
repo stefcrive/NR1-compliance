@@ -8,7 +8,11 @@ type IconProps = { className?: string };
 type ClientNotification = {
   id: string;
   clientId: string;
-  notificationType: "manager_drps_assigned" | "manager_program_assigned" | "manager_report_issued";
+  notificationType:
+    | "manager_drps_assigned"
+    | "manager_program_assigned"
+    | "manager_report_issued"
+    | "company_risk_profile_reminder";
   title: string;
   message: string;
   isRead: boolean;

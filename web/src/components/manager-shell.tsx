@@ -9,7 +9,10 @@ type IconProps = { className?: string };
 type ManagerNotification = {
   id: string;
   clientId: string | null;
-  notificationType: "client_reschedule_submitted" | "client_report_downloaded";
+  notificationType:
+    | "client_reschedule_submitted"
+    | "client_report_downloaded"
+    | "client_company_risk_profile_completed";
   title: string;
   message: string;
   isRead: boolean;

@@ -1447,20 +1447,28 @@ export function ManagerClientFicha({
         <section className="rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h3 className="text-lg font-semibold text-[#123447]">Company data</h3>
-            {!isEditingCompanyProfile ? (
-              <button
-                type="button"
-                onClick={() => {
-                  setCompanyForm(buildClientProfileForm(client));
-                  setSectorForms(client.sectors.map(buildSectorProfileForm));
-                  setIsEditingCompanyProfile(true);
-                }}
-                className="inline-flex items-center gap-2 rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
+            <div className="flex flex-wrap items-center gap-2">
+              <Link
+                href={`/manager/clients/${client.id}/company-risk-profile`}
+                className="inline-flex items-center gap-2 rounded-full border border-[#b7dca3] px-3 py-1 text-xs font-semibold text-[#2d5f23]"
               >
-                <EditIcon />
-                Edit
-              </button>
-            ) : null}
+                Company risk profile results
+              </Link>
+              {!isEditingCompanyProfile ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCompanyForm(buildClientProfileForm(client));
+                    setSectorForms(client.sectors.map(buildSectorProfileForm));
+                    setIsEditingCompanyProfile(true);
+                  }}
+                  className="inline-flex items-center gap-2 rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
+                >
+                  <EditIcon />
+                  Edit
+                </button>
+              ) : null}
+            </div>
           </div>
           {isEditingCompanyProfile ? (
             <>
