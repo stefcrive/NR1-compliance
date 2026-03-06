@@ -110,8 +110,19 @@ type Snapshot = {
   materials: ContinuousProgramMaterial[];
 };
 
+type ChronogramView = "list" | "calendar";
+type ChronogramCalendarScope = "current" | "all";
+type ChronogramCalendarEvent = AssignmentCalendarEvent & {
+  programTitle: string;
+  assignmentId: string;
+  isCurrentProgram: boolean;
+};
+type ChronogramStatusOption = "Provisorio" | "Marcado" | "Cancelado" | "Executado";
+
 const STATUS_OPTIONS: AssignmentStatus[] = ["Recommended", "Active", "Completed"];
 const annualPlanMonthRegex = /^\d{4}-(0[1-9]|1[0-2])$/;
+const CHRONOGRAM_WEEK_DAYS = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sab"] as const;
+const CHRONOGRAM_MAX_EVENTS_PER_DAY = 5;
 
 function toMonthKey(value: Date): string {
   const year = value.getUTCFullYear();
@@ -149,6 +160,10 @@ function fromDatetimeLocal(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "";
   return date.toISOString();
+}
+
+function dayKey(value: Date) {
+  return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
 }
 
 function formatFileSize(sizeBytes: number) {
@@ -205,22 +220,18 @@ function splitTimelineSlots(events: AssignmentCalendarEvent[]) {
   return { committed: normalizeSlots(committed), provisory: normalizeSlots(provisory) };
 }
 
-function eventProgressLabel(event: AssignmentCalendarEvent): {
-  label: string;
-  className: string;
-} {
-  if (event.status === "completed") {
-    return { label: "Completed", className: "border-[#bde4c9] bg-[#e8f8ee] text-[#1f6b3d]" };
-  }
-  if (event.status === "cancelled") {
-    return { label: "Cancelled", className: "border-[#e2d2d2] bg-[#f8eded] text-[#8a2d2d]" };
-  }
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  if (new Date(event.startsAt).getTime() < today.getTime()) {
-    return { label: "Skipped", className: "border-[#e5d8bd] bg-[#f9f1df] text-[#7a4d00]" };
-  }
-  return { label: "Scheduled", className: "border-[#c8dce8] bg-[#edf5fa] text-[#2c546a]" };
+function chronogramStatusOptionFromEvent(event: AssignmentCalendarEvent): ChronogramStatusOption {
+  if (event.status === "cancelled") return "Cancelado";
+  if (event.status === "completed") return "Executado";
+  if (event.lifecycle === "committed") return "Marcado";
+  return "Provisorio";
+}
+
+function chronogramRowClassName(event: AssignmentCalendarEvent): string {
+  if (event.status === "cancelled") return "bg-[#fff3f3]";
+  if (event.status === "completed") return "bg-[#ecf9f0]";
+  if (event.lifecycle === "committed") return "bg-[#ebf6fd]";
+  return "bg-white";
 }
 
 function durationMinutesFromRange(startsAt: string, endsAt: string, fallback = 60) {
@@ -251,13 +262,16 @@ export function ManagerAssignedContinuousProgram({
   clientId,
   assignmentId,
   fromHistory = false,
+  fromHome = false,
 }: {
   clientId: string;
   assignmentId: string;
   fromHistory?: boolean;
+  fromHome?: boolean;
 }) {
   const [clientName, setClientName] = useState("");
   const [assignment, setAssignment] = useState<AssignedContinuousProgram | null>(null);
+  const [allAssignedPrograms, setAllAssignedPrograms] = useState<AssignedContinuousProgram[]>([]);
   const [template, setTemplate] = useState<ContinuousProgramTemplate | null>(null);
   const [status, setStatus] = useState<AssignmentStatus>("Active");
   const [deployedAt, setDeployedAt] = useState("");
@@ -275,12 +289,22 @@ export function ManagerAssignedContinuousProgram({
   const [isUploading, setIsUploading] = useState(false);
   const [updatingLifecycleEventId, setUpdatingLifecycleEventId] = useState<string | null>(null);
   const [updatingTimingEventId, setUpdatingTimingEventId] = useState<string | null>(null);
+  const [updatingStatusEventId, setUpdatingStatusEventId] = useState<string | null>(null);
   const [eventTimingDraftById, setEventTimingDraftById] = useState<
     Record<string, { startsAt: string; durationMinutes: string }>
   >({});
   const [removingMaterialId, setRemovingMaterialId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [chronogramView, setChronogramView] = useState<ChronogramView>("list");
+  const [chronogramCalendarScope, setChronogramCalendarScope] =
+    useState<ChronogramCalendarScope>("current");
+  const [hidePastChronogramEvents, setHidePastChronogramEvents] = useState(false);
+  const [openChronogramActionsFor, setOpenChronogramActionsFor] = useState<string | null>(null);
+  const [chronogramMonth, setChronogramMonth] = useState(() => {
+    const now = new Date();
+    return new Date(now.getFullYear(), now.getMonth(), 1);
+  });
 
   const timelineEvents = useMemo(
     () => normalizeTimelineEvents(assignment?.calendarTimelineEvents ?? []),
@@ -299,6 +323,92 @@ export function ManagerAssignedContinuousProgram({
       return allowedMonths.has(toMonthKey(start));
     });
   }, [annualPlanMonths, timelineEvents]);
+  const currentProgramCalendarEvents = useMemo<ChronogramCalendarEvent[]>(
+    () =>
+      chronogramEvents.map((event) => ({
+        ...event,
+        programTitle: assignment?.programTitle ?? "Programa atual",
+        assignmentId: assignment?.id ?? assignmentId,
+        isCurrentProgram: true,
+      })),
+    [assignment?.id, assignment?.programTitle, assignmentId, chronogramEvents],
+  );
+  const allProgramsCalendarEvents = useMemo<ChronogramCalendarEvent[]>(() => {
+    const collected: ChronogramCalendarEvent[] = [];
+    for (const item of allAssignedPrograms) {
+      const normalized = normalizeTimelineEvents(item.calendarTimelineEvents ?? []);
+      for (const event of normalized) {
+        collected.push({
+          ...event,
+          programTitle: item.programTitle,
+          assignmentId: item.id,
+          isCurrentProgram: item.id === assignmentId,
+        });
+      }
+    }
+    return collected.sort((left, right) => new Date(left.startsAt).getTime() - new Date(right.startsAt).getTime());
+  }, [allAssignedPrograms, assignmentId]);
+  const visibleCalendarEvents = useMemo(
+    () => (chronogramCalendarScope === "all" ? allProgramsCalendarEvents : currentProgramCalendarEvents),
+    [allProgramsCalendarEvents, chronogramCalendarScope, currentProgramCalendarEvents],
+  );
+  const chronogramListEvents = useMemo(() => {
+    if (!hidePastChronogramEvents) return chronogramEvents;
+    const now = Date.now();
+    return chronogramEvents.filter((event) => {
+      const endsAt = new Date(event.endsAt).getTime();
+      if (Number.isNaN(endsAt)) return true;
+      return endsAt >= now;
+    });
+  }, [chronogramEvents, hidePastChronogramEvents]);
+  const chronogramDisplayedCount =
+    chronogramView === "calendar" ? visibleCalendarEvents.length : chronogramListEvents.length;
+  const calendarEventsByDay = useMemo(() => {
+    const map = new Map<string, ChronogramCalendarEvent[]>();
+    for (const event of visibleCalendarEvents) {
+      const startsAt = new Date(event.startsAt);
+      if (Number.isNaN(startsAt.getTime())) continue;
+      const key = dayKey(startsAt);
+      map.set(key, [...(map.get(key) ?? []), event]);
+    }
+    return map;
+  }, [visibleCalendarEvents]);
+  const calendarDays = useMemo(() => {
+    const start = new Date(chronogramMonth.getFullYear(), chronogramMonth.getMonth(), 1);
+    const gridStart = new Date(start);
+    gridStart.setDate(1 - start.getDay());
+    return Array.from({ length: 42 }, (_, index) => {
+      const value = new Date(gridStart);
+      value.setDate(gridStart.getDate() + index);
+      const key = dayKey(value);
+      return {
+        key,
+        value,
+        inMonth: value.getMonth() === chronogramMonth.getMonth(),
+        events: calendarEventsByDay.get(key) ?? [],
+      };
+    });
+  }, [calendarEventsByDay, chronogramMonth]);
+
+  useEffect(() => {
+    if (chronogramView !== "calendar") return;
+    const firstEvent = visibleCalendarEvents[0];
+    if (!firstEvent) return;
+    const start = new Date(firstEvent.startsAt);
+    if (Number.isNaN(start.getTime())) return;
+    setChronogramMonth((previous) => {
+      if (previous.getFullYear() === start.getFullYear() && previous.getMonth() === start.getMonth()) {
+        return previous;
+      }
+      return new Date(start.getFullYear(), start.getMonth(), 1);
+    });
+  }, [chronogramView, visibleCalendarEvents]);
+
+  useEffect(() => {
+    if (!openChronogramActionsFor) return;
+    if (chronogramListEvents.some((event) => event.id === openChronogramActionsFor)) return;
+    setOpenChronogramActionsFor(null);
+  }, [chronogramListEvents, openChronogramActionsFor]);
 
   useEffect(() => {
     setEventTimingDraftById(() => {
@@ -312,6 +422,24 @@ export function ManagerAssignedContinuousProgram({
       return next;
     });
   }, [timelineEvents]);
+
+  useEffect(() => {
+    if (!assignment) return;
+    setAllAssignedPrograms((previous) =>
+      previous.map((item) =>
+        item.id === assignment.id
+          ? {
+              ...item,
+              annualPlanMonths: assignment.annualPlanMonths,
+              calendarTimelineEvents: assignment.calendarTimelineEvents,
+              calendarProvisorySlots: assignment.calendarProvisorySlots,
+              calendarCommittedSlots: assignment.calendarCommittedSlots,
+              scheduleFrequency: assignment.scheduleFrequency,
+            }
+          : item,
+      ),
+    );
+  }, [assignment]);
 
   const changeState = useMemo(() => {
     if (!baseline) return { assignmentChanged: false, templateChanged: false, hasChanges: false };
@@ -427,11 +555,13 @@ export function ManagerAssignedContinuousProgram({
       }
 
       setClientName(clientPayload.client.companyName);
+      setAllAssignedPrograms(programsPayload.assignedPrograms);
       applyLoadedData(foundAssignment, templatePayload.program);
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "Erro ao carregar detalhes.");
       setClientName("");
       setAssignment(null);
+      setAllAssignedPrograms([]);
       setTemplate(null);
       setBaseline(null);
     } finally {
@@ -734,6 +864,105 @@ export function ManagerAssignedContinuousProgram({
     }
   }
 
+  async function updateEventStatusOption(
+    event: AssignmentCalendarEvent,
+    nextStatusOption: ChronogramStatusOption,
+  ) {
+    if (!assignment) return;
+    const payload: {
+      eventId: string;
+      status?: "scheduled" | "completed" | "cancelled";
+      eventLifecycle?: "provisory" | "committed";
+    } = {
+      eventId: event.id,
+    };
+
+    if (nextStatusOption === "Provisorio") {
+      payload.status = "scheduled";
+      payload.eventLifecycle = "provisory";
+    } else if (nextStatusOption === "Marcado") {
+      payload.status = "scheduled";
+      payload.eventLifecycle = "committed";
+    } else if (nextStatusOption === "Cancelado") {
+      payload.status = "cancelled";
+    } else {
+      payload.status = "completed";
+      payload.eventLifecycle = "committed";
+    }
+
+    setUpdatingStatusEventId(event.id);
+    setError("");
+    setNotice("");
+    try {
+      const response = await fetch("/api/admin/calendar", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const result = (await response.json().catch(() => ({}))) as {
+        error?: string;
+        event?: {
+          id: string;
+          startsAt: string;
+          endsAt: string;
+          status: "scheduled" | "completed" | "cancelled";
+          details: {
+            eventLifecycle: "provisory" | "committed";
+            proposalKind: "assignment" | "reschedule" | null;
+          };
+        };
+      };
+      if (!response.ok || !result.event) {
+        throw new Error(result.error ?? "Nao foi possivel atualizar status do evento.");
+      }
+      const updatedEvent = result.event;
+      const updatedTimeline = normalizeTimelineEvents(
+        (assignment.calendarTimelineEvents ?? []).map((item) =>
+          item.id === updatedEvent.id
+            ? {
+                ...item,
+                startsAt: updatedEvent.startsAt,
+                endsAt: updatedEvent.endsAt,
+                status: updatedEvent.status,
+                lifecycle: updatedEvent.details.eventLifecycle,
+                proposalKind: updatedEvent.details.proposalKind,
+              }
+            : item,
+        ),
+      );
+      const slots = splitTimelineSlots(updatedTimeline);
+      setAssignment((previous) =>
+        previous
+          ? {
+              ...previous,
+              calendarTimelineEvents: updatedTimeline,
+              calendarCommittedSlots: slots.committed,
+              calendarProvisorySlots: slots.provisory,
+            }
+          : previous,
+      );
+      setProvisorySlots(slots.provisory);
+      setEventTimingDraftById((previous) => ({
+        ...previous,
+        [updatedEvent.id]: {
+          startsAt: toDatetimeLocal(updatedEvent.startsAt),
+          durationMinutes: String(
+            durationMinutesFromRange(updatedEvent.startsAt, updatedEvent.endsAt, 60),
+          ),
+        },
+      }));
+      setNotice("Status do evento atualizado.");
+    } catch (updateError) {
+      setError(
+        updateError instanceof Error
+          ? updateError.message
+          : "Nao foi possivel atualizar status do evento.",
+      );
+    } finally {
+      setUpdatingStatusEventId(null);
+    }
+  }
+
   async function updateEventTiming(event: AssignmentCalendarEvent) {
     if (!assignment) return;
     const draft = eventTimingDraftById[event.id];
@@ -831,11 +1060,27 @@ export function ManagerAssignedContinuousProgram({
   if (!assignment || !template) {
     return <p className="text-sm text-red-600">{error || "Processo continuo nao encontrado."}</p>;
   }
+  const eventRecordFrom = fromHistory ? "history" : fromHome ? "home" : "client-area";
 
   return (
     <div className="space-y-6">
       <nav className="text-xs text-[#4f6977]">
-        {fromHistory ? (
+        {fromHome ? (
+          <>
+            <Link href="/manager" className="text-[#0f5b73]">
+              Home
+            </Link>{" "}
+            /{" "}
+            <Link href={`/manager/clients/${clientId}`} className="text-[#0f5b73]">
+              {clientName || "Cliente"}
+            </Link>{" "}
+            /{" "}
+            <Link href={`/manager/clients/${clientId}?tab=assigned-continuous`} className="text-[#0f5b73]">
+              Assigned processo continuos
+            </Link>{" "}
+            / <span>{assignment.programTitle}</span>
+          </>
+        ) : fromHistory ? (
           <>
             <Link href="/manager/history" className="text-[#0f5b73]">
               Historico
@@ -924,135 +1169,310 @@ export function ManagerAssignedContinuousProgram({
       </section>
 
       <section className="space-y-3 rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
-        <div className="flex items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <h3 className="text-lg font-semibold text-[#123447]">
-            Chronograma ({chronogramEvents.length} eventos)
+            Chronograma ({chronogramDisplayedCount} eventos)
           </h3>
-        </div>
-        {chronogramEvents.length === 0 ? (
-          <p className="text-xs text-[#5a7383]">Sem eventos no cronograma para este programa.</p>
-        ) : (
-          <div className="overflow-x-auto rounded-xl border border-[#d8e4ee]">
-            <table className="nr-table min-w-full text-xs">
-              <thead className="bg-[#f3f8fb]">
-                <tr className="border-b border-[#d8e4ee]">
-                  <th className="px-3 py-2 text-left font-semibold text-[#244354]">Data/hora</th>
-                  <th className="px-3 py-2 text-left font-semibold text-[#244354]">Duracao</th>
-                  <th className="px-3 py-2 text-left font-semibold text-[#244354]">Ciclo</th>
-                  <th className="px-3 py-2 text-left font-semibold text-[#244354]">Status</th>
-                  <th className="px-3 py-2 text-left font-semibold text-[#244354]">Acoes</th>
-                </tr>
-              </thead>
-              <tbody>
-                {chronogramEvents.map((event) => {
-                  const progress = eventProgressLabel(event);
-                  const isCommitted = event.lifecycle === "committed";
-                  const timingDraft = eventTimingDraftById[event.id] ?? {
-                    startsAt: toDatetimeLocal(event.startsAt),
-                    durationMinutes: String(durationMinutesFromRange(event.startsAt, event.endsAt, 60)),
-                  };
-                  return (
-                    <tr
-                      key={event.id}
-                      className={`border-b border-[#e2edf3] ${
-                        isCommitted ? "bg-[#ebf6fd]" : "bg-white"
-                      }`}
-                    >
-                      <td className="px-3 py-2 text-[#123447]">
-                        <input
-                          type="datetime-local"
-                          value={timingDraft.startsAt}
-                          onChange={(inputEvent) =>
-                            setEventTimingDraftById((previous) => ({
-                              ...previous,
-                              [event.id]: {
-                                ...timingDraft,
-                                startsAt: inputEvent.target.value,
-                              },
-                            }))
-                          }
-                          disabled={event.status === "cancelled"}
-                          className="w-full rounded border border-[#c9dce8] bg-white px-2 py-1 text-xs disabled:opacity-50"
-                        />
-                      </td>
-                      <td className="px-3 py-2 text-[#123447]">
-                        <input
-                          type="number"
-                          min={15}
-                          max={24 * 60}
-                          step={5}
-                          value={timingDraft.durationMinutes}
-                          onChange={(inputEvent) =>
-                            setEventTimingDraftById((previous) => ({
-                              ...previous,
-                              [event.id]: {
-                                ...timingDraft,
-                                durationMinutes: inputEvent.target.value,
-                              },
-                            }))
-                          }
-                          disabled={event.status === "cancelled"}
-                          className="w-24 rounded border border-[#c9dce8] bg-white px-2 py-1 text-xs disabled:opacity-50"
-                        />
-                      </td>
-                      <td className="px-3 py-2">
-                        <span
-                          className={`inline-flex rounded-full border px-2 py-0.5 font-semibold ${
-                            isCommitted
-                              ? "border-[#9ec8db] bg-[#e4f2fb] text-[#0f5b73]"
-                              : "border-[#d8dbe0] bg-[#f4f5f7] text-[#3c4e59]"
-                          }`}
-                        >
-                          {isCommitted ? "Committed" : "Provisory"}
-                        </span>
-                      </td>
-                      <td className="px-3 py-2">
-                        <span
-                          className={`inline-flex rounded-full border px-2 py-0.5 font-semibold ${progress.className}`}
-                        >
-                          {progress.label}
-                        </span>
-                      </td>
-                      <td className="px-3 py-2">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() => void updateEventTiming(event)}
-                            disabled={event.status === "cancelled" || updatingTimingEventId === event.id}
-                            className="inline-flex items-center justify-center rounded-full border border-[#c9dce8] px-3 py-1 font-semibold text-[#123447] disabled:opacity-50"
-                          >
-                            {updatingTimingEventId === event.id ? "Atualizando..." : "Update"}
-                          </button>
-                          <Link
-                            href={`/manager/history/events/${event.id}?from=${fromHistory ? "history" : "client-area"}`}
-                            className="inline-flex items-center justify-center rounded-full border border-[#9ec8db] px-3 py-1 font-semibold text-[#0f5b73]"
-                          >
-                            Event record
-                          </Link>
-                          <button
-                            type="button"
-                            onClick={() => void toggleEventLifecycle(event)}
-                            disabled={
-                              event.status === "cancelled" ||
-                              updatingLifecycleEventId === event.id ||
-                              updatingTimingEventId === event.id
-                            }
-                            className="inline-flex items-center justify-center rounded-full border border-[#c9dce8] px-3 py-1 font-semibold text-[#123447] disabled:opacity-50"
-                          >
-                            {updatingLifecycleEventId === event.id
-                              ? "Atualizando..."
-                              : isCommitted
-                                ? "Set provisory"
-                                : "Commit"}
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="rounded-full border border-[#c9dce8] bg-white p-1">
+              <button
+                type="button"
+                onClick={() => setChronogramView("list")}
+                className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                  chronogramView === "list"
+                    ? "bg-[#0f5b73] text-white"
+                    : "text-[#123447] hover:bg-[#f3f8fb]"
+                }`}
+              >
+                Lista
+              </button>
+              <button
+                type="button"
+                onClick={() => setChronogramView("calendar")}
+                className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                  chronogramView === "calendar"
+                    ? "bg-[#0f5b73] text-white"
+                    : "text-[#123447] hover:bg-[#f3f8fb]"
+                }`}
+              >
+                Calendario
+              </button>
+            </div>
+            {chronogramView === "calendar" ? (
+              <div className="rounded-full border border-[#c9dce8] bg-white p-1">
+                <button
+                  type="button"
+                  onClick={() => setChronogramCalendarScope("current")}
+                  className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                    chronogramCalendarScope === "current"
+                      ? "bg-[#0f5b73] text-white"
+                      : "text-[#123447] hover:bg-[#f3f8fb]"
+                  }`}
+                >
+                  Programa atual
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setChronogramCalendarScope("all")}
+                  className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                    chronogramCalendarScope === "all"
+                      ? "bg-[#0f5b73] text-white"
+                      : "text-[#123447] hover:bg-[#f3f8fb]"
+                  }`}
+                >
+                  Todos os programas
+                </button>
+              </div>
+            ) : null}
           </div>
+        </div>
+        {chronogramView === "list" ? (
+          <>
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={() => setHidePastChronogramEvents((previous) => !previous)}
+                className="rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
+              >
+                {hidePastChronogramEvents ? "Mostrar eventos passados" : "Esconder eventos passados"}
+              </button>
+            </div>
+            {chronogramListEvents.length === 0 ? (
+              <p className="text-xs text-[#5a7383]">Sem eventos no cronograma para este programa.</p>
+            ) : (
+              <div className="overflow-x-auto rounded-xl border border-[#d8e4ee]">
+                <table className="nr-table min-w-full text-xs">
+                  <thead className="bg-[#f3f8fb]">
+                    <tr className="border-b border-[#d8e4ee]">
+                      <th className="px-3 py-2 text-left font-semibold text-[#244354]">Data/hora</th>
+                      <th className="px-3 py-2 text-left font-semibold text-[#244354]">Duracao</th>
+                      <th className="px-3 py-2 text-left font-semibold text-[#244354]">Status</th>
+                      <th className="px-3 py-2 text-left font-semibold text-[#244354]">Acoes</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {chronogramListEvents.map((event) => {
+                      const timingDraft = eventTimingDraftById[event.id] ?? {
+                        startsAt: toDatetimeLocal(event.startsAt),
+                        durationMinutes: String(durationMinutesFromRange(event.startsAt, event.endsAt, 60)),
+                      };
+                      const statusOption = chronogramStatusOptionFromEvent(event);
+                      const isUpdatingStatus = updatingStatusEventId === event.id;
+                      const isUpdatingTiming = updatingTimingEventId === event.id;
+                      const isUpdatingLifecycle = updatingLifecycleEventId === event.id;
+                      const anyUpdatePending = isUpdatingStatus || isUpdatingTiming || isUpdatingLifecycle;
+                      return (
+                        <tr key={event.id} className={`border-b border-[#e2edf3] ${chronogramRowClassName(event)}`}>
+                          <td className="px-3 py-2 text-[#123447]">
+                            <input
+                              type="datetime-local"
+                              value={timingDraft.startsAt}
+                              onChange={(inputEvent) =>
+                                setEventTimingDraftById((previous) => ({
+                                  ...previous,
+                                  [event.id]: {
+                                    ...timingDraft,
+                                    startsAt: inputEvent.target.value,
+                                  },
+                                }))
+                              }
+                              disabled={event.status === "cancelled" || isUpdatingStatus}
+                              className="w-full rounded border border-[#c9dce8] bg-white px-2 py-1 text-xs disabled:opacity-50"
+                            />
+                          </td>
+                          <td className="px-3 py-2 text-[#123447]">
+                            <input
+                              type="number"
+                              min={15}
+                              max={24 * 60}
+                              step={5}
+                              value={timingDraft.durationMinutes}
+                              onChange={(inputEvent) =>
+                                setEventTimingDraftById((previous) => ({
+                                  ...previous,
+                                  [event.id]: {
+                                    ...timingDraft,
+                                    durationMinutes: inputEvent.target.value,
+                                  },
+                                }))
+                              }
+                              disabled={event.status === "cancelled" || isUpdatingStatus}
+                              className="w-24 rounded border border-[#c9dce8] bg-white px-2 py-1 text-xs disabled:opacity-50"
+                            />
+                          </td>
+                          <td className="px-3 py-2">
+                            <select
+                              value={statusOption}
+                              onChange={(changeEvent) =>
+                                void updateEventStatusOption(
+                                  event,
+                                  changeEvent.target.value as ChronogramStatusOption,
+                                )
+                              }
+                              disabled={anyUpdatePending}
+                              className="rounded border border-[#c9dce8] bg-white px-2 py-1 text-xs disabled:opacity-50"
+                            >
+                              <option value="Provisorio">Provisorio</option>
+                              <option value="Marcado">Marcado</option>
+                              <option value="Cancelado">Cancelado</option>
+                              <option value="Executado">Executado</option>
+                            </select>
+                          </td>
+                          <td className="px-3 py-2">
+                            <div className="relative inline-flex">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setOpenChronogramActionsFor((previous) =>
+                                    previous === event.id ? null : event.id,
+                                  )
+                                }
+                                className="rounded-full border border-[#c9dce8] px-3 py-1 text-xs font-semibold text-[#123447]"
+                              >
+                                ...
+                              </button>
+                              {openChronogramActionsFor === event.id ? (
+                                <div className="absolute right-0 top-full z-20 mt-2 w-52 overflow-hidden rounded-xl border border-[#d8e4ee] bg-white shadow-lg">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setOpenChronogramActionsFor(null);
+                                      void updateEventTiming(event);
+                                    }}
+                                    disabled={event.status === "cancelled" || anyUpdatePending}
+                                    className="block w-full px-3 py-2 text-left text-xs font-semibold text-[#123447] hover:bg-[#f4f9fc] disabled:opacity-50"
+                                  >
+                                    {isUpdatingTiming ? "Atualizando..." : "Atualizar horario"}
+                                  </button>
+                                  <Link
+                                    href={`/manager/history/events/${event.id}?from=${eventRecordFrom}`}
+                                    onClick={() => setOpenChronogramActionsFor(null)}
+                                    className="block w-full px-3 py-2 text-left text-xs font-semibold text-[#0f5b73] hover:bg-[#f4f9fc]"
+                                  >
+                                    Event record
+                                  </Link>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setOpenChronogramActionsFor(null);
+                                      void toggleEventLifecycle(event);
+                                    }}
+                                    disabled={event.status === "cancelled" || anyUpdatePending}
+                                    className="block w-full px-3 py-2 text-left text-xs font-semibold text-[#123447] hover:bg-[#f4f9fc] disabled:opacity-50"
+                                  >
+                                    {isUpdatingLifecycle
+                                      ? "Atualizando..."
+                                      : event.lifecycle === "committed"
+                                        ? "Set provisory"
+                                        : "Commit"}
+                                  </button>
+                                </div>
+                              ) : null}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </>
+        ) : visibleCalendarEvents.length === 0 ? (
+          <p className="text-xs text-[#5a7383]">
+            Sem eventos no calendario para o filtro selecionado.
+          </p>
+        ) : (
+          <>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-sm text-[#3d5a69]">
+                {new Intl.DateTimeFormat("pt-BR", { month: "long", year: "numeric" }).format(
+                  chronogramMonth,
+                )}
+              </p>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setChronogramMonth((previous) => new Date(previous.getFullYear(), previous.getMonth() - 1, 1))
+                  }
+                  className="rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
+                >
+                  Mes anterior
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setChronogramMonth((previous) => new Date(previous.getFullYear(), previous.getMonth() + 1, 1))
+                  }
+                  className="rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
+                >
+                  Proximo mes
+                </button>
+              </div>
+            </div>
+            <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-[#4f6977]">
+              <span className="font-semibold">Legenda:</span>
+              <span className="rounded-full bg-[#edf7fb] px-2 py-0.5 text-[#1f5f79]">Provisorio</span>
+              <span className="rounded-full bg-[#2f6f8d] px-2 py-0.5 text-white">Commitado</span>
+              <span className="rounded-full bg-[#f5f7f9] px-2 py-0.5 text-[#3f5462]">Outro programa</span>
+            </div>
+            <div className="mt-3 grid grid-cols-7 gap-2">
+              {CHRONOGRAM_WEEK_DAYS.map((label) => (
+                <p key={label} className="text-center text-xs font-semibold text-[#5e7d8d]">
+                  {label}
+                </p>
+              ))}
+              {calendarDays.map((day) => (
+                <div
+                  key={day.key}
+                  className={`min-h-[145px] rounded-xl border p-2 ${
+                    day.inMonth ? "border-[#d7e6ee] bg-white" : "border-[#edf3f7] bg-[#f8fbfd]"
+                  }`}
+                >
+                  <p className={`text-xs font-semibold ${day.inMonth ? "text-[#163748]" : "text-[#86a0ac]"}`}>
+                    {day.value.getDate()}
+                  </p>
+                  <div className="mt-2 space-y-1.5">
+                    {day.events.slice(0, CHRONOGRAM_MAX_EVENTS_PER_DAY).map((event) => {
+                      const isCommitted = event.lifecycle === "committed";
+                      const baseClass = event.isCurrentProgram
+                        ? isCommitted
+                          ? "border-[#2f6f8d] bg-[#2f6f8d] text-white"
+                          : "border-[#b8d8e6] bg-[#edf7fb] text-[#1f5f79]"
+                        : "border-[#d2dbe1] bg-[#f5f7f9] text-[#3f5462]";
+                      return (
+                        <Link
+                          key={event.id}
+                          href={`/manager/history/events/${event.id}?from=${eventRecordFrom}`}
+                          className={`block rounded-md border px-1.5 py-1 ${baseClass}`}
+                          title={`${event.programTitle} (${new Intl.DateTimeFormat("pt-BR", {
+                            dateStyle: "short",
+                            timeStyle: "short",
+                          }).format(new Date(event.startsAt))})`}
+                        >
+                          <p className="truncate text-[10px] font-semibold">
+                            {new Intl.DateTimeFormat("pt-BR", { hour: "2-digit", minute: "2-digit" }).format(
+                              new Date(event.startsAt),
+                            )}
+                          </p>
+                          <p className="truncate text-[10px] opacity-90">{event.programTitle}</p>
+                          <p className="truncate text-[10px] opacity-90">
+                            {event.isCurrentProgram ? "Programa atual" : "Outro programa"}
+                          </p>
+                        </Link>
+                      );
+                    })}
+                    {day.events.length > CHRONOGRAM_MAX_EVENTS_PER_DAY ? (
+                      <p className="text-[10px] text-[#527083]">
+                        +{day.events.length - CHRONOGRAM_MAX_EVENTS_PER_DAY} evento(s)
+                      </p>
+                    ) : null}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
         )}
       </section>
 

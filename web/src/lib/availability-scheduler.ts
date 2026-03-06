@@ -24,7 +24,10 @@ type BuildSuggestedSlotsParams = {
   enforceCadenceSeries?: boolean;
 };
 
-const CANDIDATE_HOURS_UTC = [13, 17, 19] as const;
+// 09:00-18:00 in America/Sao_Paulo corresponds to 12:00-21:00 UTC.
+const BUSINESS_START_HOUR_UTC = 12;
+const BUSINESS_END_HOUR_UTC = 21;
+const BUSINESS_STEP_MINUTES = 60;
 export const DEFAULT_ASSIGNMENT_CADENCE_SLOT_COUNT = 4;
 
 function safeDate(value: string | null | undefined): Date | null {
@@ -49,12 +52,6 @@ function nextBusinessDayUTC(date: Date): Date {
 
 function startOfUtcDay(date: Date): Date {
   return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
-}
-
-function setUtcHour(date: Date, hour: number): Date {
-  const next = new Date(date);
-  next.setUTCHours(hour, 0, 0, 0);
-  return next;
 }
 
 function addDaysUTC(date: Date, days: number): Date {
@@ -89,6 +86,54 @@ function overlaps(startA: Date, endA: Date, startB: Date, endB: Date): boolean {
   return startA < endB && endA > startB;
 }
 
+function slotOverlapsSlots(slot: AvailabilitySlot, slots: AvailabilitySlot[]): boolean {
+  const slotStart = safeDate(slot.startsAt);
+  const slotEnd = safeDate(slot.endsAt);
+  if (!slotStart || !slotEnd) return true;
+  return slots.some((item) => {
+    const itemStart = safeDate(item.startsAt);
+    const itemEnd = safeDate(item.endsAt);
+    if (!itemStart || !itemEnd) return false;
+    return overlaps(slotStart, slotEnd, itemStart, itemEnd);
+  });
+}
+
+function buildBusinessHourCandidatesUTC(params: {
+  day: Date;
+  durationMinutes: number;
+  preferredHour?: number | null;
+}): Date[] {
+  const maxStartMinutes = BUSINESS_END_HOUR_UTC * 60 - params.durationMinutes;
+  if (maxStartMinutes < BUSINESS_START_HOUR_UTC * 60) return [];
+
+  const candidates: Date[] = [];
+  for (
+    let minuteOfDay = BUSINESS_START_HOUR_UTC * 60;
+    minuteOfDay <= maxStartMinutes;
+    minuteOfDay += BUSINESS_STEP_MINUTES
+  ) {
+    const hour = Math.floor(minuteOfDay / 60);
+    const minute = minuteOfDay % 60;
+    const start = new Date(params.day);
+    start.setUTCHours(hour, minute, 0, 0);
+    candidates.push(start);
+  }
+
+  if (
+    params.preferredHour === null ||
+    params.preferredHour === undefined ||
+    !Number.isFinite(params.preferredHour)
+  ) {
+    return candidates;
+  }
+
+  return candidates.sort((left, right) => {
+    const leftDistance = Math.abs(left.getUTCHours() - Number(params.preferredHour));
+    const rightDistance = Math.abs(right.getUTCHours() - Number(params.preferredHour));
+    return leftDistance - rightDistance;
+  });
+}
+
 export function slotOverlapsMasterCalendar(
   slot: AvailabilitySlot,
   events: MasterCalendarEvent[],
@@ -113,8 +158,48 @@ export function slotOverlapsMasterCalendar(
   });
 }
 
+export function findNextAvailableBusinessSlot(params: {
+  startsAt: string;
+  durationMinutes?: number;
+  existingEvents: MasterCalendarEvent[];
+  existingSlots?: AvailabilitySlot[];
+  maxSearchDays?: number;
+}): AvailabilitySlot | null {
+  const start = safeDate(params.startsAt);
+  if (!start) return null;
+
+  const durationMinutes = params.durationMinutes ?? 60;
+  const durationMs = durationMinutes * 60 * 1000;
+  const preferredHour = start.getUTCHours();
+  const startDay = startOfUtcDay(start);
+  const existingSlots = params.existingSlots ?? [];
+  const maxSearchDays = params.maxSearchDays ?? 365;
+
+  for (let dayOffset = 0; dayOffset <= maxSearchDays; dayOffset += 1) {
+    const day = startOfUtcDay(addDaysUTC(startDay, dayOffset));
+    if (isWeekendUTC(day)) continue;
+    const candidates = buildBusinessHourCandidatesUTC({
+      day,
+      durationMinutes,
+      preferredHour,
+    });
+    for (const candidateStart of candidates) {
+      if (dayOffset === 0 && candidateStart < start) continue;
+      const candidate: AvailabilitySlot = {
+        startsAt: candidateStart.toISOString(),
+        endsAt: new Date(candidateStart.getTime() + durationMs).toISOString(),
+      };
+      if (slotOverlapsMasterCalendar(candidate, params.existingEvents)) continue;
+      if (slotOverlapsSlots(candidate, existingSlots)) continue;
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
 export function buildSuggestedAvailabilitySlots({
-  deployedAt: _deployedAt,
+  deployedAt,
   scheduleFrequency,
   scheduleAnchorDate,
   existingEvents,
@@ -122,27 +207,31 @@ export function buildSuggestedAvailabilitySlots({
   durationMinutes = 60,
   enforceCadenceSeries = false,
 }: BuildSuggestedSlotsParams): AvailabilitySlot[] {
-  void _deployedAt;
   const now = new Date();
   const minStart = addDaysUTC(now, 1);
+  const deployedDate = safeDate(deployedAt);
   const intervalDays = frequencyToDays(scheduleFrequency);
   const anchor =
     safeDate(scheduleAnchorDate ? `${scheduleAnchorDate}T00:00:00.000Z` : null) ??
     startOfUtcDay(now);
-  const slotDurationMs = durationMinutes * 60 * 1000;
   const slots: AvailabilitySlot[] = [];
   const seen = new Set<string>();
 
   for (let step = 0; step < 180 && slots.length < maxSlots; step += 1) {
     const baseDate = nextBusinessDayUTC(addDaysUTC(anchor, step * intervalDays));
-    for (const hour of CANDIDATE_HOURS_UTC) {
-      const start = setUtcHour(baseDate, hour);
+    const candidates = buildBusinessHourCandidatesUTC({
+      day: baseDate,
+      durationMinutes,
+      preferredHour: deployedDate?.getUTCHours(),
+    });
+    for (const start of candidates) {
       if (start <= minStart) continue;
-      const end = new Date(start.getTime() + slotDurationMs);
+      const end = new Date(start.getTime() + durationMinutes * 60 * 1000);
       const key = start.toISOString();
       if (seen.has(key)) continue;
       const candidate: AvailabilitySlot = { startsAt: key, endsAt: end.toISOString() };
       if (slotOverlapsMasterCalendar(candidate, existingEvents)) continue;
+      if (slotOverlapsSlots(candidate, slots)) continue;
       seen.add(key);
       slots.push(candidate);
       if (slots.length >= maxSlots || enforceCadenceSeries) break;
@@ -155,13 +244,18 @@ export function buildSuggestedAvailabilitySlots({
 
   for (let dayOffset = 0; dayOffset < 120 && slots.length < maxSlots; dayOffset += 1) {
     const baseDate = nextBusinessDayUTC(addDaysUTC(minStart, dayOffset));
-    for (const hour of CANDIDATE_HOURS_UTC) {
-      const start = setUtcHour(baseDate, hour);
-      const end = new Date(start.getTime() + slotDurationMs);
+    const candidates = buildBusinessHourCandidatesUTC({
+      day: baseDate,
+      durationMinutes,
+      preferredHour: deployedDate?.getUTCHours(),
+    });
+    for (const start of candidates) {
+      const end = new Date(start.getTime() + durationMinutes * 60 * 1000);
       const key = start.toISOString();
       if (seen.has(key)) continue;
       const candidate: AvailabilitySlot = { startsAt: key, endsAt: end.toISOString() };
       if (slotOverlapsMasterCalendar(candidate, existingEvents)) continue;
+      if (slotOverlapsSlots(candidate, slots)) continue;
       seen.add(key);
       slots.push(candidate);
       if (slots.length >= maxSlots) break;

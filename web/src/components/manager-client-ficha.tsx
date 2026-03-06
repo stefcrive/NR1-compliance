@@ -450,9 +450,6 @@ export function ManagerClientFicha({
     null,
   );
   const [drpsActionNotice, setDrpsActionNotice] = useState("");
-  const [openAssignedProgramActionsFor, setOpenAssignedProgramActionsFor] = useState<string | null>(
-    null,
-  );
   const [activeTab, setActiveTab] = useState<ClientTab>(initialTab);
   const [isEditingCompanyProfile, setIsEditingCompanyProfile] = useState(false);
   const [isSavingCompanyProfile, setIsSavingCompanyProfile] = useState(false);
@@ -485,12 +482,12 @@ export function ManagerClientFicha({
   const [annualPlanDraftByAssignment, setAnnualPlanDraftByAssignment] = useState<Record<string, string[]>>({});
   const [isProgramModalOpen, setIsProgramModalOpen] = useState(false);
   const [assignProgramForm, setAssignProgramForm] = useState<{
-    programId: string;
+    programIds: string[];
     status: ContinuousProgramStatus;
     deployedAt: string;
     scheduleFrequency: string;
   }>({
-    programId: "",
+    programIds: [],
     status: "Active",
     deployedAt: "",
     scheduleFrequency: "biweekly",
@@ -528,10 +525,10 @@ export function ManagerClientFicha({
     () => availablePrograms.filter((program) => !assignedProgramIds.has(program.id)),
     [availablePrograms, assignedProgramIds],
   );
-  const selectedProgramToAssign = useMemo(
+  const selectedProgramsToAssign = useMemo(
     () =>
-      unassignedProgramOptions.find((program) => program.id === assignProgramForm.programId) ?? null,
-    [unassignedProgramOptions, assignProgramForm.programId],
+      unassignedProgramOptions.filter((program) => assignProgramForm.programIds.includes(program.id)),
+    [unassignedProgramOptions, assignProgramForm.programIds],
   );
   const primaryContinuousProgram = assignedPrograms[0] ?? null;
   const annualPlanColumns = useMemo(
@@ -583,16 +580,20 @@ export function ManagerClientFicha({
     });
     setAssignProgramForm((previous) => {
       const nextAssignedIds = new Set(nextAssigned.map((assignment) => assignment.programId));
-      const nextProgramId =
-        previous.programId &&
-        nextAvailable.some(
-          (program) => program.id === previous.programId && !nextAssignedIds.has(previous.programId),
-        )
-          ? previous.programId
-          : nextAvailable.find((program) => !nextAssignedIds.has(program.id))?.id ?? "";
+      const nextProgramIds = previous.programIds.filter(
+        (programId) =>
+          !nextAssignedIds.has(programId) &&
+          nextAvailable.some((program) => program.id === programId),
+      );
+      if (nextProgramIds.length === 0) {
+        const firstAvailableProgram = nextAvailable.find((program) => !nextAssignedIds.has(program.id));
+        if (firstAvailableProgram) {
+          nextProgramIds.push(firstAvailableProgram.id);
+        }
+      }
       return {
         ...previous,
-        programId: nextProgramId,
+        programIds: nextProgramIds,
         scheduleFrequency: "biweekly",
       };
     });
@@ -682,11 +683,6 @@ export function ManagerClientFicha({
     setOpenCampaignActionsFor(null);
     setOpenCampaignSectorActionsFor(null);
     setDrpsActionNotice("");
-  }, [activeTab]);
-
-  useEffect(() => {
-    if (activeTab === "assigned-continuous") return;
-    setOpenAssignedProgramActionsFor(null);
   }, [activeTab]);
 
   async function generateSeriesReports() {
@@ -1171,11 +1167,6 @@ export function ManagerClientFicha({
     openCampaignResults(campaign);
   }
 
-  function openAssignedProgramDetails(assignment: AssignedContinuousProgram) {
-    if (!client) return;
-    router.push(`/manager/clients/${client.id}/assigned-continuous/${assignment.id}`);
-  }
-
   function closeLinksModal() {
     setIsLinksModalOpen(false);
     setCopiedSectorId(null);
@@ -1184,7 +1175,7 @@ export function ManagerClientFicha({
   function openAssignProgramModal() {
     const firstAvailableProgram = unassignedProgramOptions[0] ?? null;
     setAssignProgramForm({
-      programId: firstAvailableProgram?.id ?? "",
+      programIds: firstAvailableProgram ? [firstAvailableProgram.id] : [],
       status: "Active",
       deployedAt: toDatetimeLocal(new Date().toISOString()),
       scheduleFrequency: "biweekly",
@@ -1196,8 +1187,8 @@ export function ManagerClientFicha({
 
   async function assignContinuousProgram() {
     if (!client) return;
-    if (!assignProgramForm.programId) {
-      setContinuousError("Selecione um programa para atribuir.");
+    if (assignProgramForm.programIds.length === 0) {
+      setContinuousError("Selecione ao menos um programa para atribuir.");
       return;
     }
 
@@ -1205,27 +1196,36 @@ export function ManagerClientFicha({
     setContinuousError("");
     setContinuousNotice("");
     const deployedAtIso = fromDatetimeLocal(assignProgramForm.deployedAt);
-    const response = await fetch(`/api/admin/clients/${client.id}/programs`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        programId: assignProgramForm.programId,
-        status: assignProgramForm.status,
-        ...(deployedAtIso ? { deployedAt: deployedAtIso } : {}),
-        scheduleFrequency: assignProgramForm.scheduleFrequency,
-      }),
-    });
-    const data = (await response.json().catch(() => ({}))) as { error?: string };
-    if (!response.ok) {
-      setContinuousError(data.error ?? "Falha ao atribuir programa.");
-      setIsSavingProgram(false);
-      return;
-    }
+    try {
+      for (const programId of assignProgramForm.programIds) {
+        const response = await fetch(`/api/admin/clients/${client.id}/programs`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            programId,
+            status: assignProgramForm.status,
+            ...(deployedAtIso ? { deployedAt: deployedAtIso } : {}),
+            scheduleFrequency: assignProgramForm.scheduleFrequency,
+          }),
+        });
+        const data = (await response.json().catch(() => ({}))) as { error?: string };
+        if (!response.ok) {
+          throw new Error(data.error ?? "Falha ao atribuir programa.");
+        }
+      }
 
-    setIsProgramModalOpen(false);
-    await loadContinuousPrograms(client.id);
-    setContinuousNotice("Programa atribuido com sucesso.");
-    setIsSavingProgram(false);
+      setIsProgramModalOpen(false);
+      await loadContinuousPrograms(client.id);
+      setContinuousNotice(
+        assignProgramForm.programIds.length === 1
+          ? "Programa atribuido com sucesso."
+          : `${assignProgramForm.programIds.length} programas atribuidos com sucesso.`,
+      );
+    } catch (assignError) {
+      setContinuousError(assignError instanceof Error ? assignError.message : "Falha ao atribuir programa.");
+    } finally {
+      setIsSavingProgram(false);
+    }
   }
 
   function toggleAnnualPlanMonthDraft(assignment: AssignedContinuousProgram, monthKey: string) {
@@ -2500,12 +2500,26 @@ export function ManagerClientFicha({
                       return (
                         <tr key={`annual-plan-${assignment.id}`} className="border-b border-[#dbe7ef]">
                           <td className="px-2 py-2">
-                            <Link
-                              href={`/manager/clients/${client.id}/assigned-continuous/${assignment.id}`}
-                              className="font-medium text-[#0f5b73] hover:underline"
-                            >
-                              {assignment.programTitle}
-                            </Link>
+                            <div className="flex items-center gap-2">
+                              <Link
+                                href={`/manager/clients/${client.id}/assigned-continuous/${assignment.id}`}
+                                className="font-medium text-[#0f5b73] hover:underline"
+                              >
+                                {assignment.programTitle}
+                              </Link>
+                              <button
+                                type="button"
+                                onClick={() => void removeAssignedProgram(assignment.id)}
+                                disabled={isSavingProgram}
+                                className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-[#e1b6b6] text-[#8a2d2d] hover:bg-[#fff4f4] disabled:cursor-not-allowed disabled:opacity-50"
+                                title="Remover programa"
+                                aria-label={`Remover ${assignment.programTitle}`}
+                              >
+                                <svg viewBox="0 0 24 24" aria-hidden="true" className="h-4 w-4 fill-current">
+                                  <path d="M9 3h6l1 2h4v2H4V5h4l1-2Zm1 6h2v9h-2V9Zm4 0h2v9h-2V9ZM7 9h2v9H7V9Zm-1 12h12l1-14H5l1 14Z" />
+                                </svg>
+                              </button>
+                            </div>
                             <p className="text-[11px] text-[#5a7383]">
                               Status {assignment.status}
                               {isDirty ? " | alteracao pendente" : ""}
@@ -2547,92 +2561,6 @@ export function ManagerClientFicha({
               </table>
             </div>
           </div>
-          <div className="mt-5 overflow-x-auto">
-            <table className="nr-table min-w-full text-sm">
-              <thead>
-                <tr className="border-b">
-                  <th className="px-2 py-2 text-left">Programa</th>
-                  <th className="px-2 py-2 text-left">Topico alvo</th>
-                  <th className="px-2 py-2 text-left">Status</th>
-                  <th className="px-2 py-2 text-left">Aplicado em</th>
-                  <th className="px-2 py-2 text-left">Cadencia</th>
-                  <th className="px-2 py-2 text-left">Acoes</th>
-                </tr>
-              </thead>
-              <tbody>
-                {assignedPrograms.length === 0 ? (
-                  <tr>
-                    <td colSpan={6} className="px-2 py-3 text-xs text-[#5a7383]">
-                      Nenhum processo continuo atribuido.
-                    </td>
-                  </tr>
-                ) : (
-                  assignedPrograms.map((assignment) => (
-                    <tr key={assignment.id} className="border-b">
-                      <td className="px-2 py-2">
-                        <p className="font-medium text-[#123447]">{assignment.programTitle}</p>
-                        <p className="text-xs text-[#5a7383]">{assignment.programDescription ?? assignment.programId}</p>
-                      </td>
-                      <td className="px-2 py-2">{assignment.targetRiskTopic ?? "-"}</td>
-                      <td className="px-2 py-2">{assignment.status}</td>
-                      <td className="px-2 py-2">{fmt(assignment.deployedAt)}</td>
-                      <td className="px-2 py-2">{assignment.scheduleFrequency ?? "-"}</td>
-                      <td className="px-2 py-2">
-                        <div className="relative inline-flex">
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setOpenAssignedProgramActionsFor((previous) =>
-                                previous === assignment.id ? null : assignment.id,
-                              )
-                            }
-                            className="rounded-full border border-[#c9dce8] px-3 py-1 text-xs font-semibold text-[#123447]"
-                          >
-                            ...
-                          </button>
-                          {openAssignedProgramActionsFor === assignment.id ? (
-                            <div className="absolute right-0 top-full z-20 mt-2 w-56 overflow-hidden rounded-xl border border-[#d8e4ee] bg-white shadow-lg">
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setOpenAssignedProgramActionsFor(null);
-                                  openAssignedProgramDetails(assignment);
-                                }}
-                                className="block w-full px-3 py-2 text-left text-xs font-semibold text-[#123447] hover:bg-[#f4f9fc]"
-                              >
-                                Open
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setOpenAssignedProgramActionsFor(null);
-                                  openAssignedProgramDetails(assignment);
-                                }}
-                                className="block w-full px-3 py-2 text-left text-xs font-semibold text-[#2d5f23] hover:bg-[#f4f9fc]"
-                              >
-                                Editar
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setOpenAssignedProgramActionsFor(null);
-                                  void removeAssignedProgram(assignment.id);
-                                }}
-                                disabled={isSavingProgram}
-                                className="block w-full px-3 py-2 text-left text-xs font-semibold text-[#8a2d2d] hover:bg-[#fff4f4] disabled:cursor-not-allowed disabled:text-[#a8b7c0]"
-                              >
-                                Remover
-                              </button>
-                            </div>
-                          ) : null}
-                        </div>
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
           {isProgramModalOpen ? (
             <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/35 p-4">
               <div className="w-full max-w-2xl rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-xl">
@@ -2651,28 +2579,73 @@ export function ManagerClientFicha({
                 ) : (
                   <>
                     <div className="mt-3 grid gap-3 md:grid-cols-2">
-                      <label className="text-xs text-[#4f6977]">
-                        Programa
-                        <select
-                          className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
-                          value={assignProgramForm.programId}
-                          onChange={(event) =>
-                            setAssignProgramForm((previous) => {
-                              return {
+                      <fieldset className="text-xs text-[#4f6977] md:col-span-2">
+                        <legend className="font-medium text-[#35515f]">Programas</legend>
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setAssignProgramForm((previous) => ({
                                 ...previous,
-                                programId: event.target.value,
-                                scheduleFrequency: "biweekly",
-                              };
-                            })
-                          }
-                        >
-                          {unassignedProgramOptions.map((program) => (
-                            <option key={program.id} value={program.id}>
-                              {program.title}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
+                                programIds: unassignedProgramOptions.map((program) => program.id),
+                              }))
+                            }
+                            className="rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
+                          >
+                            Selecionar todos
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setAssignProgramForm((previous) => ({
+                                ...previous,
+                                programIds: [],
+                              }))
+                            }
+                            className="rounded-full border border-[#c9dce8] px-3 py-1 text-xs font-semibold text-[#4f6977]"
+                          >
+                            Limpar
+                          </button>
+                        </div>
+                        <div className="mt-2 max-h-56 space-y-2 overflow-y-auto rounded border border-[#d8e4ee] p-2">
+                          {unassignedProgramOptions.map((program) => {
+                            const isChecked = assignProgramForm.programIds.includes(program.id);
+                            return (
+                              <label
+                                key={`assign-multi-${program.id}`}
+                                className="flex cursor-pointer items-start gap-2 rounded border border-[#edf4f8] px-2 py-2"
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={isChecked}
+                                  onChange={(event) =>
+                                    setAssignProgramForm((previous) => {
+                                      const nextIds = new Set(previous.programIds);
+                                      if (event.target.checked) {
+                                        nextIds.add(program.id);
+                                      } else {
+                                        nextIds.delete(program.id);
+                                      }
+                                      return {
+                                        ...previous,
+                                        programIds: Array.from(nextIds.values()),
+                                      };
+                                    })
+                                  }
+                                  className="mt-0.5 h-4 w-4 rounded border-[#9ec8db] text-[#0f5b73]"
+                                />
+                                <span>
+                                  <span className="block text-sm font-semibold text-[#123447]">{program.title}</span>
+                                  <span className="block text-xs text-[#5a7383]">
+                                    Topico {program.targetRiskTopic} | Gatilho{" "}
+                                    {program.triggerThreshold.toFixed(2)}
+                                  </span>
+                                </span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </fieldset>
                       <label className="text-xs text-[#4f6977]">
                         Status
                         <select
@@ -2726,23 +2699,24 @@ export function ManagerClientFicha({
                         />
                       </label>
                     </div>
-                    {selectedProgramToAssign ? (
+                    {selectedProgramsToAssign.length > 0 ? (
                       <div className="mt-3 rounded-xl border border-[#d8e4ee] bg-[#f8fbfd] p-3">
-                        <p className="text-sm font-semibold text-[#123447]">{selectedProgramToAssign.title}</p>
-                        <p className="mt-1 text-xs text-[#4f6977]">
-                          Topico alvo {selectedProgramToAssign.targetRiskTopic} | Gatilho{" "}
-                          {selectedProgramToAssign.triggerThreshold.toFixed(2)}
+                        <p className="text-sm font-semibold text-[#123447]">
+                          {selectedProgramsToAssign.length} programa(s) selecionado(s)
                         </p>
-                        <p className="mt-1 text-xs text-[#4f6977]">
-                          Recorrencia padrao: {selectedProgramToAssign.scheduleFrequency}
-                        </p>
-                        <p className="mt-1 text-xs text-[#5a7383]">{selectedProgramToAssign.description ?? "-"}</p>
+                        <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-[#4f6977]">
+                          {selectedProgramsToAssign.map((program) => (
+                            <li key={`selected-program-${program.id}`}>
+                              {program.title} | Topico {program.targetRiskTopic}
+                            </li>
+                          ))}
+                        </ul>
                       </div>
                     ) : null}
                     <div className="mt-4 flex gap-2">
                       <button
                         type="button"
-                        disabled={isSavingProgram || !assignProgramForm.programId}
+                        disabled={isSavingProgram || assignProgramForm.programIds.length === 0}
                         onClick={() => void assignContinuousProgram()}
                         className="rounded-full bg-[#0f5b73] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
                       >

@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { isAdminApiAuthorized } from "@/lib/admin-auth";
+import {
+  createEmptyContinuousProgramEvaluationSummary,
+  parseContinuousProgramEvaluationQuestions,
+  summarizeContinuousProgramEvaluations,
+} from "@/lib/continuous-program-evaluations";
 import { isMissingColumnError, isMissingTableError } from "@/lib/supabase-errors";
 import { getSupabaseAdminClient } from "@/lib/supabase-admin";
 
@@ -34,11 +39,18 @@ type PeriodicProgramRow = {
   description: string | null;
   target_risk_topic: number | string;
   trigger_threshold: number | string;
+  evaluation_questions?: unknown;
 };
 
 type ClientProgramRow = {
+  client_program_id: string;
   program_id: string;
   status: "Recommended" | "Active" | "Completed";
+};
+
+type ProgramEvaluationRow = {
+  client_program_id: string;
+  answers: unknown;
 };
 
 function mapLegacyStatus(status: LegacyDiagnosticRow["status"]): SurveyDiagnosticRow["status"] {
@@ -177,11 +189,21 @@ export async function GET(request: NextRequest) {
     }));
   }
 
-  const periodicResult = await supabase
+  const periodicWithQuestionsResult = await supabase
     .from("periodic_programs")
-    .select("program_id,title,description,target_risk_topic,trigger_threshold")
+    .select("program_id,title,description,target_risk_topic,trigger_threshold,evaluation_questions")
     .order("title", { ascending: true })
     .returns<PeriodicProgramRow[]>();
+
+  const periodicResult =
+    periodicWithQuestionsResult.error &&
+    isMissingColumnError(periodicWithQuestionsResult.error, "evaluation_questions")
+      ? await supabase
+          .from("periodic_programs")
+          .select("program_id,title,description,target_risk_topic,trigger_threshold")
+          .order("title", { ascending: true })
+          .returns<PeriodicProgramRow[]>()
+      : periodicWithQuestionsResult;
 
   if (periodicResult.error && !isMissingTableError(periodicResult.error, "periodic_programs")) {
     return NextResponse.json({ error: "Could not load continuous programs." }, { status: 500 });
@@ -193,7 +215,7 @@ export async function GET(request: NextRequest) {
     programIds.length > 0
       ? await supabase
           .from("client_programs")
-          .select("program_id,status")
+          .select("client_program_id,program_id,status")
           .in("program_id", programIds)
           .returns<ClientProgramRow[]>()
       : { data: [] as ClientProgramRow[], error: null };
@@ -224,20 +246,70 @@ export async function GET(request: NextRequest) {
     assignmentCountByProgram.set(row.program_id, current);
   }
 
+  const assignmentProgramById = new Map(
+    (clientProgramsResult.data ?? []).map((item) => [item.client_program_id, item.program_id]),
+  );
+  const assignmentIds = Array.from(assignmentProgramById.keys());
+  const evaluationAnswersByProgram = new Map<string, unknown[]>();
+  let evaluationsUnavailable = false;
+
+  if (assignmentIds.length > 0) {
+    const evaluationsResult = await supabase
+      .from("client_program_evaluations")
+      .select("client_program_id,answers")
+      .in("client_program_id", assignmentIds)
+      .returns<ProgramEvaluationRow[]>();
+
+    if (evaluationsResult.error) {
+      if (isMissingTableError(evaluationsResult.error, "client_program_evaluations")) {
+        evaluationsUnavailable = true;
+      } else {
+        return NextResponse.json({ error: "Could not load continuous program evaluations." }, { status: 500 });
+      }
+    } else {
+      for (const row of evaluationsResult.data ?? []) {
+        const programId = assignmentProgramById.get(row.client_program_id);
+        if (!programId) continue;
+        const list = evaluationAnswersByProgram.get(programId) ?? [];
+        list.push(row.answers);
+        evaluationAnswersByProgram.set(programId, list);
+      }
+    }
+  }
+
   return NextResponse.json({
     drpsDiagnostics,
-    continuousPrograms: periodicPrograms.map((item) => ({
-      id: item.program_id,
-      title: item.title,
-      description: item.description,
-      targetRiskTopic: Number(item.target_risk_topic),
-      triggerThreshold: Number(item.trigger_threshold),
-      assignments: assignmentCountByProgram.get(item.program_id) ?? {
-        total: 0,
-        recommended: 0,
-        active: 0,
-        completed: 0,
-      },
-    })),
+    continuousPrograms: periodicPrograms.map((item) => {
+      const evaluationQuestions = parseContinuousProgramEvaluationQuestions(item.evaluation_questions);
+      const evaluationSummary = evaluationsUnavailable
+        ? createEmptyContinuousProgramEvaluationSummary(evaluationQuestions.length)
+        : summarizeContinuousProgramEvaluations({
+            answerPayloads: evaluationAnswersByProgram.get(item.program_id) ?? [],
+            questionCount: evaluationQuestions.length,
+          });
+
+      return {
+        id: item.program_id,
+        title: item.title,
+        description: item.description,
+        targetRiskTopic: Number(item.target_risk_topic),
+        triggerThreshold: Number(item.trigger_threshold),
+        assignments: assignmentCountByProgram.get(item.program_id) ?? {
+          total: 0,
+          recommended: 0,
+          active: 0,
+          completed: 0,
+        },
+        evaluation: {
+          submissions: evaluationSummary.submissions,
+          overallAverage: evaluationSummary.overallAverage,
+          unavailable: evaluationsUnavailable,
+          byQuestion: evaluationQuestions.map((question, index) => ({
+            question,
+            average: evaluationSummary.averageByQuestion[index] ?? null,
+          })),
+        },
+      };
+    }),
   });
 }

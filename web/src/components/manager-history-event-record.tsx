@@ -72,6 +72,7 @@ type EventRecordPayload = {
 const COPY = {
   en: {
     breadcrumbHistory: "History",
+    breadcrumbHome: "Home",
     breadcrumbClientArea: "Client area",
     breadcrumbAssignedPrograms: "Assigned processo continuos",
     pageTitle: "Event Record",
@@ -144,6 +145,7 @@ const COPY = {
   },
   pt: {
     breadcrumbHistory: "Historico",
+    breadcrumbHome: "Home",
     breadcrumbClientArea: "Client area",
     breadcrumbAssignedPrograms: "Assigned processo continuos",
     pageTitle: "Ficha do Evento",
@@ -304,7 +306,13 @@ function durationMinutesFromRange(startsAt: string, endsAt: string, fallbackMinu
   return duration;
 }
 
-export function ManagerHistoryEventRecord({ eventId }: { eventId: string }) {
+export function ManagerHistoryEventRecord({
+  eventId,
+  from,
+}: {
+  eventId: string;
+  from?: string;
+}) {
   const { locale } = useManagerLocale();
   const t = COPY[locale];
 
@@ -371,6 +379,10 @@ export function ManagerHistoryEventRecord({ eventId }: { eventId: string }) {
   const programAssignment = record?.related.programAssignment ?? null;
   const breadcrumbClientId = programAssignment?.clientId ?? record?.clientId ?? null;
   const breadcrumbClientName = record?.clientName ?? t.noCompany;
+  const fromHistory = from === "history";
+  const fromHome = from === "home";
+  const breadcrumbSource = fromHistory ? "history" : fromHome ? "home" : null;
+  const isClientAreaSource = !fromHistory && !fromHome;
   const pageTitle =
     isContinuousProgramJournal && record
       ? `${record.title || t.journalTitle} (${fmtDateTime(record.startsAt, locale)})`
@@ -600,7 +612,21 @@ export function ManagerHistoryEventRecord({ eventId }: { eventId: string }) {
   return (
     <div className="space-y-5">
       <nav className="text-xs text-[#4f6977]">
-        {isContinuousProgramJournal && breadcrumbClientId && programAssignment ? (
+        {fromHistory ? (
+          <>
+            <Link href="/manager/history" className="text-[#0f5b73] hover:underline">
+              {t.breadcrumbHistory}
+            </Link>{" "}
+            / <span>{pageTitle}</span>
+          </>
+        ) : fromHome ? (
+          <>
+            <Link href="/manager" className="text-[#0f5b73] hover:underline">
+              {t.breadcrumbHome}
+            </Link>{" "}
+            / <span>{pageTitle}</span>
+          </>
+        ) : isClientAreaSource && isContinuousProgramJournal && breadcrumbClientId && programAssignment ? (
           <>
             <Link href="/manager/clients" className="text-[#0f5b73] hover:underline">
               {t.breadcrumbClientArea}
@@ -934,8 +960,10 @@ export function ManagerHistoryEventRecord({ eventId }: { eventId: string }) {
                     <p className="mt-1 text-xs text-[#4f6977]">{record.related.campaign.status}</p>
                     <Link
                       href={
-                        record.clientPortalSlug
-                          ? `/client/${record.clientPortalSlug}/diagnostic/${record.related.campaign.id}?from=history`
+                        record.clientId
+                          ? `/manager/clients/${record.clientId}/diagnostic/${record.related.campaign.id}${
+                              breadcrumbSource ? `?from=${breadcrumbSource}` : ""
+                            }`
                           : `/manager/programs/drps/${record.related.campaign.id}`
                       }
                       className="mt-2 inline-flex text-xs font-semibold text-[#0f5b73] hover:underline"
@@ -955,7 +983,9 @@ export function ManagerHistoryEventRecord({ eventId }: { eventId: string }) {
                       {fmtDateTime(record.related.programAssignment.deployedAt, locale)}
                     </p>
                     <Link
-                      href={`/manager/clients/${record.related.programAssignment.clientId}/assigned-continuous/${record.related.programAssignment.id}?from=history`}
+                      href={`/manager/clients/${record.related.programAssignment.clientId}/assigned-continuous/${record.related.programAssignment.id}${
+                        breadcrumbSource ? `?from=${breadcrumbSource}` : ""
+                      }`}
                       className="mt-2 inline-flex text-xs font-semibold text-[#0f5b73] hover:underline"
                     >
                       {t.openProgram}

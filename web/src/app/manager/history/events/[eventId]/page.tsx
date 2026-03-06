@@ -2,9 +2,12 @@ import { ManagerHistoryEventRecord } from "@/components/manager-history-event-re
 
 export default async function ManagerHistoryEventRecordPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ eventId: string }>;
+  searchParams?: Promise<{ from?: string }>;
 }) {
   const { eventId } = await params;
-  return <ManagerHistoryEventRecord eventId={eventId} />;
+  const resolvedSearchParams = (await searchParams) ?? {};
+  return <ManagerHistoryEventRecord eventId={eventId} from={resolvedSearchParams.from} />;
 }

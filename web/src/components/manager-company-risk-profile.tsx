@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
@@ -12,7 +13,6 @@ import {
 type RiskProfileReport = {
   id: string;
   questionnaireVersion: string;
-  sector: string | null;
   notes: string | null;
   answers: CompanyRiskProfileAnswers;
   factorScores: CompanyRiskProfileFactorScore[];
@@ -131,6 +131,8 @@ function formatAxisLabel(value: string) {
 }
 
 export function ManagerCompanyRiskProfile({ clientId }: { clientId: string }) {
+  const searchParams = useSearchParams();
+  const fromHistory = searchParams.get("from") === "history";
   const [payload, setPayload] = useState<RiskProfilePayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -343,21 +345,32 @@ export function ManagerCompanyRiskProfile({ clientId }: { clientId: string }) {
       <section className="rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
         <div className="space-y-3">
           <nav className="text-xs text-[#4f6977]" aria-label="Breadcrumb">
-            <Link href="/manager/clients" className="font-semibold text-[#0f5b73] hover:underline">
-              Client area
-            </Link>
-            <span className="px-1 text-[#8aa4b5]">/</span>
-            <Link href={`/manager/clients/${clientId}`} className="font-semibold text-[#0f5b73] hover:underline">
-              {payload.client.companyName}
-            </Link>
-            <span className="px-1 text-[#8aa4b5]">/</span>
-            <Link
-              href={`/manager/clients/${clientId}?tab=company-data`}
-              className="font-semibold text-[#0f5b73] hover:underline"
-            >
-              Company data
-            </Link>
-            <span className="px-1 text-[#8aa4b5]">/</span>
+            {fromHistory ? (
+              <>
+                <Link href="/manager/history" className="font-semibold text-[#0f5b73] hover:underline">
+                  Historico
+                </Link>
+                <span className="px-1 text-[#8aa4b5]">/</span>
+              </>
+            ) : (
+              <>
+                <Link href="/manager/clients" className="font-semibold text-[#0f5b73] hover:underline">
+                  Client area
+                </Link>
+                <span className="px-1 text-[#8aa4b5]">/</span>
+                <Link href={`/manager/clients/${clientId}`} className="font-semibold text-[#0f5b73] hover:underline">
+                  {payload.client.companyName}
+                </Link>
+                <span className="px-1 text-[#8aa4b5]">/</span>
+                <Link
+                  href={`/manager/clients/${clientId}?tab=company-data`}
+                  className="font-semibold text-[#0f5b73] hover:underline"
+                >
+                  Company data
+                </Link>
+                <span className="px-1 text-[#8aa4b5]">/</span>
+              </>
+            )}
             <span className="font-semibold text-[#123447]">Company profile risk results</span>
           </nav>
           <div>
@@ -393,7 +406,6 @@ export function ManagerCompanyRiskProfile({ clientId }: { clientId: string }) {
                 </div>
                 <p className="mt-2 text-sm text-[#153748]">
                   Probabilidade geral de ocorrencia: <strong>{selectedReport.overallScore.toFixed(2)}</strong>
-                  {selectedReport.sector ? ` | Setor: ${selectedReport.sector}` : ""}
                 </p>
                 <p className="mt-1 text-xs text-[#4f6977]">
                   Baixa: {selectedReport.summaryCounts.baixa} | Media: {selectedReport.summaryCounts.media} | Alta:{" "}
@@ -486,7 +498,6 @@ export function ManagerCompanyRiskProfile({ clientId }: { clientId: string }) {
                 <thead>
                   <tr className="border-b bg-[#f8fbfd]">
                     <th className="px-3 py-2 text-left text-xs font-semibold text-[#4f6977]">Data</th>
-                    <th className="px-3 py-2 text-left text-xs font-semibold text-[#4f6977]">Setor</th>
                     <th className="px-3 py-2 text-left text-xs font-semibold text-[#4f6977]">Score geral</th>
                     <th className="px-3 py-2 text-left text-xs font-semibold text-[#4f6977]">Probabilidade</th>
                     <th className="px-3 py-2 text-left text-xs font-semibold text-[#4f6977]">Avaliador</th>
@@ -497,7 +508,6 @@ export function ManagerCompanyRiskProfile({ clientId }: { clientId: string }) {
                   {payload.reports.map((report) => (
                     <tr key={report.id} className="border-b last:border-b-0">
                       <td className="px-3 py-2 text-[#123447]">{formatDateTime(report.createdAt)}</td>
-                      <td className="px-3 py-2 text-[#123447]">{report.sector ?? "-"}</td>
                       <td className="px-3 py-2 text-[#123447]">{report.overallScore.toFixed(2)}</td>
                       <td className="px-3 py-2">
                         <span

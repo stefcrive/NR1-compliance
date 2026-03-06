@@ -4,6 +4,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 import { isAdminApiAuthorized } from "@/lib/admin-auth";
+import { findNextAvailableBusinessSlot } from "@/lib/availability-scheduler";
+import { createClientNotification } from "@/lib/client-notifications";
 import {
   buildDrpsCalendarEvents,
   extractCalendarEventDetails,
@@ -88,6 +90,7 @@ const updateCalendarEventSchema = z
     markedAt: z.string().datetime().optional(),
     workshopDurationMinutes: z.number().int().min(15).max(24 * 60).optional(),
     eventLifecycle: z.enum(["provisory", "committed"]).optional(),
+    status: z.enum(["scheduled", "completed", "cancelled"]).optional(),
     content: detailTextSchema.nullable().optional(),
     preparationRequired: detailTextSchema.nullable().optional(),
     commitProvisoryReschedule: z.boolean().optional(),
@@ -100,6 +103,12 @@ const updateCalendarEventSchema = z
 const deleteCalendarEventSchema = z.object({
   eventId: z.string().uuid(),
 });
+
+function statusLabel(value: EditableCalendarEventRow["status"]): string {
+  if (value === "completed") return "concluido";
+  if (value === "cancelled") return "cancelado";
+  return "agendado";
+}
 
 function normalizeMetadata(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -151,11 +160,12 @@ function resolveTimeWindow(params: {
   return { startsAt: startDate.toISOString(), endsAt: endDate.toISOString() };
 }
 
-async function hasMasterCalendarConflict(params: {
+async function resolveTimeWindowWithoutMasterConflict(params: {
   eventId: string;
   startsAt: string;
   endsAt: string;
-}): Promise<boolean> {
+  autoArrangeForContinuousMeeting?: boolean;
+}): Promise<{ startsAt: string; endsAt: string } | null> {
   const [surveys, stored] = await Promise.all([
     loadSurveyRows(),
     loadStoredCalendarEvents(getSupabaseAdminClient()),
@@ -168,10 +178,10 @@ async function hasMasterCalendarConflict(params: {
   const nextStart = new Date(params.startsAt);
   const nextEnd = new Date(params.endsAt);
   if (Number.isNaN(nextStart.getTime()) || Number.isNaN(nextEnd.getTime())) {
-    return true;
+    return null;
   }
 
-  return masterEvents.some((candidate) => {
+  const hasConflict = masterEvents.some((candidate) => {
     if (candidate.id === params.eventId) return false;
     if (candidate.status === "cancelled") return false;
     const candidateStart = new Date(candidate.startsAt);
@@ -181,6 +191,24 @@ async function hasMasterCalendarConflict(params: {
     }
     return overlaps(nextStart, nextEnd, candidateStart, candidateEnd);
   });
+
+  if (!hasConflict) {
+    return { startsAt: nextStart.toISOString(), endsAt: nextEnd.toISOString() };
+  }
+  if (!params.autoArrangeForContinuousMeeting) return null;
+
+  const durationMinutes = Math.max(
+    15,
+    Math.round((nextEnd.getTime() - nextStart.getTime()) / (60 * 1000)),
+  );
+  const slot = findNextAvailableBusinessSlot({
+    startsAt: nextStart.toISOString(),
+    durationMinutes,
+    existingEvents: masterEvents.filter((item) => item.id !== params.eventId),
+    maxSearchDays: 365,
+  });
+  if (!slot) return null;
+  return slot;
 }
 
 async function loadSurveyRows() {
@@ -599,17 +627,25 @@ export async function PATCH(request: NextRequest) {
     parsed.markedAt !== undefined ||
     parsed.workshopDurationMinutes !== undefined
   ) {
-    const hasConflict = await hasMasterCalendarConflict({
+    const resolvedWindow = await resolveTimeWindowWithoutMasterConflict({
       eventId: currentResult.data.event_id,
       startsAt: nextStartsAt,
       endsAt: nextEndsAt,
+      autoArrangeForContinuousMeeting: currentResult.data.event_type === "continuous_meeting",
     });
-    if (hasConflict) {
+    if (!resolvedWindow) {
       return NextResponse.json(
         { error: "Selected date/time conflicts with another master calendar event." },
         { status: 409 },
       );
     }
+    parsed = {
+      ...parsed,
+      startsAt: resolvedWindow.startsAt,
+      endsAt: resolvedWindow.endsAt,
+      markedAt: undefined,
+      workshopDurationMinutes: undefined,
+    };
   }
 
   const mergedMetadata = normalizeMetadata(currentResult.data.metadata);
@@ -635,11 +671,12 @@ export async function PATCH(request: NextRequest) {
 
   const updatePayload = {
     ...(parsed.title !== undefined ? { title: parsed.title } : {}),
+    ...(parsed.status !== undefined ? { status: parsed.status } : {}),
     ...(parsed.startsAt !== undefined ||
     parsed.endsAt !== undefined ||
     parsed.markedAt !== undefined ||
     parsed.workshopDurationMinutes !== undefined
-      ? { starts_at: nextStartsAt, ends_at: nextEndsAt }
+      ? { starts_at: parsed.startsAt ?? nextStartsAt, ends_at: parsed.endsAt ?? nextEndsAt }
       : {}),
     ...(
       parsed.content !== undefined ||
@@ -698,6 +735,52 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ error: "Could not refresh committed event." }, { status: 500 });
     }
     finalEvent = refreshedResult.data;
+  }
+
+  const statusChanged = currentResult.data.status !== finalEvent.status;
+  const scheduleChanged =
+    currentResult.data.starts_at !== finalEvent.starts_at ||
+    currentResult.data.ends_at !== finalEvent.ends_at;
+
+  if ((statusChanged || scheduleChanged) && finalEvent.client_id) {
+    const title =
+      statusChanged && scheduleChanged
+        ? "Status e horario do evento atualizados"
+        : statusChanged
+          ? `Status do evento atualizado para ${statusLabel(finalEvent.status)}`
+          : "Data/horario do evento atualizados";
+    const message =
+      statusChanged && scheduleChanged
+        ? `O gestor atualizou o status e o horario de "${finalEvent.title}".`
+        : statusChanged
+          ? `O gestor atualizou "${finalEvent.title}" de ${statusLabel(currentResult.data.status)} para ${statusLabel(finalEvent.status)}.`
+          : `O gestor atualizou a data/horario de "${finalEvent.title}".`;
+
+    try {
+      await createClientNotification(supabase, {
+        clientId: finalEvent.client_id,
+        notificationType: "manager_calendar_event_status_changed",
+        title,
+        message,
+        metadata: {
+          eventId: finalEvent.event_id,
+          eventType: finalEvent.event_type,
+          title: finalEvent.title,
+          previousStartsAt: currentResult.data.starts_at,
+          previousEndsAt: currentResult.data.ends_at,
+          startsAt: finalEvent.starts_at,
+          endsAt: finalEvent.ends_at,
+          sourceClientProgramId: finalEvent.source_client_program_id,
+          scheduleChanged,
+          statusChanged,
+          previousStatus: currentResult.data.status,
+          status: finalEvent.status,
+          updatedBy: "manager",
+        },
+      });
+    } catch {
+      // Do not block event updates when notification persistence fails.
+    }
   }
 
   const updatedClientNameById = await loadClientNames(

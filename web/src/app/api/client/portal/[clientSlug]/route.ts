@@ -7,10 +7,14 @@ import {
   type MasterCalendarEvent,
 } from "@/lib/master-calendar";
 import {
-  DEFAULT_CONTINUOUS_PROGRAM_QUESTIONS,
   DEFAULT_CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCY,
   type ContinuousProgramMaterial,
 } from "@/lib/continuous-programs";
+import {
+  createEmptyContinuousProgramEvaluationSummary,
+  parseContinuousProgramEvaluationQuestions,
+  summarizeContinuousProgramEvaluations,
+} from "@/lib/continuous-program-evaluations";
 import { classifyScore, resolveRisk } from "@/lib/risk";
 import { slugify } from "@/lib/slug";
 import { isMissingColumnError, isMissingFunctionError, isMissingTableError } from "@/lib/supabase-errors";
@@ -137,6 +141,11 @@ type ProgramRow = {
   schedule_anchor_date?: string | null;
   evaluation_questions?: unknown;
   materials?: unknown;
+};
+
+type ProgramEvaluationRow = {
+  client_program_id: string;
+  answers: unknown;
 };
 
 type AvailabilityRequestRow = {
@@ -849,15 +858,6 @@ function parseAnnualPlanMonths(value: unknown): string[] {
   return Array.from(unique.values()).sort();
 }
 
-function parseEvaluationQuestions(value: unknown): string[] {
-  if (!Array.isArray(value)) return DEFAULT_CONTINUOUS_PROGRAM_QUESTIONS;
-  const normalized = value
-    .map((item) => (typeof item === "string" ? item.trim() : ""))
-    .filter((item) => item.length > 0)
-    .slice(0, 20);
-  return normalized.length > 0 ? normalized : DEFAULT_CONTINUOUS_PROGRAM_QUESTIONS;
-}
-
 function parseMaterials(value: unknown): ContinuousProgramMaterial[] {
   if (!Array.isArray(value)) return [];
   const materials: ContinuousProgramMaterial[] = [];
@@ -953,6 +953,8 @@ function parseSlots(value: unknown): AvailabilitySlot[] {
 function mapAssignedProgram(
   assignment: ClientProgramRow,
   programById: Map<string, ProgramRow>,
+  evaluationAnswersByAssignment: Map<string, unknown[]>,
+  evaluationsUnavailable: boolean,
 ) {
   const program = programById.get(assignment.program_id) ?? null;
   const scheduleFrequency = parseScheduleFrequency(
@@ -961,6 +963,14 @@ function mapAssignedProgram(
   const scheduleAnchorDate =
     parseIsoDate(assignment.schedule_anchor_date_override ?? program?.schedule_anchor_date) ??
     todayIsoDate();
+  const evaluationQuestions = parseContinuousProgramEvaluationQuestions(program?.evaluation_questions);
+  const evaluationSummary = evaluationsUnavailable
+    ? createEmptyContinuousProgramEvaluationSummary(evaluationQuestions.length)
+    : summarizeContinuousProgramEvaluations({
+        answerPayloads: evaluationAnswersByAssignment.get(assignment.client_program_id) ?? [],
+        questionCount: evaluationQuestions.length,
+      });
+
   return {
     id: assignment.client_program_id,
     programId: assignment.program_id,
@@ -973,7 +983,13 @@ function mapAssignedProgram(
     scheduleFrequency,
     scheduleAnchorDate,
     annualPlanMonths: parseAnnualPlanMonths(assignment.annual_plan_months),
-    evaluationQuestions: parseEvaluationQuestions(program?.evaluation_questions),
+    evaluationQuestions,
+    evaluationSummary: {
+      submissions: evaluationSummary.submissions,
+      averageByQuestion: evaluationSummary.averageByQuestion,
+      overallAverage: evaluationSummary.overallAverage,
+      unavailable: evaluationsUnavailable,
+    },
     materials: parseMaterials(program?.materials),
   };
 }
@@ -1280,7 +1296,35 @@ export async function GET(
   }
 
   const programById = new Map(programRows.map((row) => [row.program_id, row]));
-  const assignedPrograms = assignments.map((assignment) => mapAssignedProgram(assignment, programById));
+  const evaluationAnswersByAssignment = new Map<string, unknown[]>();
+  const assignmentIds = assignments.map((item) => item.client_program_id);
+  let evaluationsUnavailable = false;
+
+  if (assignmentIds.length > 0) {
+    const evaluationsResult = await supabase
+      .from("client_program_evaluations")
+      .select("client_program_id,answers")
+      .in("client_program_id", assignmentIds)
+      .returns<ProgramEvaluationRow[]>();
+
+    if (evaluationsResult.error) {
+      if (isMissingTableError(evaluationsResult.error, "client_program_evaluations")) {
+        evaluationsUnavailable = true;
+      } else {
+        return NextResponse.json({ error: "Could not load assigned program evaluations." }, { status: 500 });
+      }
+    } else {
+      for (const row of evaluationsResult.data ?? []) {
+        const list = evaluationAnswersByAssignment.get(row.client_program_id) ?? [];
+        list.push(row.answers);
+        evaluationAnswersByAssignment.set(row.client_program_id, list);
+      }
+    }
+  }
+
+  const assignedPrograms = assignments.map((assignment) =>
+    mapAssignedProgram(assignment, programById, evaluationAnswersByAssignment, evaluationsUnavailable),
+  );
 
   const drpsEvents = buildDrpsCalendarEvents(campaignsWithLinks);
   let storedEvents: MasterCalendarEvent[] = [];

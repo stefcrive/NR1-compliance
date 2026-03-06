@@ -15,6 +15,7 @@ export default async function ManagerAssignedContinuousProgramPage({
       clientId={clientId}
       assignmentId={assignmentId}
       fromHistory={resolvedSearchParams.from === "history"}
+      fromHome={resolvedSearchParams.from === "home"}
     />
   );
 }

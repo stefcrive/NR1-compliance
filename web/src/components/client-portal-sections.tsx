@@ -127,6 +127,12 @@ type ClientPortalPayload = {
     scheduleAnchorDate: string | null;
     annualPlanMonths?: string[];
     evaluationQuestions?: string[];
+    evaluationSummary?: {
+      submissions: number;
+      averageByQuestion: Array<number | null>;
+      overallAverage: number | null;
+      unavailable?: boolean;
+    };
     materials?: Array<{
       id: string;
       title: string;
@@ -241,11 +247,6 @@ type ClientPortalPayload = {
   }>;
 };
 
-type EvaluationEntry = {
-  createdAt: string;
-  scores: number[];
-};
-
 type SectorLink = {
   id: string;
   name: string;
@@ -306,6 +307,15 @@ function chronogramStatusBadge(value: "scheduled" | "completed" | "cancelled") {
     label: "Scheduled",
     className: "border-[#c8dce8] bg-[#edf5fa] text-[#2c546a]",
   };
+}
+
+function masterCalendarEventTypeLabel(
+  value: "drps_start" | "drps_close" | "continuous_meeting" | "blocked",
+) {
+  if (value === "drps_start") return "Janela DRPS";
+  if (value === "drps_close") return "Fechamento DRPS";
+  if (value === "continuous_meeting") return "Reuniao continua";
+  return "Bloqueio";
 }
 
 function fmtCurrency(value: number) {
@@ -1032,7 +1042,7 @@ export function ClientDiagnosticStatusSection({ clientSlug }: { clientSlug: stri
   return (
     <div className="space-y-6">
       <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
-        <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
           <h2 className="text-2xl font-semibold text-[#141d24]">Diagnosticos DRPS (status e resultados)</h2>
           <div className="flex flex-wrap items-center gap-2">
             <button
@@ -1204,21 +1214,27 @@ export function ClientDiagnosticAggregateResultsSection({
   clientSlug,
   campaignId,
   fromHistory = false,
+  fromReports = false,
   managerClientId,
   managerClientName,
   managerFromHome = false,
+  managerFromHistory = false,
   sectorFilter,
 }: {
   clientSlug: string;
   campaignId: string;
   fromHistory?: boolean;
+  fromReports?: boolean;
   managerClientId?: string;
   managerClientName?: string | null;
   managerFromHome?: boolean;
+  managerFromHistory?: boolean;
   sectorFilter?: string;
 }) {
   const { data: aggregateData, isLoading: isLoadingAggregateMeta } = useClientPortalData(clientSlug, campaignId, 0);
   const campaignLabel = aggregateData?.selectedCampaign?.name ?? "Resultados do diagnostico";
+  const managerBreadcrumbClientLabel =
+    managerClientName?.trim() || aggregateData?.client.companyName || "Cliente";
   const sectorOptions = useMemo(() => {
     const sectors = aggregateData?.dashboard?.sectors ?? [];
     return sectors
@@ -1265,6 +1281,57 @@ export function ClientDiagnosticAggregateResultsSection({
   return (
     <div className="space-y-6">
       <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+        <nav className="text-xs text-[#4f6977]">
+          {managerClientId ? (
+            managerFromHome ? (
+              <>
+                <Link href="/manager" className="text-[#0f5b73]">
+                  Home
+                </Link>{" "}
+                / <span>{campaignLabel}</span> / <span>Resultados</span>
+              </>
+            ) : managerFromHistory ? (
+              <>
+                <Link href="/manager/history" className="text-[#0f5b73]">
+                  Historico
+                </Link>{" "}
+                / <span>{campaignLabel}</span> / <span>Resultados</span>
+              </>
+            ) : (
+              <>
+                <Link href="/manager/clients" className="text-[#0f5b73]">
+                  Client area
+                </Link>{" "}
+                /{" "}
+                <Link href={`/manager/clients/${managerClientId}`} className="text-[#0f5b73]">
+                  {managerBreadcrumbClientLabel}
+                </Link>{" "}
+                / <span>{campaignLabel}</span> / <span>Resultados</span>
+              </>
+            )
+          ) : fromHistory ? (
+            <>
+              <Link href={`/client/${clientSlug}/history`} className="text-[#1b2832]">
+                Historico
+              </Link>{" "}
+              / <span>{campaignLabel}</span> / <span>Resultados</span>
+            </>
+          ) : fromReports ? (
+            <>
+              <Link href={`/client/${clientSlug}/reports`} className="text-[#1b2832]">
+                Reports
+              </Link>{" "}
+              / <span>{campaignLabel}</span> / <span>Resultados</span>
+            </>
+          ) : (
+            <>
+              <Link href={`/client/${clientSlug}/company`} className="text-[#1b2832]">
+                Home
+              </Link>{" "}
+              / <span>{campaignLabel}</span> / <span>Resultados</span>
+            </>
+          )}
+        </nav>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h2 className="text-2xl font-semibold text-[#141d24]">DRPS Results Report</h2>
           {managerRawDataDownloadHref ? (
@@ -1314,9 +1381,11 @@ export function ClientDiagnosticAggregateResultsSection({
             clientSlug={clientSlug}
             campaignId={campaignId}
             fromHistory={fromHistory}
+            fromReports={fromReports}
             managerClientId={managerClientId}
             managerClientName={managerClientName}
             managerFromHome={managerFromHome}
+            managerFromHistory={managerFromHistory}
             embeddedView
           />
         </section>
@@ -1366,9 +1435,11 @@ export function ClientDiagnosticAggregateResultsSection({
               clientSlug={clientSlug}
               campaignId={campaignId}
               fromHistory={fromHistory}
+              fromReports={fromReports}
               managerClientId={managerClientId}
               managerClientName={managerClientName}
               managerFromHome={managerFromHome}
+              managerFromHistory={managerFromHistory}
               sectorFilter={effectivePerSector}
               embeddedView
             />
@@ -1383,18 +1454,22 @@ export function ClientDiagnosticResultsSection({
   clientSlug,
   campaignId,
   fromHistory = false,
+  fromReports = false,
   managerClientId,
   managerClientName,
   managerFromHome = false,
+  managerFromHistory = false,
   sectorFilter,
   embeddedView = false,
 }: {
   clientSlug: string;
   campaignId: string;
   fromHistory?: boolean;
+  fromReports?: boolean;
   managerClientId?: string;
   managerClientName?: string | null;
   managerFromHome?: boolean;
+  managerFromHistory?: boolean;
   sectorFilter?: string;
   embeddedView?: boolean;
 }) {
@@ -2189,6 +2264,13 @@ export function ClientDiagnosticResultsSection({
                   </Link>{" "}
                   / <span>{campaign?.name ?? "Diagnostico"}</span> / <span>Resultados</span>
                 </>
+              ) : managerFromHistory ? (
+                <>
+                  <Link href="/manager/history" className="text-[#0f5b73]">
+                    Historico
+                  </Link>{" "}
+                  / <span>{campaign?.name ?? "Diagnostico"}</span> / <span>Resultados</span>
+                </>
               ) : (
                 <>
                   <Link href="/manager/clients" className="text-[#0f5b73]">
@@ -2207,6 +2289,13 @@ export function ClientDiagnosticResultsSection({
                   Historico
                 </Link>{" "}
                 / <span>{campaign?.name ?? "Diagnostico"}</span>
+              </>
+            ) : fromReports ? (
+              <>
+                <Link href={`/client/${clientSlug}/reports`} className="text-[#1b2832]">
+                  Reports
+                </Link>{" "}
+                / <span>{campaign?.name ?? "Diagnostico"}</span> / <span>Resultados</span>
               </>
             ) : (
               <>
@@ -3139,6 +3228,10 @@ export function ClientProgramsListSection({ clientSlug }: { clientSlug: string }
   if (error || !data) return <p className="text-sm text-red-600">{error || "Processos indisponiveis."}</p>;
 
   const assigned = data.assignedPrograms ?? [];
+  const scheduledMasterCalendarEvents = (data.masterCalendar?.events ?? [])
+    .filter((event) => event.status === "scheduled")
+    .slice()
+    .sort((left, right) => new Date(left.startsAt).getTime() - new Date(right.startsAt).getTime());
 
   return (
     <div className="space-y-6">
@@ -3217,39 +3310,73 @@ export function ClientProgramsListSection({ clientSlug }: { clientSlug: string }
         </div>
       </section>
 
-      <section className="grid gap-4 md:grid-cols-2">
-        {assigned.length === 0 ? (
-          <p className="text-sm text-[#5a7383]">Nenhum processo continuo atribuido.</p>
-        ) : (
-          assigned.map((assignment) => (
-            <article key={assignment.id} className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
-              <p className="text-xs uppercase tracking-[0.15em] text-[#55707f]">{assignment.id}</p>
-              <h3 className="mt-1 text-xl font-semibold text-[#141d24]">{assignment.programTitle}</h3>
-              {assignment.programDescription ? (
-                <p className="mt-1 text-sm text-[#3e5b6b]">{assignment.programDescription}</p>
-              ) : null}
-              <p className="mt-2 text-xs text-[#55707f]">
-                {assignment.status} | Aplicado em {fmtDate(assignment.deployedAt)} | Frequencia{" "}
-                {assignment.scheduleFrequency || "-"}
-              </p>
-              <Link
-                href={`/client/${clientSlug}/programs/${assignment.programId}?assignmentId=${assignment.id}`}
-                className="mt-4 inline-flex rounded-full border border-[#c8c8c8] px-4 py-2 text-xs font-semibold text-[#1b2832]"
-              >
-                Abrir detalhes
-              </Link>
-            </article>
-          ))
-        )}
+      <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+        <h3 className="text-lg font-semibold text-[#141d24]">
+          Calendario mestre ({scheduledMasterCalendarEvents.length} eventos agendados)
+        </h3>
+        <p className="mt-1 text-xs text-[#55707f]">
+          Todos os eventos com status scheduled no calendario deste cliente.
+        </p>
+        {data.masterCalendar?.calendarEventsUnavailable ? (
+          <p className="mt-2 text-xs text-[#8a5b2d]">
+            Eventos de calendario indisponiveis no momento. Exibindo somente marcos DRPS quando disponiveis.
+          </p>
+        ) : null}
+        <div className="mt-3 overflow-x-auto rounded-xl border border-[#d8e4ee]">
+          <table className="nr-table min-w-full text-xs">
+            <thead className="bg-[#f3f8fb]">
+              <tr className="border-b border-[#d8e4ee]">
+                <th className="px-3 py-2 text-left font-semibold text-[#244354]">Inicio</th>
+                <th className="px-3 py-2 text-left font-semibold text-[#244354]">Fim</th>
+                <th className="px-3 py-2 text-left font-semibold text-[#244354]">Duracao</th>
+                <th className="px-3 py-2 text-left font-semibold text-[#244354]">Tipo</th>
+                <th className="px-3 py-2 text-left font-semibold text-[#244354]">Evento</th>
+                <th className="px-3 py-2 text-left font-semibold text-[#244354]">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {scheduledMasterCalendarEvents.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="px-3 py-3 text-xs text-[#5a7383]">
+                    Nenhum evento agendado no calendario mestre.
+                  </td>
+                </tr>
+              ) : (
+                scheduledMasterCalendarEvents.map((event) => {
+                  const status = chronogramStatusBadge(event.status);
+                  return (
+                    <tr key={event.id} className="border-b border-[#e2edf3] bg-white">
+                      <td className="px-3 py-2 text-[#123447]">{fmtDateTime(event.startsAt)}</td>
+                      <td className="px-3 py-2 text-[#123447]">{fmtDateTime(event.endsAt)}</td>
+                      <td className="px-3 py-2 text-[#123447]">{fmtDuration(event.startsAt, event.endsAt)}</td>
+                      <td className="px-3 py-2 text-[#123447]">{masterCalendarEventTypeLabel(event.eventType)}</td>
+                      <td className="px-3 py-2 text-[#123447]">{event.title}</td>
+                      <td className="px-3 py-2">
+                        <span
+                          className={`inline-flex rounded-full border px-2 py-0.5 font-semibold ${status.className}`}
+                        >
+                          {status.label}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
       </section>
+
     </div>
   );
 }
 
 export function ClientReportsSection({ clientSlug }: { clientSlug: string }) {
+  const searchParams = useSearchParams();
   const { data, isLoading, error } = useClientPortalData(clientSlug);
   const [downloadingReportId, setDownloadingReportId] = useState<string | null>(null);
   const [reportFeedback, setReportFeedback] = useState("");
+  const detailSource = searchParams.get("from") === "history" ? "history" : "reports";
 
   async function downloadReport(reportId: string) {
     setDownloadingReportId(reportId);
@@ -3347,7 +3474,7 @@ export function ClientReportsSection({ clientSlug }: { clientSlug: string }) {
                     </td>
                     <td className="px-2 py-2">
                       <Link
-                        href={`/client/${clientSlug}/diagnostic/${campaign.id}`}
+                        href={`/client/${clientSlug}/diagnostic/${campaign.id}?from=${detailSource}`}
                         className="rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
                       >
                         Ver resultados
@@ -3434,7 +3561,7 @@ export function ClientReportsSection({ clientSlug }: { clientSlug: string }) {
                     <td className="px-2 py-2">{program.scheduleFrequency || "-"}</td>
                     <td className="px-2 py-2">
                       <Link
-                        href={`/client/${clientSlug}/programs/${program.programId}?assignmentId=${program.id}`}
+                        href={`/client/${clientSlug}/programs/${program.programId}?assignmentId=${program.id}&from=${detailSource}`}
                         className="rounded-full border border-[#c8c8c8] px-3 py-1 text-xs font-semibold text-[#1b2832]"
                       >
                         Abrir
@@ -3513,8 +3640,11 @@ export function ClientProgramDetailsSection({
   programId: string;
 }) {
   const searchParams = useSearchParams();
-  const fromHistory = searchParams.get("from") === "history";
-  const { data, isLoading, error } = useClientPortalData(clientSlug);
+  const fromSource = searchParams.get("from");
+  const fromHistory = fromSource === "history";
+  const fromReports = fromSource === "reports";
+  const [reloadToken, setReloadToken] = useState(0);
+  const { data, isLoading, error } = useClientPortalData(clientSlug, undefined, reloadToken);
   const fallbackProgram = findProgramById(programId);
   const requestedAssignmentId = searchParams.get("assignmentId");
   const assignedFromApi = useMemo(
@@ -3574,49 +3704,54 @@ export function ClientProgramDetailsSection({
       null
     );
   }, [committedAssignmentMeetings]);
-  const evaluationScopeId = requestedAssignmentId ?? programId;
-  const storageKey = `nr1-program-evals:${clientSlug}:${evaluationScopeId}`;
   const [scores, setScores] = useState<Record<number, number>>({});
-  const [entries, setEntries] = useState<EvaluationEntry[]>(() => {
-    if (typeof window === "undefined") return [];
-    try {
-      const raw = window.localStorage.getItem(storageKey);
-      if (!raw) return [];
-      const parsed = JSON.parse(raw) as EvaluationEntry[];
-      return Array.isArray(parsed) ? parsed : [];
-    } catch {
-      return [];
-    }
-  });
   const [evaluationError, setEvaluationError] = useState("");
+  const [isSubmittingEvaluation, setIsSubmittingEvaluation] = useState(false);
+
+  const evaluationSummary = assignedFromApi?.evaluationSummary ?? null;
+  const submissionsCount = evaluationSummary?.submissions ?? 0;
 
   const averageByQuestion = useMemo(() => {
-    if (evaluationQuestions.length === 0 || entries.length === 0) return [] as number[];
-    return evaluationQuestions.map((_, index) => {
-      const values = entries.map((entry) => entry.scores[index]).filter((value) => typeof value === "number");
-      if (values.length === 0) return 0;
-      return values.reduce((acc, value) => acc + value, 0) / values.length;
-    });
-  }, [entries, evaluationQuestions]);
+    return evaluationQuestions.map((_, index) => evaluationSummary?.averageByQuestion[index] ?? null);
+  }, [evaluationQuestions, evaluationSummary?.averageByQuestion]);
 
-  const overallAverage = useMemo(() => {
-    if (averageByQuestion.length === 0) return 0;
-    return averageByQuestion.reduce((acc, value) => acc + value, 0) / averageByQuestion.length;
-  }, [averageByQuestion]);
+  const overallAverage = evaluationSummary?.overallAverage ?? null;
 
-  function submitEvaluation(event: FormEvent<HTMLFormElement>) {
+  async function submitEvaluation(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (evaluationQuestions.length === 0) return;
+    if (evaluationQuestions.length === 0 || !assignedFromApi) return;
     const answers = evaluationQuestions.map((_, index) => scores[index] ?? 0);
     if (answers.some((value) => value < 1 || value > 5)) {
       setEvaluationError("Answer all evaluation questions from 1 to 5.");
       return;
     }
-    const nextEntries = [...entries, { createdAt: new Date().toISOString(), scores: answers }];
-    setEntries(nextEntries);
-    localStorage.setItem(storageKey, JSON.stringify(nextEntries));
-    setScores({});
-    setEvaluationError("");
+
+    setIsSubmittingEvaluation(true);
+    try {
+      const response = await fetch(
+        `/api/client/portal/${clientSlug}/programs/${encodeURIComponent(assignedFromApi.id)}/evaluations`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ answers }),
+        },
+      );
+
+      const payload = (await response.json().catch(() => ({}))) as { error?: string };
+      if (!response.ok) {
+        throw new Error(payload.error ?? "Could not submit evaluation.");
+      }
+
+      setScores({});
+      setEvaluationError("");
+      setReloadToken((current) => current + 1);
+    } catch (submitError) {
+      setEvaluationError(
+        submitError instanceof Error ? submitError.message : "Could not submit evaluation.",
+      );
+    } finally {
+      setIsSubmittingEvaluation(false);
+    }
   }
 
   if (isLoading) {
@@ -3638,6 +3773,13 @@ export function ClientProgramDetailsSection({
           <>
             <Link href={`/client/${clientSlug}/history`} className="text-[#1b2832]">
               Historico
+            </Link>{" "}
+            / <span>{displayTitle}</span>
+          </>
+        ) : fromReports ? (
+          <>
+            <Link href={`/client/${clientSlug}/reports`} className="text-[#1b2832]">
+              Reports
             </Link>{" "}
             / <span>{displayTitle}</span>
           </>
@@ -3815,9 +3957,10 @@ export function ClientProgramDetailsSection({
             {evaluationError ? <p className="text-sm text-red-600">{evaluationError}</p> : null}
             <button
               type="submit"
+              disabled={isSubmittingEvaluation}
               className="rounded-full bg-[#131313] px-4 py-2 text-sm font-semibold text-white"
             >
-              Submit evaluation
+              {isSubmittingEvaluation ? "Submitting..." : "Submit evaluation"}
             </button>
           </form>
         </section>
@@ -3826,23 +3969,32 @@ export function ClientProgramDetailsSection({
       {evaluationQuestions.length > 0 ? (
         <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
           <h3 className="text-lg font-semibold text-[#141d24]">Effectiveness metrics</h3>
-          <p className="mt-1 text-sm text-[#475660]">Submissions: {entries.length}</p>
+          {evaluationSummary?.unavailable ? (
+            <p className="mt-1 text-sm text-amber-700">
+              Evaluation history is unavailable until migration
+              20260306013000_client_program_evaluations_and_online_activity_seed.sql is applied.
+            </p>
+          ) : null}
+          <p className="mt-1 text-sm text-[#475660]">Submissions: {submissionsCount}</p>
           <p className="mt-1 text-sm text-[#475660]">
-            Overall average: {entries.length ? overallAverage.toFixed(2) : "-"} / 5.00
+            Overall average: {overallAverage !== null ? overallAverage.toFixed(2) : "-"} / 5.00
           </p>
           <div className="mt-4 space-y-3">
             {evaluationQuestions.map((question, index) => {
-              const avg = averageByQuestion[index] ?? 0;
+              const avg = averageByQuestion[index] ?? null;
               return (
                 <div key={question} className="space-y-1">
                   <div className="flex justify-between text-sm">
                     <span className="text-[#475660]">{question}</span>
                     <span className="font-semibold text-[#141d24]">
-                      {entries.length ? avg.toFixed(2) : "-"}
+                      {avg !== null ? avg.toFixed(2) : "-"}
                     </span>
                   </div>
                   <div className="h-2 rounded-full bg-[#edf3f7]">
-                    <div className="h-2 rounded-full bg-[#131313]" style={{ width: `${(avg / 5) * 100}%` }} />
+                    <div
+                      className="h-2 rounded-full bg-[#131313]"
+                      style={{ width: `${((avg ?? 0) / 5) * 100}%` }}
+                    />
                   </div>
                 </div>
               );

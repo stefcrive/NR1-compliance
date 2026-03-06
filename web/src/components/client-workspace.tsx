@@ -796,17 +796,13 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
     return calendarEventLinkFor(selectedCalendarEvent);
   }, [calendarEventLinkFor, selectedCalendarEvent]);
 
-  const calendarEventLinkById = useMemo(() => {
-    const map = new Map<
-      string,
-      { href: string; label: string }
-    >();
-    for (const event of calendarEvents) {
-      const link = calendarEventLinkFor(event);
-      if (link) map.set(event.id, link);
-    }
-    return map;
-  }, [calendarEventLinkFor, calendarEvents]);
+  const selectedCalendarEventRecordHref = useMemo(
+    () =>
+      selectedCalendarEvent
+        ? `/client/${encodeURIComponent(clientSlug)}/history/events/${encodeURIComponent(selectedCalendarEvent.id)}`
+        : null,
+    [clientSlug, selectedCalendarEvent],
+  );
 
   if (isLoading) {
     return <p className="text-sm text-[#3d5a69]">Carregando portal...</p>;
@@ -1441,7 +1437,6 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
               </p>
               <div className="mt-2 space-y-1.5">
                 {day.events.slice(0, MAX_CALENDAR_EVENTS_PER_DAY).map((event) => {
-                  const eventLink = calendarEventLinkById.get(event.id) ?? null;
                   const cardClass = `rounded-md border px-1.5 py-1 ${
                     event.type === "start"
                       ? "border-[#b9dfc6] bg-[#eaf8ef] text-[#1b5437]"
@@ -1453,25 +1448,6 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
                             : "border-[#b8d8e6] bg-[#edf7fb] text-[#1f5f79]"
                           : "border-[#efc1d6] bg-[#fcecf4] text-[#7a2755]"
                   }`;
-                  if (eventLink) {
-                    return (
-                      <div key={event.id} className={cardClass}>
-                        <Link
-                          href={eventLink.href}
-                          title={`${event.title} (${fmt(event.startsAt)})`}
-                          className="block min-w-0 text-left hover:underline"
-                        >
-                          <p className="truncate text-[10px] font-semibold">{event.title}</p>
-                          <p className="truncate text-[10px] opacity-90">{event.timeLabel}</p>
-                          <p className="truncate text-[10px] opacity-90">{event.companyLabel}</p>
-                          <p className="truncate text-[10px] opacity-90">
-                            {event.typeLabel}
-                            {event.lifecycleLabel ? ` . ${event.lifecycleLabel}` : ""}
-                          </p>
-                        </Link>
-                      </div>
-                    );
-                  }
                   return (
                     <div key={event.id} className={cardClass}>
                       <button
@@ -1520,6 +1496,27 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
               </button>
             </div>
 
+            {selectedCalendarEventRecordHref || selectedCalendarEventLink ? (
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                {selectedCalendarEventRecordHref ? (
+                  <Link
+                    href={selectedCalendarEventRecordHref}
+                    className="inline-flex rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
+                  >
+                    Event record
+                  </Link>
+                ) : null}
+                {selectedCalendarEventLink ? (
+                  <Link
+                    href={selectedCalendarEventLink.href}
+                    className="inline-flex rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
+                  >
+                    {selectedCalendarEventLink.label}
+                  </Link>
+                ) : null}
+              </div>
+            ) : null}
+
             <div className="mt-3 grid gap-3 md:grid-cols-2">
               <div className="rounded-lg border border-[#e0e9ee] bg-[#f7fbfd] p-3">
                 <p className="text-xs text-[#4d6a79]">Tipo</p>
@@ -1557,21 +1554,6 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
                 <p className="mt-1 text-sm text-[#123447]">{selectedCalendarEventPreparation}</p>
               </div>
             </div>
-
-            {selectedCalendarEventLink ? (
-              <div className="mt-3">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSelectedCalendarEventId(null);
-                    router.push(selectedCalendarEventLink.href);
-                  }}
-                  className="rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
-                >
-                  {selectedCalendarEventLink.label}
-                </button>
-              </div>
-            ) : null}
           </article>
         </div>
       ) : null}

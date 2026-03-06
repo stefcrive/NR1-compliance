@@ -237,7 +237,7 @@ export function ManagerHomeOverview() {
       const assignment =
         activeContinuousPrograms.find((item) => item.id === event.sourceClientProgramId) ?? null;
       if (!assignment) return null;
-      return `/manager/clients/${assignment.clientId}/assigned-continuous/${assignment.id}`;
+      return `/manager/clients/${assignment.clientId}/assigned-continuous/${assignment.id}?from=home`;
     }
     return null;
   }
@@ -352,7 +352,7 @@ export function ManagerHomeOverview() {
                       <tr key={program.id} className="border-b">
                         <td className="px-2 py-2">
                           <Link
-                            href={`/manager/clients/${program.clientId}/assigned-continuous/${program.id}`}
+                            href={`/manager/clients/${program.clientId}/assigned-continuous/${program.id}?from=home`}
                             className="font-semibold text-[#123447] hover:text-[#0f5b73] hover:underline"
                           >
                             {program.programTitle}

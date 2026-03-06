@@ -14,6 +14,7 @@ export default async function ClientDiagnosticResultPage({
       clientSlug={clientSlug}
       campaignId={campaignId}
       fromHistory={resolvedSearchParams.from === "history"}
+      fromReports={resolvedSearchParams.from === "reports"}
       sectorFilter={resolvedSearchParams.sector}
     />
   );

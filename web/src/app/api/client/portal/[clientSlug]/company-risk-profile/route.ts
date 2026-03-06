@@ -7,6 +7,7 @@ import {
 } from "@/lib/auth/session";
 import {
   type CompanyRiskProbabilityClass,
+  type CompanyRiskProfileFactorScore,
   COMPANY_RISK_PROFILE_FACTORS,
   COMPANY_RISK_PROFILE_QUESTIONNAIRE_VERSION,
   COMPANY_RISK_PROFILE_QUESTIONS,
@@ -56,6 +57,14 @@ type ReportRow = {
   overall_score: number | string;
   overall_class: string;
   created_at: string;
+};
+
+type ReportHistoryRow = ReportRow & {
+  answers_json: unknown;
+  factor_scores: unknown;
+  summary_counts: Record<string, number> | null;
+  created_by_role: string;
+  created_by_email: string | null;
 };
 
 const REMINDER_INTERVAL_DAYS = 7;
@@ -146,6 +155,44 @@ function mapReportRow(row: ReportRow | null) {
     notes: row.notes,
     overallScore: parseOverallScore(row.overall_score),
     overallClass: normalizeOverallClass(row.overall_class),
+    createdAt: row.created_at,
+  };
+}
+
+function normalizeSummaryCounts(value: Record<string, number> | null | undefined) {
+  return {
+    baixa: Number.isFinite(value?.baixa) ? Number(value?.baixa) : 0,
+    media: Number.isFinite(value?.media) ? Number(value?.media) : 0,
+    alta: Number.isFinite(value?.alta) ? Number(value?.alta) : 0,
+  };
+}
+
+function normalizeFactorScores(value: unknown): CompanyRiskProfileFactorScore[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(
+    (item): item is CompanyRiskProfileFactorScore =>
+      Boolean(
+        item &&
+          typeof item === "object" &&
+          typeof (item as { factorKey?: unknown }).factorKey === "string" &&
+          typeof (item as { factorLabel?: unknown }).factorLabel === "string",
+      ),
+  );
+}
+
+function mapReportHistoryRow(row: ReportHistoryRow) {
+  return {
+    id: row.id,
+    questionnaireVersion: row.questionnaire_version,
+    sector: row.sector,
+    notes: row.notes,
+    answers: normalizeCompanyRiskProfileAnswers(row.answers_json, { allowIncomplete: true }),
+    factorScores: normalizeFactorScores(row.factor_scores),
+    summaryCounts: normalizeSummaryCounts(row.summary_counts),
+    overallScore: parseOverallScore(row.overall_score),
+    overallClass: normalizeOverallClass(row.overall_class),
+    createdByRole: row.created_by_role === "client" ? "client" : "manager",
+    createdByEmail: row.created_by_email,
     createdAt: row.created_at,
   };
 }
@@ -273,6 +320,29 @@ async function loadLatestCompletedReport(clientId: string) {
   return { row: result.data ?? null, unavailable: false };
 }
 
+async function loadCompletedReports(clientId: string) {
+  const supabase = getSupabaseAdminClient();
+  const result = await supabase
+    .from("client_company_risk_profile_reports")
+    .select(
+      "id,questionnaire_version,sector,notes,answers_json,factor_scores,summary_counts,overall_score,overall_class,created_by_role,created_by_email,created_at",
+    )
+    .eq("client_id", clientId)
+    .eq("created_by_role", "client")
+    .order("created_at", { ascending: false })
+    .limit(200)
+    .returns<ReportHistoryRow[]>();
+
+  if (result.error) {
+    if (isMissingTableError(result.error, "client_company_risk_profile_reports")) {
+      return { rows: [], unavailable: true };
+    }
+    throw result.error;
+  }
+
+  return { rows: result.data ?? [], unavailable: false };
+}
+
 async function upsertProgress(clientId: string, payload: Record<string, unknown>) {
   const supabase = getSupabaseAdminClient();
   const upsertResult = await supabase
@@ -308,6 +378,7 @@ export async function GET(
   }
 
   const touchReminder = request.nextUrl.searchParams.get("touchReminder") !== "0";
+  const includeReports = request.nextUrl.searchParams.get("includeReports") === "1";
 
   try {
     const client = await loadClientBySlug(clientSlug);
@@ -315,9 +386,10 @@ export async function GET(
       return NextResponse.json({ error: "Client not found." }, { status: 404 });
     }
 
-    const [progressResult, latestReportResult] = await Promise.all([
+    const [progressResult, latestReportResult, reportsResult] = await Promise.all([
       loadProgress(client.client_id),
       loadLatestCompletedReport(client.client_id),
+      includeReports ? loadCompletedReports(client.client_id) : Promise.resolve({ rows: [], unavailable: false }),
     ]);
 
     const progress = mapProgressRow(progressResult.row);
@@ -373,8 +445,9 @@ export async function GET(
       },
       progress,
       latestReport,
+      reports: includeReports ? reportsResult.rows.map(mapReportHistoryRow) : [],
       progressUnavailable: progressResult.unavailable,
-      reportsUnavailable: latestReportResult.unavailable,
+      reportsUnavailable: latestReportResult.unavailable || reportsResult.unavailable,
     });
   } catch {
     return NextResponse.json({ error: "Could not load company risk profile questionnaire." }, { status: 500 });

@@ -73,7 +73,9 @@ const cadenceFrequencyValues = [
   "custom",
 ] as const;
 const annualPlanMonthRegex = /^\d{4}-(0[1-9]|1[0-2])$/;
-const annualPlanCandidateHoursUtc = [13, 17, 19] as const;
+// 09:00-18:00 in America/Sao_Paulo corresponds to 12:00-21:00 UTC.
+const annualPlanBusinessStartHourUtc = 12;
+const annualPlanBusinessEndHourUtc = 21;
 
 function todayIsoDate(): string {
   return new Date().toISOString().slice(0, 10);
@@ -246,9 +248,54 @@ function filterCurrentAssignmentProvisoryEvents(
   });
 }
 
+function buildAnnualPlanCandidateHoursUtc(preferredHour: number): number[] {
+  const minHour = annualPlanBusinessStartHourUtc;
+  const maxHour = annualPlanBusinessEndHourUtc - 1;
+  const clampedPreferred = Math.min(maxHour, Math.max(minHour, preferredHour));
+  const fallback: number[] = [];
+  for (let hour = minHour; hour <= maxHour; hour += 1) {
+    if (hour === clampedPreferred) continue;
+    fallback.push(hour);
+  }
+  return [clampedPreferred, ...fallback];
+}
+
+function cadenceIntervalDays(scheduleFrequency: string): number {
+  switch (scheduleFrequency) {
+    case "weekly":
+      return 7;
+    case "biweekly":
+      return 14;
+    case "monthly":
+      return 30;
+    case "quarterly":
+      return 90;
+    case "semiannual":
+      return 182;
+    case "annual":
+      return 365;
+    case "custom":
+      return 21;
+    default:
+      return 14;
+  }
+}
+
+function cadenceMeetingsPerMonth(scheduleFrequency: string): number {
+  switch (scheduleFrequency) {
+    case "weekly":
+      return 4;
+    case "biweekly":
+      return 2;
+    default:
+      return 1;
+  }
+}
+
 function buildAnnualPlanProvisorySlots(params: {
   annualPlanMonths: string[];
   deployedAt: string | null;
+  scheduleFrequency: string;
   existingEvents: MasterCalendarEvent[];
   durationMinutes?: number;
 }): AvailabilitySlot[] {
@@ -257,11 +304,15 @@ function buildAnnualPlanProvisorySlots(params: {
   const deployedDate = params.deployedAt ? new Date(params.deployedAt) : null;
   const hasDeployedDate = deployedDate && !Number.isNaN(deployedDate.getTime());
   const preferredDay = hasDeployedDate ? Math.min(28, Math.max(1, deployedDate.getUTCDate())) : 1;
-  const preferredHour = hasDeployedDate ? deployedDate.getUTCHours() : annualPlanCandidateHoursUtc[0];
-  const preferredMinute = hasDeployedDate ? deployedDate.getUTCMinutes() : 0;
-  const candidateHours = [preferredHour, ...annualPlanCandidateHoursUtc.filter((hour) => hour !== preferredHour)];
+  const preferredHour = hasDeployedDate ? deployedDate.getUTCHours() : annualPlanBusinessStartHourUtc;
+  const candidateHours = buildAnnualPlanCandidateHoursUtc(preferredHour);
+  const preferredMinute = 0;
   const durationMinutes = params.durationMinutes ?? 60;
+  const meetingsPerMonth = cadenceMeetingsPerMonth(params.scheduleFrequency);
+  const intervalDays = cadenceIntervalDays(params.scheduleFrequency);
   const slotDurationMs = durationMinutes * 60 * 1000;
+  const dayDurationMs = 24 * 60 * 60 * 1000;
+  const minGapMs = Math.max(1, intervalDays - 1) * dayDurationMs;
   const minStart = new Date();
   minStart.setUTCDate(minStart.getUTCDate() + 1);
 
@@ -271,31 +322,44 @@ function buildAnnualPlanProvisorySlots(params: {
     if (!parsed) continue;
 
     const daysInMonth = daysInUtcMonth(parsed.year, parsed.monthIndex);
-    let chosen: AvailabilitySlot | null = null;
+    const monthlyGenerated: AvailabilitySlot[] = [];
+    let searchStartDay = preferredDay;
 
-    for (let dayOffset = 0; dayOffset < daysInMonth && !chosen; dayOffset += 1) {
-      const day = ((preferredDay - 1 + dayOffset) % daysInMonth) + 1;
-      for (const hour of candidateHours) {
-        const start = new Date(
-          Date.UTC(parsed.year, parsed.monthIndex, day, hour, preferredMinute, 0, 0),
-        );
-        if (start.getUTCMonth() !== parsed.monthIndex) continue;
-        if (isWeekendUtc(start) || start <= minStart) continue;
-        const end = new Date(start.getTime() + slotDurationMs);
-        const candidate = { startsAt: start.toISOString(), endsAt: end.toISOString() };
-        if (slotOverlapsMasterCalendar(candidate, params.existingEvents)) continue;
-        const hasGeneratedOverlap = generated.some((slot) =>
-          overlaps(new Date(slot.startsAt), new Date(slot.endsAt), start, end),
-        );
-        if (hasGeneratedOverlap) continue;
-        chosen = candidate;
-        break;
+    const tryPick = (enforceGap: boolean): AvailabilitySlot | null => {
+      for (let dayOffset = 0; dayOffset < daysInMonth; dayOffset += 1) {
+        const day = ((searchStartDay - 1 + dayOffset) % daysInMonth) + 1;
+        for (const hour of candidateHours) {
+          const start = new Date(
+            Date.UTC(parsed.year, parsed.monthIndex, day, hour, preferredMinute, 0, 0),
+          );
+          if (start.getUTCMonth() !== parsed.monthIndex) continue;
+          if (isWeekendUtc(start) || start <= minStart) continue;
+          const end = new Date(start.getTime() + slotDurationMs);
+          const candidate = { startsAt: start.toISOString(), endsAt: end.toISOString() };
+          if (slotOverlapsMasterCalendar(candidate, params.existingEvents)) continue;
+          const hasGeneratedOverlap = [...generated, ...monthlyGenerated].some((slot) =>
+            overlaps(new Date(slot.startsAt), new Date(slot.endsAt), start, end),
+          );
+          if (hasGeneratedOverlap) continue;
+          if (enforceGap && monthlyGenerated.length > 0) {
+            const lastStart = new Date(monthlyGenerated[monthlyGenerated.length - 1].startsAt);
+            if (start.getTime() - lastStart.getTime() < minGapMs) continue;
+          }
+          searchStartDay = day + intervalDays;
+          return candidate;
+        }
       }
+      return null;
+    };
+
+    for (let meetingIndex = 0; meetingIndex < meetingsPerMonth; meetingIndex += 1) {
+      const withGap = tryPick(true);
+      const chosen = withGap ?? tryPick(false);
+      if (!chosen) break;
+      monthlyGenerated.push(chosen);
     }
 
-    if (chosen) {
-      generated.push(chosen);
-    }
+    generated.push(...monthlyGenerated);
   }
 
   return sortSlots(generated);
@@ -697,6 +761,7 @@ export async function PATCH(
       desiredSlots = buildAnnualPlanProvisorySlots({
         annualPlanMonths,
         deployedAt: assignment.deployed_at,
+        scheduleFrequency: cadence.scheduleFrequency,
         existingEvents: eventsWithoutCurrentProvisory,
       });
     } else {

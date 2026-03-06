@@ -64,7 +64,6 @@ type HistoryPayload = {
   companyRiskProfileResults: Array<{
     id: string;
     questionnaireVersion: string;
-    sector: string | null;
     overallScore: number;
     overallClass: "baixa" | "media" | "alta";
     createdAt: string;
@@ -291,7 +290,6 @@ export function ClientHistory({ clientSlug }: { clientSlug: string }) {
             <thead>
               <tr className="border-b">
                 <th className="px-2 py-2 text-left">Versao</th>
-                <th className="px-2 py-2 text-left">Setor</th>
                 <th className="px-2 py-2 text-left">Resultado</th>
                 <th className="px-2 py-2 text-left">Concluido em</th>
                 <th className="px-2 py-2 text-left">Acoes</th>
@@ -300,7 +298,7 @@ export function ClientHistory({ clientSlug }: { clientSlug: string }) {
             <tbody>
               {payload.companyRiskProfileResults.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="px-2 py-3 text-xs text-[#5a7383]">
+                  <td colSpan={4} className="px-2 py-3 text-xs text-[#5a7383]">
                     Nenhum questionario concluido de perfil de risco encontrado.
                   </td>
                 </tr>
@@ -308,14 +306,13 @@ export function ClientHistory({ clientSlug }: { clientSlug: string }) {
                 payload.companyRiskProfileResults.map((result) => (
                   <tr key={result.id} className="border-b">
                     <td className="px-2 py-2">{result.questionnaireVersion}</td>
-                    <td className="px-2 py-2">{result.sector ?? "-"}</td>
                     <td className="px-2 py-2">
                       {result.overallScore.toFixed(2)} ({companyRiskClassLabel(result.overallClass)})
                     </td>
                     <td className="px-2 py-2">{fmt(result.createdAt)}</td>
                     <td className="px-2 py-2">
                       <Link
-                        href={`/client/${clientSlug}/company-risk-profile`}
+                        href={`/client/${clientSlug}/company-risk-profile?from=history&reportId=${encodeURIComponent(result.id)}`}
                         className="text-xs font-semibold text-[#0f5b73] hover:underline"
                       >
                         Abrir
@@ -462,7 +459,7 @@ export function ClientHistory({ clientSlug }: { clientSlug: string }) {
                     <td className="px-2 py-2">{fmt(report.createdAt)}</td>
                     <td className="px-2 py-2">
                       <Link
-                        href={`/client/${clientSlug}/reports`}
+                        href={`/client/${clientSlug}/reports?from=history`}
                         className="text-xs font-semibold text-[#0f5b73] hover:underline"
                       >
                         Abrir relatorios

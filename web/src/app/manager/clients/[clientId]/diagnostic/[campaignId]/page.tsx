@@ -34,6 +34,7 @@ export default async function ManagerClientDiagnosticResultsPage({
       managerClientId={clientId}
       managerClientName={data.company_name}
       managerFromHome={resolvedSearchParams.from === "home"}
+      managerFromHistory={resolvedSearchParams.from === "history"}
       sectorFilter={resolvedSearchParams.sector}
     />
   );

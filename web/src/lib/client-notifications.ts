@@ -6,7 +6,8 @@ export type ClientNotificationType =
   | "manager_drps_assigned"
   | "manager_program_assigned"
   | "manager_report_issued"
-  | "company_risk_profile_reminder";
+  | "company_risk_profile_reminder"
+  | "manager_calendar_event_status_changed";
 
 type ClientNotificationRow = {
   notification_id: string;

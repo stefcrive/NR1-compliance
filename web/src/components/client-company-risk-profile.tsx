@@ -8,12 +8,31 @@ import {
   type CompanyRiskProbabilityClass,
   type CompanyRiskProfileAnswers,
   type CompanyRiskProfileFactorDefinition,
+  type CompanyRiskProfileFactorScore,
   type CompanyRiskProfileQuestionDefinition,
   computeCompanyRiskProfile,
   countAnsweredCompanyRiskProfileAnswers,
   normalizeCompanyRiskProfileAnswers,
   totalCompanyRiskProfileQuestions,
 } from "@/lib/company-risk-profile";
+
+type ClientRiskProfileReport = {
+  id: string;
+  questionnaireVersion: string;
+  notes: string | null;
+  answers: CompanyRiskProfileAnswers;
+  factorScores: CompanyRiskProfileFactorScore[];
+  summaryCounts: {
+    baixa: number;
+    media: number;
+    alta: number;
+  };
+  overallScore: number;
+  overallClass: CompanyRiskProbabilityClass;
+  createdByRole: "manager" | "client";
+  createdByEmail: string | null;
+  createdAt: string;
+};
 
 type ClientRiskProfilePayload = {
   client: {
@@ -42,12 +61,12 @@ type ClientRiskProfilePayload = {
   latestReport: {
     id: string;
     questionnaireVersion: string;
-    sector: string | null;
     notes: string | null;
     overallScore: number;
     overallClass: CompanyRiskProbabilityClass;
     createdAt: string;
   } | null;
+  reports: ClientRiskProfileReport[];
   progressUnavailable?: boolean;
   reportsUnavailable?: boolean;
 };
@@ -87,16 +106,26 @@ export function ClientCompanyRiskProfile({ clientSlug }: { clientSlug: string })
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [factorPageIndex, setFactorPageIndex] = useState(0);
+  const [selectedReportId, setSelectedReportId] = useState<string | null>(null);
+  const [showSelectedResponses, setShowSelectedResponses] = useState(false);
 
   const fromOnboarding = searchParams.get("from") === "onboarding";
+  const fromHistory = searchParams.get("from") === "history";
+  const historyReportId = searchParams.get("reportId");
+  const historyReadOnlyMode = fromHistory || Boolean(historyReportId);
 
   const loadData = useCallback(async () => {
     setLoading(true);
     setError("");
     setNotice("");
     try {
+      const query = new URLSearchParams();
+      query.set("touchReminder", "0");
+      if (historyReadOnlyMode) {
+        query.set("includeReports", "1");
+      }
       const response = await fetch(
-        `/api/client/portal/${encodeURIComponent(clientSlug)}/company-risk-profile?touchReminder=0`,
+        `/api/client/portal/${encodeURIComponent(clientSlug)}/company-risk-profile?${query.toString()}`,
         { cache: "no-store" },
       );
       const body = (await response.json().catch(() => ({}))) as ClientRiskProfilePayload & { error?: string };
@@ -112,13 +141,15 @@ export function ClientCompanyRiskProfile({ clientSlug }: { clientSlug: string })
         body.questionnaire.questions.some((question) => (normalized[factor.key]?.[question.key] ?? -1) < 0),
       );
       setFactorPageIndex(firstPendingFactorIndex >= 0 ? firstPendingFactorIndex : 0);
+      setSelectedReportId((previous) => historyReportId ?? previous ?? body.reports[0]?.id ?? null);
+      setShowSelectedResponses(Boolean(historyReportId));
     } catch (loadError) {
       setPayload(null);
       setError(loadError instanceof Error ? loadError.message : "Falha ao carregar questionario.");
     } finally {
       setLoading(false);
     }
-  }, [clientSlug]);
+  }, [clientSlug, historyReadOnlyMode, historyReportId]);
 
   useEffect(() => {
     void loadData();
@@ -170,6 +201,14 @@ export function ClientCompanyRiskProfile({ clientSlug }: { clientSlug: string })
       return null;
     }
   }, [answers, answeredCount, payload, totalQuestions]);
+
+  const selectedHistoryReport = useMemo(() => {
+    if (!payload) return null;
+    if (payload.reports.length === 0) return null;
+    const targetId = historyReportId ?? selectedReportId;
+    if (!targetId) return payload.reports[0] ?? null;
+    return payload.reports.find((report) => report.id === targetId) ?? payload.reports[0] ?? null;
+  }, [historyReportId, payload, selectedReportId]);
 
   const onAnswerChange = useCallback(
     (factorKey: string, questionKey: string, rawValue: string) => {
@@ -279,7 +318,7 @@ export function ClientCompanyRiskProfile({ clientSlug }: { clientSlug: string })
     return <p className="text-sm text-red-600">Questionario indisponivel.</p>;
   }
 
-  if (payload.progressUnavailable) {
+  if (payload.progressUnavailable && !historyReadOnlyMode) {
     return (
       <section className="rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
         <p className="text-sm text-[#8a5b2d]">
@@ -289,6 +328,186 @@ export function ClientCompanyRiskProfile({ clientSlug }: { clientSlug: string })
           Aplique a migration <code>20260305235000_company_risk_profile_client_flow.sql</code>.
         </p>
       </section>
+    );
+  }
+
+  if (historyReadOnlyMode) {
+    return (
+      <div className="space-y-6">
+        <section className="rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
+          <div className="space-y-3">
+            <nav className="text-xs text-[#4f6977]" aria-label="Breadcrumb">
+              <Link href={`/client/${clientSlug}/history`} className="font-semibold text-[#0f5b73] hover:underline">
+                Historico
+              </Link>
+              <span className="px-1 text-[#8aa4b5]">/</span>
+              <span className="font-semibold text-[#123447]">Perfil de risco da empresa</span>
+            </nav>
+            <div>
+              <p className="text-xs uppercase tracking-[0.18em] text-[#4f6977]">Perfil de risco da empresa</p>
+              <h2 className="mt-1 text-2xl font-semibold text-[#123447]">{payload.client.companyName}</h2>
+              <p className="mt-1 text-xs text-[#4f6977]">Versao do questionario: {payload.questionnaire.version}</p>
+            </div>
+          </div>
+        </section>
+
+        <section className="rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
+          <h3 className="text-lg font-semibold text-[#123447]">Questionario concluido (somente leitura)</h3>
+          {payload.reportsUnavailable ? (
+            <p className="mt-3 text-sm text-[#8a5b2d]">
+              Tabela de resultados indisponivel. Aplique a migration{" "}
+              <code>20260305233000_company_risk_profile_reports.sql</code>.
+            </p>
+          ) : payload.reports.length === 0 ? (
+            <p className="mt-3 text-sm text-[#5a7383]">Nenhum questionario concluido encontrado.</p>
+          ) : selectedHistoryReport ? (
+            <>
+              <article className="mt-3 rounded-xl border border-[#d8e4ee] bg-[#f8fbfd] p-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <p className="text-sm font-semibold text-[#123447]">
+                    Resultado selecionado | {formatDateTime(selectedHistoryReport.createdAt)}
+                  </p>
+                  <span
+                    className={`rounded-full border px-3 py-1 text-xs font-semibold ${probabilityClassTone(selectedHistoryReport.overallClass)}`}
+                  >
+                    {probabilityClassLabel(selectedHistoryReport.overallClass)}
+                  </span>
+                </div>
+                <p className="mt-2 text-sm text-[#153748]">
+                  Probabilidade geral de ocorrencia: <strong>{selectedHistoryReport.overallScore.toFixed(2)}</strong>
+                </p>
+                <p className="mt-1 text-xs text-[#4f6977]">
+                  Baixa: {selectedHistoryReport.summaryCounts.baixa} | Media: {selectedHistoryReport.summaryCounts.media} | Alta:{" "}
+                  {selectedHistoryReport.summaryCounts.alta}
+                </p>
+                {selectedHistoryReport.notes ? (
+                  <p className="mt-1 text-xs text-[#4f6977]">Notas: {selectedHistoryReport.notes}</p>
+                ) : null}
+
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowSelectedResponses((previous) => !previous)}
+                    className="rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
+                  >
+                    {showSelectedResponses ? "Ocultar respostas" : "Ver respostas do questionario"}
+                  </button>
+                </div>
+
+                <div className="mt-3 overflow-x-auto rounded-xl border border-[#d8e4ee] bg-white">
+                  <table className="nr-table min-w-full text-sm">
+                    <thead>
+                      <tr className="border-b bg-[#f8fbfd]">
+                        <th className="px-3 py-2 text-left text-xs font-semibold text-[#4f6977]">Risco psicossocial</th>
+                        <th className="px-3 py-2 text-left text-xs font-semibold text-[#4f6977]">Score</th>
+                        <th className="px-3 py-2 text-left text-xs font-semibold text-[#4f6977]">Probabilidade</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {selectedHistoryReport.factorScores.map((factorScore) => (
+                        <tr key={`${selectedHistoryReport.id}-${factorScore.factorKey}`} className="border-b last:border-b-0">
+                          <td className="px-3 py-2 text-[#123447]">{factorScore.factorLabel}</td>
+                          <td className="px-3 py-2 text-[#123447]">{factorScore.score.toFixed(2)}</td>
+                          <td className="px-3 py-2">
+                            <span
+                              className={`rounded-full border px-2 py-0.5 text-xs font-semibold ${probabilityClassTone(factorScore.probabilityClass)}`}
+                            >
+                              {probabilityClassLabel(factorScore.probabilityClass)}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                {showSelectedResponses ? (
+                  <div className="mt-4 space-y-3 rounded-xl border border-[#cfe2ec] bg-[#f4f9fc] p-3">
+                    <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[#4f6977]">
+                      Respostas detalhadas
+                    </p>
+                    {selectedHistoryReport.factorScores.map((factorScore) => (
+                      <article
+                        key={`responses-${selectedHistoryReport.id}-${factorScore.factorKey}`}
+                        className="rounded-xl border border-[#d8e4ee] bg-white p-3"
+                      >
+                        <h4 className="text-sm font-semibold text-[#123447]">{factorScore.factorLabel}</h4>
+                        <div className="mt-2 overflow-x-auto">
+                          <table className="nr-table min-w-full text-xs">
+                            <thead>
+                              <tr className="border-b bg-[#f8fbfd]">
+                                <th className="px-2 py-2 text-left text-[#4f6977]">Criterio</th>
+                                <th className="px-2 py-2 text-left text-[#4f6977]">Pergunta</th>
+                                <th className="px-2 py-2 text-left text-[#4f6977]">Resposta marcada</th>
+                                <th className="px-2 py-2 text-left text-[#4f6977]">Score</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {factorScore.questionScores.map((questionScore) => (
+                                <tr
+                                  key={`response-row-${factorScore.factorKey}-${questionScore.questionKey}`}
+                                  className="border-b last:border-b-0"
+                                >
+                                  <td className="px-2 py-2 text-[#123447]">{questionScore.criterion}</td>
+                                  <td className="px-2 py-2 text-[#123447]">{questionScore.prompt}</td>
+                                  <td className="px-2 py-2 text-[#123447]">{questionScore.optionLabel}</td>
+                                  <td className="px-2 py-2 text-[#123447]">{questionScore.score.toFixed(2)}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                ) : null}
+              </article>
+
+              <div className="mt-4 overflow-x-auto rounded-xl border border-[#d8e4ee]">
+                <table className="nr-table min-w-full text-sm">
+                  <thead>
+                    <tr className="border-b bg-[#f8fbfd]">
+                      <th className="px-3 py-2 text-left text-xs font-semibold text-[#4f6977]">Data</th>
+                      <th className="px-3 py-2 text-left text-xs font-semibold text-[#4f6977]">Score geral</th>
+                      <th className="px-3 py-2 text-left text-xs font-semibold text-[#4f6977]">Probabilidade</th>
+                      <th className="px-3 py-2 text-left text-xs font-semibold text-[#4f6977]">Acao</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {payload.reports.map((report) => (
+                      <tr key={report.id} className="border-b last:border-b-0">
+                        <td className="px-3 py-2 text-[#123447]">{formatDateTime(report.createdAt)}</td>
+                        <td className="px-3 py-2 text-[#123447]">{report.overallScore.toFixed(2)}</td>
+                        <td className="px-3 py-2">
+                          <span
+                            className={`rounded-full border px-2 py-0.5 text-xs font-semibold ${probabilityClassTone(report.overallClass)}`}
+                          >
+                            {probabilityClassLabel(report.overallClass)}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedReportId(report.id);
+                              setShowSelectedResponses(true);
+                            }}
+                            className="rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
+                          >
+                            Ver respostas
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          ) : (
+            <p className="mt-3 text-sm text-[#5a7383]">Nao foi possivel localizar este questionario no historico.</p>
+          )}
+        </section>
+      </div>
     );
   }
 

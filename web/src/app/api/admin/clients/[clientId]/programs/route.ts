@@ -87,6 +87,12 @@ function todayIsoDate(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+function toMonthKey(value: Date): string {
+  const year = value.getUTCFullYear();
+  const month = String(value.getUTCMonth() + 1).padStart(2, "0");
+  return `${year}-${month}`;
+}
+
 function parseScheduleFrequency(value: unknown): string {
   if (typeof value !== "string") return DEFAULT_CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCY;
   const normalized = value.trim().toLowerCase();
@@ -144,6 +150,16 @@ function normalizeAnnualPlanMonths(value: unknown): string[] {
     unique.add(normalized);
   }
   return Array.from(unique.values()).sort();
+}
+
+function deriveAnnualPlanMonthsFromSlots(slots: AvailabilitySlot[]): string[] {
+  const monthKeys = new Set<string>();
+  for (const slot of slots) {
+    const date = new Date(slot.startsAt);
+    if (Number.isNaN(date.getTime())) continue;
+    monthKeys.add(toMonthKey(date));
+  }
+  return normalizeAnnualPlanMonths(Array.from(monthKeys.values()));
 }
 
 function mapAvailableProgram(program: PeriodicProgramRow) {
@@ -653,7 +669,7 @@ export async function POST(
   }
 
   const annualPlanMonths = normalizeAnnualPlanMonths(parsed.annualPlanMonths);
-  let annualPlanSupported = true;
+  let annualPlanColumnSupported = true;
   let insertResult = await supabase
     .from("client_programs")
     .insert({
@@ -665,7 +681,10 @@ export async function POST(
         parsed.deployedAt && parsed.deployedAt.length > 0 ? parsed.deployedAt : new Date().toISOString(),
       schedule_frequency_override:
         parsed.scheduleFrequency ?? DEFAULT_CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCY,
-      schedule_anchor_date_override: todayIsoDate(),
+      schedule_anchor_date_override:
+        parsed.scheduleAnchorDate && parsed.scheduleAnchorDate.length > 0
+          ? parsed.scheduleAnchorDate
+          : todayIsoDate(),
       annual_plan_months: annualPlanMonths,
     })
     .select(
@@ -674,7 +693,7 @@ export async function POST(
     .maybeSingle<ClientProgramRow>();
 
   if (insertResult.error && isMissingColumnError(insertResult.error, "annual_plan_months")) {
-    annualPlanSupported = false;
+    annualPlanColumnSupported = false;
     insertResult = await supabase
       .from("client_programs")
       .insert({
@@ -686,7 +705,10 @@ export async function POST(
           parsed.deployedAt && parsed.deployedAt.length > 0 ? parsed.deployedAt : new Date().toISOString(),
         schedule_frequency_override:
           parsed.scheduleFrequency ?? DEFAULT_CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCY,
-        schedule_anchor_date_override: todayIsoDate(),
+        schedule_anchor_date_override:
+          parsed.scheduleAnchorDate && parsed.scheduleAnchorDate.length > 0
+            ? parsed.scheduleAnchorDate
+            : todayIsoDate(),
       })
       .select(
         "client_program_id,program_id,status,deployed_at,schedule_frequency_override,schedule_anchor_date_override",
@@ -743,7 +765,7 @@ export async function POST(
   const cadence = resolveCadenceForAssignment(insertResult.data, programById);
   let calendarUnavailable = false;
   try {
-    if (insertResult.data.status === "Active" && !annualPlanSupported) {
+    if (insertResult.data.status === "Active") {
       const masterEvents = await loadManagerMasterCalendarEvents();
       cadenceSuggestedSlots = buildSuggestedAvailabilitySlots({
         deployedAt: insertResult.data.deployed_at ?? new Date().toISOString(),
@@ -763,6 +785,36 @@ export async function POST(
     }
   } catch {
     cadenceSuggestedSlots = [];
+  }
+
+  if (annualPlanColumnSupported) {
+    const persistedAnnualPlanMonths = normalizeAnnualPlanMonths(insertResult.data.annual_plan_months);
+    const shouldBackfillAnnualPlanMonths =
+      persistedAnnualPlanMonths.length === 0 &&
+      annualPlanMonths.length === 0 &&
+      insertResult.data.status === "Active";
+
+    if (shouldBackfillAnnualPlanMonths) {
+      const derivedAnnualPlanMonths = deriveAnnualPlanMonthsFromSlots(cadenceSuggestedSlots);
+      if (derivedAnnualPlanMonths.length > 0) {
+        const annualPlanUpdate = await supabase
+          .from("client_programs")
+          .update({ annual_plan_months: derivedAnnualPlanMonths })
+          .eq("client_program_id", insertResult.data.client_program_id)
+          .select("annual_plan_months")
+          .maybeSingle<{ annual_plan_months: unknown }>();
+
+        if (!annualPlanUpdate.error && annualPlanUpdate.data) {
+          insertResult = {
+            ...insertResult,
+            data: {
+              ...insertResult.data,
+              annual_plan_months: annualPlanUpdate.data.annual_plan_months,
+            },
+          };
+        }
+      }
+    }
   }
 
   return NextResponse.json(

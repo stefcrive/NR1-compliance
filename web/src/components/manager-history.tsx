@@ -71,7 +71,6 @@ type HistoryPayload = {
     clientId: string;
     clientName: string | null;
     questionnaireVersion: string;
-    sector: string | null;
     overallScore: number;
     overallClass: "baixa" | "media" | "alta";
     createdAt: string;
@@ -141,7 +140,6 @@ const COPY = {
     tableReport: "Report",
     tableSurvey: "Diagnostic",
     tableQuestionnaireVersion: "Version",
-    tableSector: "Sector",
     tableCreatedAt: "Created at",
     open: "Open",
     openRecord: "Open record file",
@@ -218,7 +216,6 @@ const COPY = {
     tableReport: "Relatorio",
     tableSurvey: "Diagnostico",
     tableQuestionnaireVersion: "Versao",
-    tableSector: "Setor",
     tableCreatedAt: "Criado em",
     open: "Abrir",
     openRecord: "Abrir ficha",
@@ -387,19 +384,13 @@ export function ManagerHistory({ forcedClientId }: { forcedClientId?: string }) 
   );
   const programsForTable = isCompanyProfileHistory ? pastAssignedPrograms : assignedPrograms;
 
-  const clientPortalSlugById = useMemo(
-    () => new Map((payload?.companies ?? []).map((company) => [company.id, company.portalSlug])),
-    [payload?.companies],
-  );
-
   const drpsResultsHref = useCallback(
     (campaignId: string, clientId: string | null) => {
-      const clientSlug = clientId ? clientPortalSlugById.get(clientId) ?? null : null;
-      return clientSlug
-        ? `/client/${clientSlug}/diagnostic/${campaignId}?from=history`
+      return clientId
+        ? `/manager/clients/${clientId}/diagnostic/${campaignId}?from=history`
         : `/manager/programs/drps/${campaignId}`;
     },
-    [clientPortalSlugById],
+    [],
   );
 
   const notices = useMemo(() => {
@@ -580,7 +571,6 @@ export function ManagerHistory({ forcedClientId }: { forcedClientId?: string }) 
               <tr className="border-b bg-[#f5f8fb]">
                 <th className="px-2 py-2 text-left">{t.tableQuestionnaireVersion}</th>
                 {showCompanyColumn ? <th className="px-2 py-2 text-left">{t.tableCompany}</th> : null}
-                <th className="px-2 py-2 text-left">{t.tableSector}</th>
                 <th className="px-2 py-2 text-left">{t.tableResult}</th>
                 <th className="px-2 py-2 text-left">{t.tableCreatedAt}</th>
                 <th className="px-2 py-2 text-left">{t.tableActions}</th>
@@ -589,7 +579,7 @@ export function ManagerHistory({ forcedClientId }: { forcedClientId?: string }) 
             <tbody>
               {companyRiskProfileResults.length === 0 ? (
                 <tr>
-                  <td colSpan={showCompanyColumn ? 6 : 5} className="px-2 py-3 text-xs text-[#5a7383]">
+                  <td colSpan={showCompanyColumn ? 5 : 4} className="px-2 py-3 text-xs text-[#5a7383]">
                     {t.noData}
                   </td>
                 </tr>
@@ -600,14 +590,13 @@ export function ManagerHistory({ forcedClientId }: { forcedClientId?: string }) 
                     {showCompanyColumn ? (
                       <td className="px-2 py-2 text-[#3e5a68]">{result.clientName ?? t.noCompany}</td>
                     ) : null}
-                    <td className="px-2 py-2 text-[#3e5a68]">{result.sector ?? "-"}</td>
                     <td className="px-2 py-2 text-[#3e5a68]">
                       {result.overallScore.toFixed(2)} ({companyRiskClassLabel(result.overallClass, locale)})
                     </td>
                     <td className="px-2 py-2 text-[#3e5a68]">{fmtDateTime(result.createdAt, locale)}</td>
                     <td className="px-2 py-2">
                       <Link
-                        href={`/manager/clients/${result.clientId}/company-risk-profile`}
+                        href={`/manager/clients/${result.clientId}/company-risk-profile?from=history`}
                         className="text-xs font-semibold text-[#0f5b73] hover:underline"
                       >
                         {t.open}
@@ -710,7 +699,7 @@ export function ManagerHistory({ forcedClientId }: { forcedClientId?: string }) 
                     <td className="px-2 py-2">
                       <div className="flex flex-wrap gap-2 text-xs">
                         <Link
-                          href={`/manager/history/events/${event.id}`}
+                          href={`/manager/history/events/${event.id}?from=history`}
                           className="font-semibold text-[#0f5b73] hover:underline"
                         >
                           {t.openRecord}
