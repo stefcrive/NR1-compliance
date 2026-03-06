@@ -372,11 +372,14 @@ export async function PATCH(
     return NextResponse.json({ error: "Could not load latest client report." }, { status: 500 });
   }
 
-  const cooldownDays = parsed.data.cooldownDays ?? 30;
+  const cooldownDays = parsed.data.cooldownDays ?? 0;
   const now = new Date();
   const nowIso = now.toISOString();
+  const hasPreviousClientReport = Boolean(latestClientReportResult.data?.id);
   const nextCycleAvailableAt =
-    cooldownDays > 0 ? new Date(now.getTime() + cooldownDays * 24 * 60 * 60 * 1000).toISOString() : null;
+    hasPreviousClientReport && cooldownDays > 0
+      ? new Date(now.getTime() + cooldownDays * 24 * 60 * 60 * 1000).toISOString()
+      : null;
 
   const resetAnswers = normalizeCompanyRiskProfileAnswers({}, { allowIncomplete: true });
   const upsertResult = await supabase

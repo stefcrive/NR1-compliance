@@ -137,7 +137,7 @@ export function ManagerCompanyRiskProfile({ clientId }: { clientId: string }) {
   const [notice, setNotice] = useState("");
   const [selectedReportId, setSelectedReportId] = useState<string | null>(null);
   const [showSelectedResponses, setShowSelectedResponses] = useState(false);
-  const [reassignAfterDays, setReassignAfterDays] = useState("30");
+  const [reassignAfterDays, setReassignAfterDays] = useState("0");
   const [isReassigning, setIsReassigning] = useState(false);
 
   const loadData = useCallback(async () => {
@@ -285,7 +285,7 @@ export function ManagerCompanyRiskProfile({ clientId }: { clientId: string }) {
 
   const reassignQuestionnaire = useCallback(async () => {
     const parsedDays = Number.parseInt(reassignAfterDays, 10);
-    const cooldownDays = Number.isFinite(parsedDays) && parsedDays >= 0 ? parsedDays : 30;
+    const cooldownDays = Number.isFinite(parsedDays) && parsedDays >= 0 ? parsedDays : 0;
 
     setIsReassigning(true);
     setError("");
@@ -315,7 +315,7 @@ export function ManagerCompanyRiskProfile({ clientId }: { clientId: string }) {
       });
       const availabilityLabel = formatDateTime(body.nextCycleAvailableAt ?? null);
       setNotice(
-        cooldownDays > 0
+        body.nextCycleAvailableAt
           ? `Questionario reatribuido. Nova rodada disponivel em ${availabilityLabel}.`
           : "Questionario reatribuido para preenchimento imediato.",
       );

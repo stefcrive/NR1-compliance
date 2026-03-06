@@ -129,12 +129,13 @@ export function ClientCompanyRiskProfile({ clientSlug }: { clientSlug: string })
   const isComplete = payload?.progress.status === "completed";
   const factorCount = payload?.questionnaire.factors.length ?? 0;
   const isCycleLocked = useMemo(() => {
+    if (!payload?.progress.latestReportId) return false;
     const nextCycle = payload?.progress.nextCycleAvailableAt;
     if (!nextCycle) return false;
     const nextCycleMs = new Date(nextCycle).getTime();
     if (!Number.isFinite(nextCycleMs)) return false;
     return nextCycleMs > Date.now();
-  }, [payload?.progress.nextCycleAvailableAt]);
+  }, [payload?.progress.latestReportId, payload?.progress.nextCycleAvailableAt]);
 
   useEffect(() => {
     if (factorCount === 0) {

@@ -105,6 +105,16 @@ type SurveyNameRow = {
   name: string;
 };
 
+type CompanyRiskProfileReportRow = {
+  id: string;
+  questionnaire_version: string;
+  sector: string | null;
+  overall_score: number | string;
+  overall_class: string;
+  created_by_role: string;
+  created_at: string;
+};
+
 type ConcludedCampaign = {
   id: string;
   name: string;
@@ -135,6 +145,22 @@ function normalizeAnnualPlanMonths(value: unknown): string[] {
     unique.add(normalized);
   }
   return Array.from(unique.values()).sort();
+}
+
+function parseOverallScore(value: number | string): number {
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) return 0;
+    return Number(value.toFixed(2));
+  }
+  const parsed = Number.parseFloat(value);
+  if (!Number.isFinite(parsed)) return 0;
+  return Number(parsed.toFixed(2));
+}
+
+function normalizeOverallClass(value: string): "baixa" | "media" | "alta" {
+  if (value === "baixa") return "baixa";
+  if (value === "alta") return "alta";
+  return "media";
 }
 
 function plusOneHour(iso: string): string {
@@ -470,6 +496,29 @@ async function loadReports(clientId: string): Promise<{
   return { rows: reportsResult.data ?? [], unavailable: false };
 }
 
+async function loadCompanyRiskProfileResults(clientId: string): Promise<{
+  rows: CompanyRiskProfileReportRow[];
+  unavailable: boolean;
+}> {
+  const supabase = getSupabaseAdminClient();
+  const result = await supabase
+    .from("client_company_risk_profile_reports")
+    .select("id,questionnaire_version,sector,overall_score,overall_class,created_by_role,created_at")
+    .eq("client_id", clientId)
+    .eq("created_by_role", "client")
+    .order("created_at", { ascending: false })
+    .returns<CompanyRiskProfileReportRow[]>();
+
+  if (result.error) {
+    if (isMissingTableError(result.error, "client_company_risk_profile_reports")) {
+      return { rows: [], unavailable: true };
+    }
+    throw new Error("Could not load company risk profile history.");
+  }
+
+  return { rows: result.data ?? [], unavailable: false };
+}
+
 async function loadSurveyNameById(surveyIds: string[]) {
   const map = new Map<string, string>();
   if (surveyIds.length === 0) return map;
@@ -629,7 +678,10 @@ export async function GET(
       (left, right) => new Date(right.startsAt).getTime() - new Date(left.startsAt).getTime(),
     );
 
-    const reportsLoaded = await loadReports(client.client_id);
+    const [reportsLoaded, companyRiskProfileLoaded] = await Promise.all([
+      loadReports(client.client_id),
+      loadCompanyRiskProfileResults(client.client_id),
+    ]);
     const surveyNameById = await loadSurveyNameById(
       Array.from(
         new Set(
@@ -649,6 +701,15 @@ export async function GET(
       createdAt: report.created_at,
     }));
 
+    const companyRiskProfileResults = companyRiskProfileLoaded.rows.map((row) => ({
+      id: row.id,
+      questionnaireVersion: row.questionnaire_version,
+      sector: row.sector,
+      overallScore: parseOverallScore(row.overall_score),
+      overallClass: normalizeOverallClass(row.overall_class),
+      createdAt: row.created_at,
+    }));
+
     return NextResponse.json({
       client: {
         id: client.client_id,
@@ -659,12 +720,14 @@ export async function GET(
       assignedPrograms,
       realizedEvents,
       reports,
+      companyRiskProfileResults,
       compatibility: {
         usingLegacyCampaigns: concludedCampaignsLoaded.usingLegacyCampaigns,
         calendarEventsUnavailable: realizedCalendarLoaded.unavailable,
         reportsUnavailable: reportsLoaded.unavailable,
         drpsUnavailable: latestDrpsLoaded.unavailable,
         programsUnavailable: assignedProgramsLoaded.unavailable,
+        companyRiskProfileUnavailable: companyRiskProfileLoaded.unavailable,
       },
     });
   } catch (error) {

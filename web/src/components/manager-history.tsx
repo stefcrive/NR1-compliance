@@ -66,12 +66,23 @@ type HistoryPayload = {
     status: "draft" | "processing" | "ready" | "failed";
     createdAt: string;
   }>;
+  companyRiskProfileResults: Array<{
+    id: string;
+    clientId: string;
+    clientName: string | null;
+    questionnaireVersion: string;
+    sector: string | null;
+    overallScore: number;
+    overallClass: "baixa" | "media" | "alta";
+    createdAt: string;
+  }>;
   compatibility: {
     usingLegacyCampaigns: boolean;
     calendarEventsUnavailable: boolean;
     reportsUnavailable: boolean;
     drpsUnavailable: boolean;
     programsUnavailable: boolean;
+    companyRiskProfileUnavailable: boolean;
   };
 };
 
@@ -99,12 +110,16 @@ const COPY = {
       "DRPS result snapshots unavailable (drps_assessments table missing).",
     compatibilityPrograms:
       "Assigned programs history unavailable (client_programs table missing).",
+    compatibilityCompanyRisk:
+      "Company risk profile questionnaire history unavailable (client_company_risk_profile_reports table missing).",
     cardConcludedDrps: "Concluded DRPS",
     cardPrograms: "Assigned programs",
     cardPastPrograms: "Past continuous programs",
     cardEvents: "Realized events",
     cardReports: "Realized reports",
+    cardCompanyRisk: "Risk profiles",
     sectionDrps: "Concluded DRPS diagnostics and results",
+    sectionCompanyRisk: "Completed company risk profile questionnaires",
     sectionPrograms: "Assigned programs by company",
     sectionPastPrograms: "Past continuous programs by company",
     sectionEvents: "Realized events",
@@ -125,6 +140,8 @@ const COPY = {
     tableLifecycle: "Lifecycle",
     tableReport: "Report",
     tableSurvey: "Diagnostic",
+    tableQuestionnaireVersion: "Version",
+    tableSector: "Sector",
     tableCreatedAt: "Created at",
     open: "Open",
     openRecord: "Open record file",
@@ -170,12 +187,16 @@ const COPY = {
       "Snapshots de resultado DRPS indisponiveis (tabela drps_assessments ausente).",
     compatibilityPrograms:
       "Historico de programas atribuidos indisponivel (tabela client_programs ausente).",
+    compatibilityCompanyRisk:
+      "Historico do perfil de risco da empresa indisponivel (tabela client_company_risk_profile_reports ausente).",
     cardConcludedDrps: "DRPS concluidos",
     cardPrograms: "Programas atribuidos",
     cardPastPrograms: "Processos continuos passados",
     cardEvents: "Eventos realizados",
     cardReports: "Relatorios realizados",
+    cardCompanyRisk: "Perfil de risco",
     sectionDrps: "DRPS concluidos e resultados",
+    sectionCompanyRisk: "Questionarios concluidos de perfil de risco da empresa",
     sectionPrograms: "Programas atribuidos por empresa",
     sectionPastPrograms: "Processos continuos passados por empresa",
     sectionEvents: "Eventos realizados",
@@ -196,6 +217,8 @@ const COPY = {
     tableLifecycle: "Ciclo",
     tableReport: "Relatorio",
     tableSurvey: "Diagnostico",
+    tableQuestionnaireVersion: "Versao",
+    tableSector: "Setor",
     tableCreatedAt: "Criado em",
     open: "Abrir",
     openRecord: "Abrir ficha",
@@ -259,6 +282,13 @@ function probabilityClassLabel(value: "low" | "medium" | "high", locale: Manager
   if (value === "low") return t.probabilityLow;
   if (value === "medium") return t.probabilityMedium;
   return t.probabilityHigh;
+}
+
+function companyRiskClassLabel(value: "baixa" | "media" | "alta", locale: ManagerLocale) {
+  const t = COPY[locale];
+  if (value === "baixa") return t.probabilityLow;
+  if (value === "alta") return t.probabilityHigh;
+  return t.probabilityMedium;
 }
 
 function lifecycleLabel(value: "provisory" | "committed", locale: ManagerLocale) {
@@ -348,6 +378,13 @@ export function ManagerHistory({ forcedClientId }: { forcedClientId?: string }) 
       ),
     [activeCompanyFilter, payload?.reports],
   );
+  const companyRiskProfileResults = useMemo(
+    () =>
+      (payload?.companyRiskProfileResults ?? []).filter((item) =>
+        activeCompanyFilter === COMPANY_FILTER_ALL ? true : item.clientId === activeCompanyFilter,
+      ),
+    [activeCompanyFilter, payload?.companyRiskProfileResults],
+  );
   const programsForTable = isCompanyProfileHistory ? pastAssignedPrograms : assignedPrograms;
 
   const clientPortalSlugById = useMemo(
@@ -373,8 +410,17 @@ export function ManagerHistory({ forcedClientId }: { forcedClientId?: string }) 
     if (payload.compatibility.reportsUnavailable) list.push(t.compatibilityReports);
     if (payload.compatibility.drpsUnavailable) list.push(t.compatibilityDrps);
     if (payload.compatibility.programsUnavailable) list.push(t.compatibilityPrograms);
+    if (payload.compatibility.companyRiskProfileUnavailable) list.push(t.compatibilityCompanyRisk);
     return list;
-  }, [payload, t.compatibilityCalendar, t.compatibilityDrps, t.compatibilityLegacy, t.compatibilityPrograms, t.compatibilityReports]);
+  }, [
+    payload,
+    t.compatibilityCalendar,
+    t.compatibilityCompanyRisk,
+    t.compatibilityDrps,
+    t.compatibilityLegacy,
+    t.compatibilityPrograms,
+    t.compatibilityReports,
+  ]);
 
   return (
     <div className="space-y-6">
@@ -445,6 +491,10 @@ export function ManagerHistory({ forcedClientId }: { forcedClientId?: string }) 
           <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[#5a7383]">{t.cardEvents}</p>
           <p className="mt-2 text-2xl font-semibold text-[#123447]">{realizedEvents.length}</p>
         </article>
+        <article className="rounded-2xl border border-[#dbe8ef] bg-white p-4 shadow-sm">
+          <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[#5a7383]">{t.cardCompanyRisk}</p>
+          <p className="mt-2 text-2xl font-semibold text-[#123447]">{companyRiskProfileResults.length}</p>
+        </article>
         {!isCompanyProfileHistory ? (
           <article className="rounded-2xl border border-[#dbe8ef] bg-white p-4 shadow-sm">
             <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[#5a7383]">{t.cardReports}</p>
@@ -512,6 +562,55 @@ export function ManagerHistory({ forcedClientId }: { forcedClientId?: string }) 
                         className="text-xs font-semibold text-[#0f5b73] hover:underline"
                       >
                         {t.openCampaign}
+                      </Link>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+        <h3 className="text-lg font-semibold text-[#123447]">{t.sectionCompanyRisk}</h3>
+        <div className="mt-3 overflow-x-auto rounded-lg border border-[#d8e4ee] bg-white">
+          <table className="min-w-full text-sm">
+            <thead>
+              <tr className="border-b bg-[#f5f8fb]">
+                <th className="px-2 py-2 text-left">{t.tableQuestionnaireVersion}</th>
+                {showCompanyColumn ? <th className="px-2 py-2 text-left">{t.tableCompany}</th> : null}
+                <th className="px-2 py-2 text-left">{t.tableSector}</th>
+                <th className="px-2 py-2 text-left">{t.tableResult}</th>
+                <th className="px-2 py-2 text-left">{t.tableCreatedAt}</th>
+                <th className="px-2 py-2 text-left">{t.tableActions}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {companyRiskProfileResults.length === 0 ? (
+                <tr>
+                  <td colSpan={showCompanyColumn ? 6 : 5} className="px-2 py-3 text-xs text-[#5a7383]">
+                    {t.noData}
+                  </td>
+                </tr>
+              ) : (
+                companyRiskProfileResults.map((result) => (
+                  <tr key={result.id} className="border-b last:border-b-0">
+                    <td className="px-2 py-2 text-[#3e5a68]">{result.questionnaireVersion}</td>
+                    {showCompanyColumn ? (
+                      <td className="px-2 py-2 text-[#3e5a68]">{result.clientName ?? t.noCompany}</td>
+                    ) : null}
+                    <td className="px-2 py-2 text-[#3e5a68]">{result.sector ?? "-"}</td>
+                    <td className="px-2 py-2 text-[#3e5a68]">
+                      {result.overallScore.toFixed(2)} ({companyRiskClassLabel(result.overallClass, locale)})
+                    </td>
+                    <td className="px-2 py-2 text-[#3e5a68]">{fmtDateTime(result.createdAt, locale)}</td>
+                    <td className="px-2 py-2">
+                      <Link
+                        href={`/manager/clients/${result.clientId}/company-risk-profile`}
+                        className="text-xs font-semibold text-[#0f5b73] hover:underline"
+                      >
+                        {t.open}
                       </Link>
                     </td>
                   </tr>

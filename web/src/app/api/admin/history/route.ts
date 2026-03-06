@@ -100,6 +100,17 @@ type SurveyNameRow = {
   name: string;
 };
 
+type CompanyRiskProfileReportRow = {
+  id: string;
+  client_id: string;
+  questionnaire_version: string;
+  sector: string | null;
+  overall_score: number | string;
+  overall_class: string;
+  created_by_role: string;
+  created_at: string;
+};
+
 type HistoryConcludedCampaign = {
   id: string;
   clientId: string | null;
@@ -163,6 +174,17 @@ type HistoryReport = {
   createdAt: string;
 };
 
+type HistoryCompanyRiskProfileResult = {
+  id: string;
+  clientId: string;
+  clientName: string | null;
+  questionnaireVersion: string;
+  sector: string | null;
+  overallScore: number;
+  overallClass: "baixa" | "media" | "alta";
+  createdAt: string;
+};
+
 const DEFAULT_SCHEDULE_FREQUENCY = "biweekly";
 
 function normalizeTextArray(value: unknown): string[] {
@@ -183,6 +205,22 @@ function normalizeAnnualPlanMonths(value: unknown): string[] {
     unique.add(normalized);
   }
   return Array.from(unique.values()).sort();
+}
+
+function parseOverallScore(value: number | string): number {
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) return 0;
+    return Number(value.toFixed(2));
+  }
+  const parsed = Number.parseFloat(value);
+  if (!Number.isFinite(parsed)) return 0;
+  return Number(parsed.toFixed(2));
+}
+
+function normalizeOverallClass(value: string): "baixa" | "media" | "alta" {
+  if (value === "baixa") return "baixa";
+  if (value === "alta") return "alta";
+  return "media";
 }
 
 function plusOneHour(iso: string): string {
@@ -523,6 +561,30 @@ async function loadReports(): Promise<{
   return { rows: reportsResult.data ?? [], unavailable: false };
 }
 
+async function loadCompanyRiskProfileResults(): Promise<{
+  rows: CompanyRiskProfileReportRow[];
+  unavailable: boolean;
+}> {
+  const supabase = getSupabaseAdminClient();
+  const result = await supabase
+    .from("client_company_risk_profile_reports")
+    .select(
+      "id,client_id,questionnaire_version,sector,overall_score,overall_class,created_by_role,created_at",
+    )
+    .eq("created_by_role", "client")
+    .order("created_at", { ascending: false })
+    .returns<CompanyRiskProfileReportRow[]>();
+
+  if (result.error) {
+    if (isMissingTableError(result.error, "client_company_risk_profile_reports")) {
+      return { rows: [], unavailable: true };
+    }
+    throw new Error("Could not load company risk profile history.");
+  }
+
+  return { rows: result.data ?? [], unavailable: false };
+}
+
 async function loadSurveyNameById(surveyIds: string[]) {
   const result = new Map<string, string>();
   if (surveyIds.length === 0) return result;
@@ -682,7 +744,10 @@ export async function GET(request: NextRequest) {
       (left, right) => new Date(right.startsAt).getTime() - new Date(left.startsAt).getTime(),
     );
 
-    const reportsLoaded = await loadReports();
+    const [reportsLoaded, companyRiskProfileLoaded] = await Promise.all([
+      loadReports(),
+      loadCompanyRiskProfileResults(),
+    ]);
     const surveyNameById = await loadSurveyNameById(
       Array.from(
         new Set(
@@ -704,18 +769,31 @@ export async function GET(request: NextRequest) {
       createdAt: row.created_at,
     }));
 
+    const companyRiskProfileResults: HistoryCompanyRiskProfileResult[] = companyRiskProfileLoaded.rows.map((row) => ({
+      id: row.id,
+      clientId: row.client_id,
+      clientName: clientNameById.get(row.client_id) ?? null,
+      questionnaireVersion: row.questionnaire_version,
+      sector: row.sector,
+      overallScore: parseOverallScore(row.overall_score),
+      overallClass: normalizeOverallClass(row.overall_class),
+      createdAt: row.created_at,
+    }));
+
     return NextResponse.json({
       companies,
       concludedCampaigns,
       assignedPrograms,
       realizedEvents,
       reports,
+      companyRiskProfileResults,
       compatibility: {
         usingLegacyCampaigns: concludedCampaignsLoaded.usingLegacyCampaigns,
         calendarEventsUnavailable: realizedCalendarLoaded.unavailable,
         reportsUnavailable: reportsLoaded.unavailable,
         drpsUnavailable: drpsResultsLoaded.unavailable,
         programsUnavailable: assignedProgramsLoaded.unavailable,
+        companyRiskProfileUnavailable: companyRiskProfileLoaded.unavailable,
       },
     });
   } catch (error) {

@@ -1466,8 +1466,21 @@ export function ClientDiagnosticResultsSection({
   );
   const rawTrends = useMemo(() => metrics?.trends ?? [], [metrics?.trends]);
   const trends = useMemo(
-    () => (isPerSectorResults ? rawTrends : aggregateTrendSeriesForAllSectors(rawTrends)),
-    [isPerSectorResults, rawTrends],
+    () => {
+      if (!isPerSectorResults) {
+        return aggregateTrendSeriesForAllSectors(rawTrends);
+      }
+
+      const targetSectorLookup = normalizeSectorLookupValue(normalizedSectorFilter);
+      const sectorScopedSeries = rawTrends.filter(
+        (series) => normalizeSectorLookupValue(series.sector) === targetSectorLookup,
+      );
+
+      // Some payloads may include duplicate rows for the same topic/period; collapse them here.
+      const sourceSeries = sectorScopedSeries.length > 0 ? sectorScopedSeries : rawTrends;
+      return aggregateTrendSeriesForAllSectors(sourceSeries);
+    },
+    [isPerSectorResults, normalizedSectorFilter, rawTrends],
   );
   const [datasetSectorFilter, setDatasetSectorFilter] = useState(() =>
     isPerSectorResults ? normalizedSectorFilter : "all",
@@ -2748,9 +2761,9 @@ export function ClientDiagnosticResultsSection({
         </p>
         {aggregateTrendScoreModel ? (
           <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-            {aggregateTrendScoreModel.cards.map((card) => (
+            {aggregateTrendScoreModel.cards.map((card, cardIndex) => (
               <article
-                key={`aggregate-trend-${card.topicId}`}
+                key={`aggregate-trend-${card.topicId}-${card.riskFactor}-${cardIndex}`}
                 className={`rounded-xl border bg-white p-2.5 ${
                   selectedAggregateTrendTopicId === card.topicId ? "border-[#7fb6cd]" : "border-[#dce8ee]"
                 }`}

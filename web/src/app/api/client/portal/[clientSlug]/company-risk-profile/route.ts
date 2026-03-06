@@ -157,7 +157,8 @@ function reminderDue(lastReminderAt: string | null): boolean {
   return Date.now() - reminderMs >= REMINDER_INTERVAL_DAYS * 24 * 60 * 60 * 1000;
 }
 
-function reassignmentLockDue(nextCycleAvailableAt: string | null): boolean {
+function reassignmentLockDue(nextCycleAvailableAt: string | null, latestReportId: string | null): boolean {
+  if (!latestReportId) return false;
   if (!nextCycleAvailableAt) return false;
   const lockMs = new Date(nextCycleAvailableAt).getTime();
   if (!Number.isFinite(lockMs)) return false;
@@ -415,7 +416,7 @@ export async function PATCH(
     }
 
     const currentProgress = mapProgressRow(progressResult.row);
-    if (reassignmentLockDue(currentProgress.nextCycleAvailableAt)) {
+    if (reassignmentLockDue(currentProgress.nextCycleAvailableAt, currentProgress.latestReportId)) {
       return NextResponse.json(
         {
           error: `Questionario reatribuido. Nova rodada liberada em ${formatDateTime(currentProgress.nextCycleAvailableAt)}.`,
@@ -498,7 +499,7 @@ export async function POST(
     }
 
     const currentProgress = mapProgressRow(progressResult.row);
-    if (reassignmentLockDue(currentProgress.nextCycleAvailableAt)) {
+    if (reassignmentLockDue(currentProgress.nextCycleAvailableAt, currentProgress.latestReportId)) {
       return NextResponse.json(
         {
           error: `Questionario reatribuido. Nova rodada liberada em ${formatDateTime(currentProgress.nextCycleAvailableAt)}.`,

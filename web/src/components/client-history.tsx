@@ -61,12 +61,21 @@ type HistoryPayload = {
     status: "draft" | "processing" | "ready" | "failed";
     createdAt: string;
   }>;
+  companyRiskProfileResults: Array<{
+    id: string;
+    questionnaireVersion: string;
+    sector: string | null;
+    overallScore: number;
+    overallClass: "baixa" | "media" | "alta";
+    createdAt: string;
+  }>;
   compatibility: {
     usingLegacyCampaigns: boolean;
     calendarEventsUnavailable: boolean;
     reportsUnavailable: boolean;
     drpsUnavailable: boolean;
     programsUnavailable: boolean;
+    companyRiskProfileUnavailable: boolean;
   };
 };
 
@@ -97,6 +106,12 @@ function probabilityLabel(value: "low" | "medium" | "high") {
   if (value === "low") return "Baixa";
   if (value === "medium") return "Media";
   return "Alta";
+}
+
+function companyRiskClassLabel(value: "baixa" | "media" | "alta") {
+  if (value === "baixa") return "Baixa";
+  if (value === "alta") return "Alta";
+  return "Media";
 }
 
 export function ClientHistory({ clientSlug }: { clientSlug: string }) {
@@ -146,6 +161,9 @@ export function ClientHistory({ clientSlug }: { clientSlug: string }) {
     if (payload.compatibility.programsUnavailable) {
       list.push("Historico de programas atribuidos indisponivel no momento.");
     }
+    if (payload.compatibility.companyRiskProfileUnavailable) {
+      list.push("Historico do perfil de risco da empresa indisponivel no momento.");
+    }
     return list;
   }, [payload]);
 
@@ -159,7 +177,7 @@ export function ClientHistory({ clientSlug }: { clientSlug: string }) {
           <div>
             <h2 className="text-2xl font-semibold text-[#141d24]">Historico</h2>
             <p className="mt-1 text-sm text-[#475660]">
-              Registro somente leitura dos DRPS concluidos, programas atribuidos, eventos e relatorios.
+              Registro somente leitura dos DRPS concluidos, perfil de risco, programas atribuidos, eventos e relatorios.
             </p>
           </div>
           <button
@@ -179,7 +197,7 @@ export function ClientHistory({ clientSlug }: { clientSlug: string }) {
         ) : null}
       </section>
 
-      <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+      <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
         <article className="rounded-2xl border border-[#dbe8ef] bg-white p-4 shadow-sm">
           <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[#5a7383]">DRPS concluidos</p>
           <p className="mt-2 text-2xl font-semibold text-[#123447]">{payload.concludedCampaigns.length}</p>
@@ -195,6 +213,12 @@ export function ClientHistory({ clientSlug }: { clientSlug: string }) {
         <article className="rounded-2xl border border-[#dbe8ef] bg-white p-4 shadow-sm">
           <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[#5a7383]">Relatorios realizados</p>
           <p className="mt-2 text-2xl font-semibold text-[#123447]">{payload.reports.length}</p>
+        </article>
+        <article className="rounded-2xl border border-[#dbe8ef] bg-white p-4 shadow-sm">
+          <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[#5a7383]">
+            Perfil de risco concluido
+          </p>
+          <p className="mt-2 text-2xl font-semibold text-[#123447]">{payload.companyRiskProfileResults.length}</p>
         </article>
       </section>
 
@@ -247,6 +271,51 @@ export function ClientHistory({ clientSlug }: { clientSlug: string }) {
                     <td className="px-2 py-2">
                       <Link
                         href={`/client/${clientSlug}/diagnostic/${campaign.id}?from=history`}
+                        className="text-xs font-semibold text-[#0f5b73] hover:underline"
+                      >
+                        Abrir
+                      </Link>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
+        <h3 className="text-lg font-semibold text-[#123447]">Questionarios concluidos de perfil de risco da empresa</h3>
+        <div className="mt-3 overflow-x-auto">
+          <table className="min-w-full text-sm">
+            <thead>
+              <tr className="border-b">
+                <th className="px-2 py-2 text-left">Versao</th>
+                <th className="px-2 py-2 text-left">Setor</th>
+                <th className="px-2 py-2 text-left">Resultado</th>
+                <th className="px-2 py-2 text-left">Concluido em</th>
+                <th className="px-2 py-2 text-left">Acoes</th>
+              </tr>
+            </thead>
+            <tbody>
+              {payload.companyRiskProfileResults.length === 0 ? (
+                <tr>
+                  <td colSpan={5} className="px-2 py-3 text-xs text-[#5a7383]">
+                    Nenhum questionario concluido de perfil de risco encontrado.
+                  </td>
+                </tr>
+              ) : (
+                payload.companyRiskProfileResults.map((result) => (
+                  <tr key={result.id} className="border-b">
+                    <td className="px-2 py-2">{result.questionnaireVersion}</td>
+                    <td className="px-2 py-2">{result.sector ?? "-"}</td>
+                    <td className="px-2 py-2">
+                      {result.overallScore.toFixed(2)} ({companyRiskClassLabel(result.overallClass)})
+                    </td>
+                    <td className="px-2 py-2">{fmt(result.createdAt)}</td>
+                    <td className="px-2 py-2">
+                      <Link
+                        href={`/client/${clientSlug}/company-risk-profile`}
                         className="text-xs font-semibold text-[#0f5b73] hover:underline"
                       >
                         Abrir
