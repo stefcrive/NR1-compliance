@@ -287,7 +287,7 @@ export function ManagerHomeOverview() {
           <section>
             <h4 className="text-lg font-semibold text-[#123447]">{t.activeDrpsTableTitle}</h4>
             <div className="mt-3 overflow-x-auto">
-              <table className="min-w-full text-sm">
+              <table className="nr-table min-w-full text-sm">
                 <thead>
                   <tr className="border-b">
                     <th className="px-2 py-2 text-left">{t.tableName}</th>
@@ -332,7 +332,7 @@ export function ManagerHomeOverview() {
           <section>
             <h4 className="text-lg font-semibold text-[#123447]">{t.activeProgramsTableTitle}</h4>
             <div className="mt-3 overflow-x-auto">
-              <table className="min-w-full text-sm">
+              <table className="nr-table min-w-full text-sm">
                 <thead>
                   <tr className="border-b">
                     <th className="px-2 py-2 text-left">{t.tableProgram}</th>

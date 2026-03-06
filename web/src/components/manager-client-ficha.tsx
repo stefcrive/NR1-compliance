@@ -1644,7 +1644,7 @@ export function ManagerClientFicha({
                   {sectorForms.length === 0 ? (
                     <p className="px-3 py-3 text-xs text-[#5a7383]">Nenhum setor cadastrado.</p>
                   ) : (
-                    <table className="min-w-full text-sm">
+                    <table className="nr-table min-w-full text-sm">
                       <thead>
                         <tr className="border-b bg-[#f8fbfd]">
                           <th className="px-3 py-2 text-left text-xs font-semibold text-[#4f6977]">Setor</th>
@@ -1771,7 +1771,7 @@ export function ManagerClientFicha({
               </div>
               <p className="mt-1 text-sm">Setores: {client.sectors.length}</p>
               <div className="mt-3 overflow-x-auto rounded-xl border border-[#d8e4ee]">
-                <table className="min-w-full text-sm">
+                <table className="nr-table min-w-full text-sm">
                   <thead>
                     <tr className="border-b bg-[#f8fbfd]">
                       <th className="px-3 py-2 text-left text-xs font-semibold text-[#4f6977]">Setor</th>
@@ -1871,7 +1871,7 @@ export function ManagerClientFicha({
                 : "Sem questionario selecionado."}
             </p>
             <div className="mt-3 max-h-none overflow-x-auto overflow-y-visible">
-              <table className="min-w-full text-sm">
+              <table className="nr-table min-w-full text-sm">
                 <thead>
                   <tr className="border-b">
                     <th className="px-2 py-2 text-left">Pacote</th>
@@ -2116,7 +2116,7 @@ export function ManagerClientFicha({
           </section>
           <section className="rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
             <h3 className="text-lg font-semibold text-[#123447]">Relatorios gerados</h3>
-            <div className="mt-3 overflow-x-auto"><table className="min-w-full text-sm"><thead><tr className="border-b"><th className="px-2 py-2 text-left">Titulo</th><th className="px-2 py-2 text-left">Status</th><th className="px-2 py-2 text-left">Criado</th></tr></thead><tbody>{reports.length === 0 ? <tr><td className="px-2 py-3 text-xs text-[#5a7383]" colSpan={3}>Sem relatorios.</td></tr> : reports.map((report) => <tr key={report.id} className="border-b"><td className="px-2 py-2">{report.report_title}</td><td className="px-2 py-2">{report.status}</td><td className="px-2 py-2">{fmt(report.created_at)}</td></tr>)}</tbody></table></div>
+            <div className="mt-3 overflow-x-auto"><table className="nr-table min-w-full text-sm"><thead><tr className="border-b"><th className="px-2 py-2 text-left">Titulo</th><th className="px-2 py-2 text-left">Status</th><th className="px-2 py-2 text-left">Criado</th></tr></thead><tbody>{reports.length === 0 ? <tr><td className="px-2 py-3 text-xs text-[#5a7383]" colSpan={3}>Sem relatorios.</td></tr> : reports.map((report) => <tr key={report.id} className="border-b"><td className="px-2 py-2">{report.report_title}</td><td className="px-2 py-2">{report.status}</td><td className="px-2 py-2">{fmt(report.created_at)}</td></tr>)}</tbody></table></div>
           </section>
         </>
       ) : null}
@@ -2159,7 +2159,7 @@ export function ManagerClientFicha({
               </div>
             </div>
             <div className="mt-4 max-h-[65vh] overflow-auto">
-              <table className="min-w-full text-sm">
+              <table className="nr-table min-w-full text-sm">
                 <thead>
                   <tr className="border-b">
                     <th className="px-2 py-2 text-left">Setor</th>
@@ -2463,7 +2463,7 @@ export function ManagerClientFicha({
               </div>
             </div>
             <div className="overflow-x-auto">
-              <table className="min-w-[1050px] text-xs">
+              <table className="nr-table min-w-[1050px] text-xs">
                 <thead>
                   <tr className="border-b border-[#d8e4ee] bg-white">
                     <th className="px-2 py-2 text-left font-semibold text-[#244354]">
@@ -2548,7 +2548,7 @@ export function ManagerClientFicha({
             </div>
           </div>
           <div className="mt-5 overflow-x-auto">
-            <table className="min-w-full text-sm">
+            <table className="nr-table min-w-full text-sm">
               <thead>
                 <tr className="border-b">
                   <th className="px-2 py-2 text-left">Programa</th>

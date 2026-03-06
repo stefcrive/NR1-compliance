@@ -902,7 +902,7 @@ export function ClientCompanyDataSection({ clientSlug }: { clientSlug: string })
       <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
         <h3 className="text-lg font-semibold text-[#141d24]">Metricas por setor (ultimo diagnostico DRPS)</h3>
         <div className="mt-3 overflow-x-auto">
-          <table className="min-w-full text-sm">
+          <table className="nr-table min-w-full text-sm">
             <thead>
               <tr className="border-b">
                 <th className="px-2 py-2 text-left">Department</th>
@@ -1073,7 +1073,7 @@ export function ClientDiagnosticStatusSection({ clientSlug }: { clientSlug: stri
 
       <section className="h-auto max-h-none overflow-visible rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
         <div className="max-h-none overflow-x-auto overflow-y-visible">
-          <table className="min-w-full text-sm">
+          <table className="nr-table min-w-full text-sm">
             <thead>
               <tr className="border-b">
                 <th className="px-2 py-2 text-left">Diagnostico</th>
@@ -1146,7 +1146,7 @@ export function ClientDiagnosticStatusSection({ clientSlug }: { clientSlug: stri
               </div>
             </div>
             <div className="mt-4 max-h-[65vh] overflow-auto">
-              <table className="min-w-full text-sm">
+              <table className="nr-table min-w-full text-sm">
                 <thead>
                   <tr className="border-b">
                     <th className="px-2 py-2 text-left">Setor</th>
@@ -2277,7 +2277,7 @@ export function ClientDiagnosticResultsSection({
           <h3 className="text-lg font-semibold text-[#141d24]">Risk Factors (core metrics)</h3>
           <p className="mt-1 text-xs text-[#55707f]">Ordered by risk ranking (highest score first).</p>
           <div className="mt-3 flex-1 overflow-auto rounded-xl border border-[#dce8ee] bg-white">
-            <table className="min-w-full text-xs">
+            <table className="nr-table min-w-full text-xs">
               <thead>
                 <tr className="border-b bg-[#f5fafc]">
                   <th className="px-2 py-2 text-left">#</th>
@@ -2347,7 +2347,7 @@ export function ClientDiagnosticResultsSection({
           </button>
         </div>
         <div className="mt-3 overflow-x-auto">
-          <table className="min-w-[980px] text-sm">
+          <table className="nr-table min-w-[980px] text-sm">
             <thead>
               <tr className="border-b">
                 <th className="px-2 py-2 text-left">Sector</th>
@@ -2926,7 +2926,7 @@ export function ClientDiagnosticResultsSection({
           </span>
         </div>
         <div className="mt-3 max-h-[360px] overflow-auto rounded-xl border border-[#dbe8ee] bg-white">
-          <table className="min-w-full text-xs">
+          <table className="nr-table min-w-full text-xs">
             <thead>
               <tr className="border-b bg-[#f5fafc]">
                 <th className="px-2 py-2 text-left">
@@ -3155,7 +3155,7 @@ export function ClientProgramsListSection({ clientSlug }: { clientSlug: string }
           Visualizacao somente leitura do cronograma definido pelo gestor.
         </p>
         <div className="mt-3 overflow-x-auto">
-          <table className="min-w-[1050px] text-xs">
+          <table className="nr-table min-w-[1050px] text-xs">
             <thead>
               <tr className="border-b bg-white">
                 <th className="px-2 py-2 text-left font-semibold text-[#244354]">Programa</th>
@@ -3321,7 +3321,7 @@ export function ClientReportsSection({ clientSlug }: { clientSlug: string }) {
       <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
         <h3 className="text-lg font-semibold text-[#141d24]">DRPS concluidos</h3>
         <div className="mt-3 overflow-x-auto">
-          <table className="min-w-full text-sm">
+          <table className="nr-table min-w-full text-sm">
             <thead>
               <tr className="border-b">
                 <th className="px-2 py-2 text-left">Diagnostico</th>
@@ -3364,7 +3364,7 @@ export function ClientReportsSection({ clientSlug }: { clientSlug: string }) {
       <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
         <h3 className="text-lg font-semibold text-[#141d24]">Relatorios DRPS</h3>
         <div className="mt-3 overflow-x-auto">
-          <table className="min-w-full text-sm">
+          <table className="nr-table min-w-full text-sm">
             <thead>
               <tr className="border-b">
                 <th className="px-2 py-2 text-left">Titulo</th>
@@ -3408,7 +3408,7 @@ export function ClientReportsSection({ clientSlug }: { clientSlug: string }) {
       <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
         <h3 className="text-lg font-semibold text-[#141d24]">Processos continuos</h3>
         <div className="mt-3 overflow-x-auto">
-          <table className="min-w-full text-sm">
+          <table className="nr-table min-w-full text-sm">
             <thead>
               <tr className="border-b">
                 <th className="px-2 py-2 text-left">Programa</th>
@@ -3471,7 +3471,7 @@ export function ClientContractsInvoicesSection({ clientSlug }: { clientSlug: str
       <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
         <h3 className="text-lg font-semibold text-[#141d24]">Contracts invoces</h3>
         <div className="mt-3 overflow-x-auto">
-          <table className="min-w-full text-sm">
+          <table className="nr-table min-w-full text-sm">
             <thead>
               <tr className="border-b">
                 <th className="px-2 py-2 text-left">Invoice ID</th>
@@ -3665,7 +3665,7 @@ export function ClientProgramDetailsSection({
         <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
           <h3 className="text-lg font-semibold text-[#141d24]">Dados do processo continuo</h3>
           <div className="mt-3 overflow-x-auto">
-            <table className="min-w-full text-sm">
+            <table className="nr-table min-w-full text-sm">
               <tbody>
                 <tr className="border-b">
                   <td className="px-2 py-2 font-semibold text-[#3e5b6b]">ID atribuicao</td>
@@ -3709,7 +3709,7 @@ export function ClientProgramDetailsSection({
         <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
           <h3 className="text-lg font-semibold text-[#141d24]">Cronograma (reunioes no calendario)</h3>
           <div className="mt-3 overflow-x-auto rounded-xl border border-[#d8e4ee]">
-            <table className="min-w-full text-xs">
+            <table className="nr-table min-w-full text-xs">
               <thead className="bg-[#f3f8fb]">
                 <tr className="border-b border-[#d8e4ee]">
                   <th className="px-3 py-2 text-left font-semibold text-[#244354]">Data/hora</th>

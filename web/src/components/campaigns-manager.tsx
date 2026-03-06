@@ -426,7 +426,7 @@ export function CampaignsManager() {
 
         {!isLoading && !error && (
           <div className="mt-4 overflow-x-auto">
-            <table className="min-w-full border-collapse text-left text-sm">
+            <table className="nr-table min-w-full border-collapse text-left text-sm">
               <thead>
                 <tr className="border-b border-[#d8e4ee] text-[#20495a]">
                   <th className="px-2 py-2">Campanha</th>
@@ -544,7 +544,7 @@ export function CampaignsManager() {
 
         {!isLoadingSectors && sectorData && (
           <div className="mt-4 overflow-x-auto">
-            <table className="min-w-full border-collapse text-left text-sm">
+            <table className="nr-table min-w-full border-collapse text-left text-sm">
               <thead>
                 <tr className="border-b border-[#d8e4ee] text-[#20495a]">
                   <th className="px-2 py-2">Setor</th>

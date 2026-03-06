@@ -449,7 +449,7 @@ export function ManagerProgramsDatabase() {
         {error ? <p className="mt-3 text-sm text-red-600">{error}</p> : null}
         {isDiagnosticsOpen && !isLoading && !error ? (
           <div className="mt-3 overflow-x-auto">
-            <table className="min-w-full text-sm">
+            <table className="nr-table min-w-full text-sm">
               <thead>
                 <tr className="border-b">
                   <th className="px-2 py-2 text-left">{t.diagName}</th>
@@ -536,7 +536,7 @@ export function ManagerProgramsDatabase() {
         </div>
         {isContinuousOpen && !isLoading && !error ? (
           <div className="mt-3 overflow-x-auto">
-            <table className="min-w-full text-sm">
+            <table className="nr-table min-w-full text-sm">
               <thead>
                 <tr className="border-b">
                   <th className="px-2 py-2 text-left">{t.prgName}</th>

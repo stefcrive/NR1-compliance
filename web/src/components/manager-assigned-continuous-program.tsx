@@ -933,7 +933,7 @@ export function ManagerAssignedContinuousProgram({
           <p className="text-xs text-[#5a7383]">Sem eventos no cronograma para este programa.</p>
         ) : (
           <div className="overflow-x-auto rounded-xl border border-[#d8e4ee]">
-            <table className="min-w-full text-xs">
+            <table className="nr-table min-w-full text-xs">
               <thead className="bg-[#f3f8fb]">
                 <tr className="border-b border-[#d8e4ee]">
                   <th className="px-3 py-2 text-left font-semibold text-[#244354]">Data/hora</th>

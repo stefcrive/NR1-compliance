@@ -225,7 +225,7 @@ export function ClientHistory({ clientSlug }: { clientSlug: string }) {
       <section className="rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
         <h3 className="text-lg font-semibold text-[#123447]">DRPS concluidos e resultados</h3>
         <div className="mt-3 overflow-x-auto">
-          <table className="min-w-full text-sm">
+          <table className="nr-table min-w-full text-sm">
             <thead>
               <tr className="border-b">
                 <th className="px-2 py-2 text-left">Diagnostico</th>
@@ -287,7 +287,7 @@ export function ClientHistory({ clientSlug }: { clientSlug: string }) {
       <section className="rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
         <h3 className="text-lg font-semibold text-[#123447]">Questionarios concluidos de perfil de risco da empresa</h3>
         <div className="mt-3 overflow-x-auto">
-          <table className="min-w-full text-sm">
+          <table className="nr-table min-w-full text-sm">
             <thead>
               <tr className="border-b">
                 <th className="px-2 py-2 text-left">Versao</th>
@@ -332,7 +332,7 @@ export function ClientHistory({ clientSlug }: { clientSlug: string }) {
       <section className="rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
         <h3 className="text-lg font-semibold text-[#123447]">Programas atribuidos</h3>
         <div className="mt-3 overflow-x-auto">
-          <table className="min-w-full text-sm">
+          <table className="nr-table min-w-full text-sm">
             <thead>
               <tr className="border-b">
                 <th className="px-2 py-2 text-left">Programa</th>
@@ -375,7 +375,7 @@ export function ClientHistory({ clientSlug }: { clientSlug: string }) {
       <section className="rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
         <h3 className="text-lg font-semibold text-[#123447]">Eventos realizados</h3>
         <div className="mt-3 overflow-x-auto">
-          <table className="min-w-full text-sm">
+          <table className="nr-table min-w-full text-sm">
             <thead>
               <tr className="border-b">
                 <th className="px-2 py-2 text-left">Evento</th>
@@ -436,7 +436,7 @@ export function ClientHistory({ clientSlug }: { clientSlug: string }) {
       <section className="rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
         <h3 className="text-lg font-semibold text-[#123447]">Relatorios realizados</h3>
         <div className="mt-3 overflow-x-auto">
-          <table className="min-w-full text-sm">
+          <table className="nr-table min-w-full text-sm">
             <thead>
               <tr className="border-b">
                 <th className="px-2 py-2 text-left">Relatorio</th>

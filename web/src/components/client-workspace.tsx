@@ -1030,7 +1030,7 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
             : "Sem questionario selecionado."}
         </p>
         <div className="mt-3 overflow-x-auto">
-          <table className="min-w-full text-sm">
+          <table className="nr-table min-w-full text-sm">
             <thead>
               <tr className="border-b">
                 <th className="px-2 py-2 text-left">Pacote</th>
@@ -1204,7 +1204,7 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
       <section className="h-auto max-h-none overflow-visible rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
         <h3 className="text-lg font-semibold text-[#123447]">Processos continuos atribuidos</h3>
         <div className="mt-3 max-h-none overflow-x-auto overflow-y-visible">
-          <table className="min-w-full text-sm">
+          <table className="nr-table min-w-full text-sm">
             <thead>
               <tr className="border-b">
                 <th className="px-2 py-2 text-left">Programa</th>
@@ -1255,7 +1255,7 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
           <p className="mt-3 text-xs text-[#5a7383]">Nenhuma reuniao commitada no momento.</p>
         ) : (
           <div className="mt-3 overflow-x-auto rounded-xl border border-[#d8e4ee]">
-            <table className="min-w-full text-xs">
+            <table className="nr-table min-w-full text-xs">
               <thead className="bg-[#f3f8fb]">
                 <tr className="border-b border-[#d8e4ee]">
                   <th className="px-3 py-2 text-left font-semibold text-[#244354]">Data/hora</th>
@@ -1335,7 +1335,7 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
               </div>
             </div>
             <div className="mt-4 max-h-[65vh] overflow-auto">
-              <table className="min-w-full text-sm">
+              <table className="nr-table min-w-full text-sm">
                 <thead>
                   <tr className="border-b">
                     <th className="px-2 py-2 text-left">Setor</th>
@@ -1579,7 +1579,7 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
       <section className="rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
         <h3 className="text-lg font-semibold text-[#123447]">Relatorios disponibilizados</h3>
         <div className="mt-3 overflow-x-auto">
-          <table className="min-w-full text-sm">
+          <table className="nr-table min-w-full text-sm">
             <thead>
               <tr className="border-b">
                 <th className="px-2 py-2 text-left">Titulo</th>

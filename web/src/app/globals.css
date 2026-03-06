@@ -31,3 +31,27 @@ body {
   color: var(--foreground);
   font-family: var(--font-geist-sans), sans-serif;
 }
+
+.nr-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.98rem;
+  color: #2b4b5d;
+}
+
+.nr-table thead th {
+  background: #edf1f5;
+  border-bottom: 1px solid #2f495a;
+  font-weight: 700;
+  color: #0f2e42;
+}
+
+.nr-table tbody tr {
+  border-bottom: 1px solid #d4dde6;
+}
+
+.nr-table :is(th, td) {
+  padding: 0.9rem 0.85rem !important;
+  text-align: left;
+  vertical-align: top;
+}

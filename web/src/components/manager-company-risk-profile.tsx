@@ -412,7 +412,7 @@ export function ManagerCompanyRiskProfile({ clientId }: { clientId: string }) {
                 </div>
 
                 <div className="mt-3 overflow-x-auto rounded-xl border border-[#d8e4ee] bg-white">
-                  <table className="min-w-full text-sm">
+                  <table className="nr-table min-w-full text-sm">
                     <thead>
                       <tr className="border-b bg-[#f8fbfd]">
                         <th className="px-3 py-2 text-left text-xs font-semibold text-[#4f6977]">Risco psicossocial</th>
@@ -450,7 +450,7 @@ export function ManagerCompanyRiskProfile({ clientId }: { clientId: string }) {
                       >
                         <h4 className="text-sm font-semibold text-[#123447]">{factorScore.factorLabel}</h4>
                         <div className="mt-2 overflow-x-auto">
-                          <table className="min-w-full text-xs">
+                          <table className="nr-table min-w-full text-xs">
                             <thead>
                               <tr className="border-b bg-[#f8fbfd]">
                                 <th className="px-2 py-2 text-left text-[#4f6977]">Criterio</th>
@@ -482,7 +482,7 @@ export function ManagerCompanyRiskProfile({ clientId }: { clientId: string }) {
             ) : null}
 
             <div className="mt-4 overflow-x-auto rounded-xl border border-[#d8e4ee]">
-              <table className="min-w-full text-sm">
+              <table className="nr-table min-w-full text-sm">
                 <thead>
                   <tr className="border-b bg-[#f8fbfd]">
                     <th className="px-3 py-2 text-left text-xs font-semibold text-[#4f6977]">Data</th>
