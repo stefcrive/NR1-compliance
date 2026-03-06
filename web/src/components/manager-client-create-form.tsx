@@ -314,12 +314,13 @@ export function ManagerClientCreateForm() {
       if (result.warning) {
         setError(result.warning);
       }
-      const targetId = result.client?.id;
-      if (targetId) {
-        const generatedInvitation = result.client.access?.invitationLink ?? null;
+      const createdClient = result.client;
+      if (createdClient?.id) {
+        const targetId = createdClient.id;
+        const generatedInvitation = createdClient.access?.invitationLink ?? null;
         setCreatedClientId(targetId);
         setInvitationLink(generatedInvitation);
-        setInvitationExpiresAt(result.client.access?.invitationExpiresAt ?? null);
+        setInvitationExpiresAt(createdClient.access?.invitationExpiresAt ?? null);
         setCopiedInvitation(false);
         if (generatedInvitation) {
           setIsInvitationModalOpen(true);

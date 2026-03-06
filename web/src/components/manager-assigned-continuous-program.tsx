@@ -685,17 +685,18 @@ export function ManagerAssignedContinuousProgram({
       if (!response.ok || !payload.event) {
         throw new Error(payload.error ?? "Nao foi possivel atualizar ciclo do evento.");
       }
+      const updatedEvent = payload.event;
 
       const updatedTimeline = normalizeTimelineEvents(
         (assignment.calendarTimelineEvents ?? []).map((item) =>
-          item.id === payload.event?.id
+          item.id === updatedEvent.id
             ? {
                 ...item,
-                startsAt: payload.event.startsAt,
-                endsAt: payload.event.endsAt,
-                status: payload.event.status,
-                lifecycle: payload.event.details.eventLifecycle,
-                proposalKind: payload.event.details.proposalKind,
+                startsAt: updatedEvent.startsAt,
+                endsAt: updatedEvent.endsAt,
+                status: updatedEvent.status,
+                lifecycle: updatedEvent.details.eventLifecycle,
+                proposalKind: updatedEvent.details.proposalKind,
               }
             : item,
         ),
@@ -714,10 +715,10 @@ export function ManagerAssignedContinuousProgram({
       setProvisorySlots(slots.provisory);
       setEventTimingDraftById((previous) => ({
         ...previous,
-        [payload.event.id]: {
-          startsAt: toDatetimeLocal(payload.event.startsAt),
+        [updatedEvent.id]: {
+          startsAt: toDatetimeLocal(updatedEvent.startsAt),
           durationMinutes: String(
-            durationMinutesFromRange(payload.event.startsAt, payload.event.endsAt, 60),
+            durationMinutesFromRange(updatedEvent.startsAt, updatedEvent.endsAt, 60),
           ),
         },
       }));
@@ -774,17 +775,18 @@ export function ManagerAssignedContinuousProgram({
       if (!response.ok || !payload.event) {
         throw new Error(payload.error ?? "Nao foi possivel atualizar horario do evento.");
       }
+      const updatedEvent = payload.event;
 
       const updatedTimeline = normalizeTimelineEvents(
         (assignment.calendarTimelineEvents ?? []).map((item) =>
-          item.id === payload.event?.id
+          item.id === updatedEvent.id
             ? {
                 ...item,
-                startsAt: payload.event.startsAt,
-                endsAt: payload.event.endsAt,
-                status: payload.event.status,
-                lifecycle: payload.event.details.eventLifecycle,
-                proposalKind: payload.event.details.proposalKind,
+                startsAt: updatedEvent.startsAt,
+                endsAt: updatedEvent.endsAt,
+                status: updatedEvent.status,
+                lifecycle: updatedEvent.details.eventLifecycle,
+                proposalKind: updatedEvent.details.proposalKind,
               }
             : item,
         ),
@@ -803,10 +805,10 @@ export function ManagerAssignedContinuousProgram({
       setProvisorySlots(slots.provisory);
       setEventTimingDraftById((previous) => ({
         ...previous,
-        [payload.event.id]: {
-          startsAt: toDatetimeLocal(payload.event.startsAt),
+        [updatedEvent.id]: {
+          startsAt: toDatetimeLocal(updatedEvent.startsAt),
           durationMinutes: String(
-            durationMinutesFromRange(payload.event.startsAt, payload.event.endsAt, 60),
+            durationMinutesFromRange(updatedEvent.startsAt, updatedEvent.endsAt, 60),
           ),
         },
       }));

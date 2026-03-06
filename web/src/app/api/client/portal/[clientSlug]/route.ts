@@ -255,6 +255,11 @@ type SectorRiskFactorTimeseriesRow = {
   std_dev_exposure: number | string;
 };
 
+type CompanyRiskProfileReportRow = {
+  id: string;
+  overall_score: number | string;
+};
+
 type CriticalExposureStats = {
   rate: number | null;
   employees: number;
@@ -291,12 +296,14 @@ const TOPIC_PROFILES: Record<number, { label: string; severity: number }> = {
   13: { label: "Trabalho remoto/isolado", severity: 3 },
 };
 
+type RiskSeverityWeightResolver = (topicId: number) => number;
+
 function round(value: number, decimals = 4): number {
   const factor = 10 ** decimals;
   return Math.round(value * factor) / factor;
 }
 
-function toNumber(value: number | string): number | null {
+function toNumber(value: number | string | null | undefined): number | null {
   const numeric = typeof value === "number" ? value : Number(value);
   return Number.isFinite(numeric) ? numeric : null;
 }
@@ -361,11 +368,12 @@ function estimateObservedSeverityFromScores(scores: number[]): number | null {
   return clamp(baseMean + dispersion * 0.18 + severeShare * 0.22, 1, 5);
 }
 
-function matrixClassFromRiskScore(score: number | null): RiskMatrixClass | null {
+function matrixClassFromRiskScore(score: number | null, maxScore = 5): RiskMatrixClass | null {
   if (score === null) return null;
-  if (score < 1.5) return "low";
-  if (score < 2.5) return "moderate";
-  if (score < 3.5) return "high";
+  const normalized = clamp(score / Math.max(maxScore, Number.EPSILON), 0, 1);
+  if (normalized < 0.25) return "low";
+  if (normalized < 0.5) return "moderate";
+  if (normalized < 0.75) return "high";
   return "critical";
 }
 
@@ -379,6 +387,12 @@ function toTopicLabel(topicId: number): string {
 
 function toTopicSeverity(topicId: number): number {
   return TOPIC_PROFILES[topicId]?.severity ?? 3;
+}
+
+function normalizeCompanyOccurrenceRiskScore(value: number | string | null | undefined): number | null {
+  const numeric = toNumber(value ?? null);
+  if (numeric === null) return null;
+  return round(clamp(numeric, 1, 3), 2);
 }
 
 function toScoreBucket(score: number): 1 | 2 | 3 | 4 | 5 {
@@ -570,7 +584,12 @@ function buildAnswerRowsFromResponses(responses: ResponseRawRow[]): AnswerScoreR
   return answerRows;
 }
 
-function buildRiskFactorMetrics(rows: ResponseRiskDatasetRow[], topicIds: number[]): RiskFactorMetric[] {
+function buildRiskFactorMetrics(
+  rows: ResponseRiskDatasetRow[],
+  topicIds: number[],
+  resolveSeverityWeight: RiskSeverityWeightResolver = toTopicSeverity,
+  maxRiskScore = 5,
+): RiskFactorMetric[] {
   const rowsByTopic = new Map<number, ResponseRiskDatasetRow[]>();
   for (const row of rows) {
     const list = rowsByTopic.get(row.topicId) ?? [];
@@ -606,7 +625,7 @@ function buildRiskFactorMetrics(rows: ResponseRiskDatasetRow[], topicIds: number
       responses > 0 && meanOccurrenceProbability !== null
         ? round(meanOccurrenceProbability)
         : null;
-    const severity = toTopicSeverity(topicId);
+    const severity = resolveSeverityWeight(topicId);
     const riskScore = probability === null ? null : round(probability * severity);
     const concentrationRaw = safeStdDev(scores);
     const concentration = concentrationRaw === null ? null : round(concentrationRaw);
@@ -624,7 +643,7 @@ function buildRiskFactorMetrics(rows: ResponseRiskDatasetRow[], topicIds: number
       probability,
       probabilityBand: probabilityBandFromValue(probability),
       riskScore,
-      riskCategory: matrixClassFromRiskScore(riskScore),
+      riskCategory: matrixClassFromRiskScore(riskScore, maxRiskScore),
       concentration,
       distribution,
     };
@@ -635,6 +654,7 @@ function buildTrendSeries(
   rows: ResponseRiskDatasetRow[],
   topicIds: number[],
   sector = "Global",
+  resolveSeverityWeight: RiskSeverityWeightResolver = toTopicSeverity,
 ): RiskFactorTrendSeries[] {
   const topicSet = new Set(topicIds);
   const aggregateByTopicAndPeriod = new Map<
@@ -692,7 +712,7 @@ function buildTrendSeries(
       responses > 0 && meanOccurrenceProbability !== null
         ? meanOccurrenceProbability
         : 0;
-    const severity = toTopicSeverity(entry.topicId);
+    const severity = resolveSeverityWeight(entry.topicId);
     const riskScore = probability * severity;
     const list = byTopic.get(entry.topicId) ?? [];
     list.push({
@@ -720,6 +740,7 @@ function buildTrendSeries(
 function buildTrendSeriesFromStoredTimeseries(
   rows: SectorRiskFactorTimeseriesRow[],
   topicIds: number[],
+  resolveSeverityWeight: RiskSeverityWeightResolver = toTopicSeverity,
 ): RiskFactorTrendSeries[] {
   const topicSet = new Set(topicIds);
   const bySectorAndTopic = new Map<string, RiskFactorTrendSeries>();
@@ -736,7 +757,7 @@ function buildTrendSeriesFromStoredTimeseries(
     const spreadPressure = clamp(stdDevExposure / 2.2, 0, 1);
     const probability = clamp(meanProbability * 0.72 + spreadPressure * 0.28, 0, 1);
     const observedSeverity = clamp(meanExposure + stdDevExposure * 0.2 + probability * 0.15, 1, 5);
-    const severity = toTopicSeverity(row.topic_id);
+    const severity = resolveSeverityWeight(row.topic_id);
     const riskScore = probability * severity;
 
     let series = bySectorAndTopic.get(key);
@@ -1381,6 +1402,7 @@ export async function GET(
     questionTopicsResult,
     storedTimeseriesResult,
     clientSectorHeadcountResult,
+    companyRiskProfileReportResult,
   ] = await Promise.all([
     supabase
       .from("drps_assessments")
@@ -1412,13 +1434,26 @@ export async function GET(
       .select("key,name,remote_workers,onsite_workers,hybrid_workers")
       .eq("client_id", client.client_id)
       .returns<ClientSectorHeadcountRow[]>(),
+    supabase
+      .from("client_company_risk_profile_reports")
+      .select("id,overall_score")
+      .eq("client_id", client.client_id)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle<CompanyRiskProfileReportRow>(),
   ]);
+
+  const companyRiskProfileReportMissing = isMissingTableError(
+    companyRiskProfileReportResult.error,
+    "client_company_risk_profile_reports",
+  );
 
   if (
     latestDrpsResult.error ||
     sectorConfigResult.error ||
     responseRowsResult.error ||
-    questionTopicsResult.error
+    questionTopicsResult.error ||
+    (companyRiskProfileReportResult.error && !companyRiskProfileReportMissing)
   ) {
     return NextResponse.json({ error: "Could not load campaign dashboard." }, { status: 500 });
   }
@@ -1558,7 +1593,23 @@ export async function GET(
     ),
   ).sort((a, b) => a - b);
 
-  const globalRiskFactors = buildRiskFactorMetrics(responseRiskDataset, topicIds);
+  const companyRiskProfileReport = companyRiskProfileReportMissing ? null : companyRiskProfileReportResult.data ?? null;
+  const companyOccurrenceRiskWeight = normalizeCompanyOccurrenceRiskScore(
+    companyRiskProfileReport?.overall_score,
+  );
+  const gravitySeverityWeightResolver: RiskSeverityWeightResolver = (topicId: number) =>
+    companyOccurrenceRiskWeight ?? toTopicSeverity(topicId);
+  const maxRiskScoreScale = topicIds.reduce((max, topicId) => {
+    return Math.max(max, gravitySeverityWeightResolver(topicId));
+  }, 0);
+  const gravityScoreScaleMax = round(Math.max(maxRiskScoreScale, 1), 2);
+
+  const globalRiskFactors = buildRiskFactorMetrics(
+    responseRiskDataset,
+    topicIds,
+    gravitySeverityWeightResolver,
+    gravityScoreScaleMax,
+  );
   const normalizedGlobal = globalRiskFactors.map((metric) =>
     normalizeTopic({
       topic_id: metric.topicId,
@@ -1570,7 +1621,7 @@ export async function GET(
   const normalizedGlobalWithLabels = normalizedGlobal.map((topic) => ({
     ...topic,
     riskFactor: toTopicLabel(topic.topicId),
-    severity: toTopicSeverity(topic.topicId),
+    severity: gravitySeverityWeightResolver(topic.topicId),
   }));
   const rankedRiskFactors = globalRiskFactors
     .filter((metric) => metric.riskScore !== null)
@@ -1630,7 +1681,12 @@ export async function GET(
       continue;
     }
 
-    const riskFactors = buildRiskFactorMetrics(sectorRows, topicIds);
+    const riskFactors = buildRiskFactorMetrics(
+      sectorRows,
+      topicIds,
+      gravitySeverityWeightResolver,
+      gravityScoreScaleMax,
+    );
     const criticalExposure = computeCriticalExposure(sectorRows);
     const sectorRiskIndex = computeCompositeIndex(riskFactors, (metric) => metric.riskScore);
     const psychosocialLoadIndex = computeCompositeIndex(riskFactors, (metric) => metric.meanExposure);
@@ -1642,7 +1698,7 @@ export async function GET(
       nResponses,
       suppressed: false,
       sectorRiskIndex,
-      sectorRiskCategory: matrixClassFromRiskScore(sectorRiskIndex),
+      sectorRiskCategory: matrixClassFromRiskScore(sectorRiskIndex, gravityScoreScaleMax),
       psychosocialLoadIndex,
       riskConcentration,
       criticalExposure: criticalExposure.rate,
@@ -1782,6 +1838,7 @@ export async function GET(
         isSectorInScope(row.sector_name),
     ),
     trendTopicIds,
+    gravitySeverityWeightResolver,
   );
   const fallbackTrendSeries = Array.from(new Set(visibleResponseRows.map((row) => row.sector)))
     .slice()
@@ -1791,6 +1848,7 @@ export async function GET(
         visibleResponseRows.filter((row) => row.sector === sector),
         trendTopicIds,
         sector,
+        gravitySeverityWeightResolver,
       ),
     )
     .filter((series) => series.points.length > 0);
@@ -1859,6 +1917,13 @@ export async function GET(
           criticalExposure: globalCriticalExposure.rate,
           criticalExposureEmployees: globalCriticalExposure.criticalEmployees,
           employeesEvaluated: globalCriticalExposure.employees,
+          gravityScoreScaleMax,
+          gravitySeverityWeightSource:
+            companyOccurrenceRiskWeight === null
+              ? "topic_default"
+              : "company_risk_profile_occurrence_risk",
+          companyOccurrenceRiskWeight,
+          companyRiskProfileReportId: companyRiskProfileReport?.id ?? null,
         },
         riskFactors: globalRiskFactors,
         ranking: rankedRiskFactors,

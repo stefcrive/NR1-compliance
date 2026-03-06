@@ -232,15 +232,15 @@ export async function GET(
     const worksheet = XLSX.utils.aoa_to_sheet(matrix);
     XLSX.utils.book_append_sheet(workbook, worksheet, sheet.name);
   }
-  const workbookBuffer = XLSX.write(workbook, {
-    type: "buffer",
+  const workbookArrayBuffer = XLSX.write(workbook, {
+    type: "array",
     bookType: "xlsx",
     compression: true,
-  }) as Buffer;
+  }) as ArrayBuffer;
   const fileSafeCampaignName = sanitizeFileSegment(campaignResult.data.name);
   const fileName = `${fileSafeCampaignName}_raw_data.xlsx`;
 
-  return new NextResponse(workbookBuffer, {
+  return new NextResponse(workbookArrayBuffer, {
     headers: {
       "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       "Content-Disposition": `attachment; filename="${fileName}"`,

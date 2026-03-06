@@ -184,6 +184,10 @@ type ClientPortalPayload = {
         criticalExposure: number | null;
         criticalExposureEmployees: number;
         employeesEvaluated: number;
+        gravityScoreScaleMax?: number;
+        gravitySeverityWeightSource?: "topic_default" | "company_risk_profile_occurrence_risk";
+        companyOccurrenceRiskWeight?: number | null;
+        companyRiskProfileReportId?: string | null;
       };
       riskFactors: RiskFactorMetric[];
       ranking: RiskFactorMetric[];
@@ -509,20 +513,21 @@ function heatCellColor(meanExposure: number | null) {
   return "bg-rose-100 text-rose-800";
 }
 
-function riskScoreBand(score: number | null | undefined) {
+function riskScoreBand(score: number | null | undefined, maxScore = 5) {
   if (score === null || score === undefined || Number.isNaN(score)) return null;
-  if (score < 1.5) return "low";
-  if (score < 2.5) return "moderate";
-  if (score < 3.5) return "high";
+  const normalized = Math.min(1, Math.max(0, score / Math.max(maxScore, Number.EPSILON)));
+  if (normalized < 0.25) return "low";
+  if (normalized < 0.5) return "moderate";
+  if (normalized < 0.75) return "high";
   return "critical";
 }
 
-function riskScoreTone(score: number | null | undefined) {
-  return metricTone(riskScoreBand(score));
+function riskScoreTone(score: number | null | undefined, maxScore = 5) {
+  return metricTone(riskScoreBand(score, maxScore));
 }
 
-function riskScoreRowTone(score: number | null | undefined) {
-  const band = riskScoreBand(score);
+function riskScoreRowTone(score: number | null | undefined, maxScore = 5) {
+  const band = riskScoreBand(score, maxScore);
   if (band === "low") return "bg-emerald-50/40";
   if (band === "moderate") return "bg-amber-50/40";
   if (band === "high") return "bg-orange-50/40";
@@ -804,7 +809,7 @@ const PLOT_INFO_CONTENT: Record<
     whatItShows:
       "Each bubble is one risk factor. X-axis is probability of occurrence, Y-axis is observed severity (from responses), bubble size represents affected employees, and color indicates gravity class.",
     howToUse: [
-      "Color (gravity) uses risk score = probability x fixed topic severity weight.",
+      "Color (gravity) uses risk score = probability x fixed occurrence-risk weight from the company risk profile questionnaire.",
       "Y-axis (severity) uses observed mean exposure from responses.",
       "Focus first on the upper-right quadrant, where probability and observed severity are both high.",
       "Use bubble size to prioritize actions with the largest exposed population.",
@@ -835,7 +840,7 @@ const PLOT_INFO_CONTENT: Record<
   ranking: {
     title: "Critical Risk Ranking",
     whatItShows:
-      "Sorted list of risk factors by risk score (probability x severity), with prevalence context.",
+      "Sorted list of risk factors by risk score (probability x company occurrence-risk weight), with prevalence context.",
     howToUse: [
       "Use the top risks as immediate priorities for executive action plans.",
       "Cross-check with Heatmap Risk Index to target interventions where each top risk is concentrated.",
@@ -1222,7 +1227,11 @@ export function ClientDiagnosticAggregateResultsSection({
       .sort((left, right) => left.sector.localeCompare(right.sector, "pt-BR"))
       .map((sector) => sector.sector);
   }, [aggregateData?.dashboard?.sectors]);
-  const [selectedPerSector, setSelectedPerSector] = useState(() => (sectorFilter ?? "").trim());
+  const requestedPerSector = (sectorFilter ?? "").trim();
+  const [selectedPerSector, setSelectedPerSector] = useState(() => requestedPerSector);
+  const [activeResultsTab, setActiveResultsTab] = useState<"aggregate" | "per-sector">(() =>
+    requestedPerSector.length > 0 ? "per-sector" : "aggregate",
+  );
   const pendingScrollRestoreY = useRef<number | null>(null);
 
   function resolveSectorName(candidate: string): string | null {
@@ -1235,7 +1244,6 @@ export function ClientDiagnosticAggregateResultsSection({
     return sectorOptions.length === 0 ? normalizedCandidate : null;
   }
 
-  const requestedPerSector = (sectorFilter ?? "").trim();
   const effectivePerSector =
     resolveSectorName(selectedPerSector) ??
     resolveSectorName(requestedPerSector) ??
@@ -1271,90 +1279,37 @@ export function ClientDiagnosticAggregateResultsSection({
         <p className="mt-1 text-sm text-[#475660]">
           {campaignLabel} | Aggregate and per-sector views in a single page.
         </p>
-        <div className="mt-4 flex flex-wrap items-center gap-2">
-          <a
-            href="#aggregate-results"
-            className="rounded-full border border-[#8ebad0] bg-[#eaf5fb] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
+        <div className="mt-4 inline-flex rounded-full border border-[#c6d8e4] bg-white p-1">
+          <button
+            type="button"
+            onClick={() => setActiveResultsTab("aggregate")}
+            className={`rounded-full px-3 py-1 text-xs font-semibold transition ${
+              activeResultsTab === "aggregate" ? "bg-[#eaf5fb] text-[#0f5b73]" : "text-[#24485a]"
+            }`}
           >
             Aggregate results
-          </a>
-          <a
-            href="#per-sector-results"
-            className="rounded-full border border-[#b9cfdc] bg-white px-3 py-1 text-xs font-semibold text-[#24485a]"
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveResultsTab("per-sector")}
+            className={`rounded-full px-3 py-1 text-xs font-semibold transition ${
+              activeResultsTab === "per-sector" ? "bg-[#eaf5fb] text-[#0f5b73]" : "text-[#24485a]"
+            }`}
           >
             Per-sector results
-          </a>
+          </button>
         </div>
       </section>
 
-      <section id="aggregate-results" className="scroll-mt-20 space-y-4">
-        <div className="rounded-[22px] border border-[#dde8ef] bg-white p-4 shadow-sm">
-          <h3 className="text-lg font-semibold text-[#123447]">Aggregate Results (all sectors)</h3>
-          <p className="mt-1 text-xs text-[#567180]">
-            Risk Heatmap, Sector Radar Profile, aggregate Risk Matrix, aggregate Risk Factors, Distribution Plots, and
-            Response Dataset Preview.
-          </p>
-        </div>
-        <ClientDiagnosticResultsSection
-          clientSlug={clientSlug}
-          campaignId={campaignId}
-          fromHistory={fromHistory}
-          managerClientId={managerClientId}
-          managerClientName={managerClientName}
-          managerFromHome={managerFromHome}
-          embeddedView
-        />
-      </section>
-
-      <section id="per-sector-results" className="scroll-mt-20 space-y-4">
-        <div className="rounded-[22px] border border-[#dde8ef] bg-white p-4 shadow-sm">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h3 className="text-lg font-semibold text-[#123447]">Per-Sector Results</h3>
-              <p className="mt-1 text-xs text-[#567180]">
-                Current report layout with data isolated by selected sector.
-              </p>
-            </div>
-            <a
-              href="#aggregate-results"
-              className="rounded-full border border-[#c6d8e4] bg-white px-3 py-1 text-xs font-semibold text-[#2b4d5f]"
-            >
-              Back to aggregate
-            </a>
-          </div>
-
-          {isLoadingAggregateMeta ? (
-            <p className="mt-3 text-xs text-[#567180]">Loading sector selector...</p>
-          ) : sectorOptions.length === 0 ? (
-            <p className="mt-3 text-xs text-[#567180]">
-              No sectors with eligible responses available for isolated per-sector results.
+      {activeResultsTab === "aggregate" ? (
+        <section className="space-y-4">
+          <div className="rounded-[22px] border border-[#dde8ef] bg-white p-4 shadow-sm">
+            <h3 className="text-lg font-semibold text-[#123447]">Aggregate Results (all sectors)</h3>
+            <p className="mt-1 text-xs text-[#567180]">
+              Risk Heatmap, Sector Radar Profile, aggregate Risk Matrix, aggregate Risk Factors, Distribution Plots,
+              and Response Dataset Preview.
             </p>
-          ) : (
-            <div className="mt-3 flex flex-wrap items-center gap-2">
-              {sectorOptions.map((sectorName) => (
-                <button
-                  key={`per-sector-nav-${sectorName}`}
-                  type="button"
-                  onClick={() => {
-                    if (typeof window !== "undefined") {
-                      pendingScrollRestoreY.current = window.scrollY;
-                    }
-                    setSelectedPerSector(sectorName);
-                  }}
-                  className={`rounded-full border px-3 py-1 text-xs font-semibold ${
-                    effectivePerSector === sectorName
-                      ? "border-[#0f5b73] bg-[#e8f4f9] text-[#0f5b73]"
-                      : "border-[#c7d8e2] bg-white text-[#274657]"
-                  }`}
-                >
-                  {sectorName}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {effectivePerSector ? (
+          </div>
           <ClientDiagnosticResultsSection
             clientSlug={clientSlug}
             campaignId={campaignId}
@@ -1362,11 +1317,64 @@ export function ClientDiagnosticAggregateResultsSection({
             managerClientId={managerClientId}
             managerClientName={managerClientName}
             managerFromHome={managerFromHome}
-            sectorFilter={effectivePerSector}
             embeddedView
           />
-        ) : null}
-      </section>
+        </section>
+      ) : (
+        <section className="space-y-4">
+          <div className="rounded-[22px] border border-[#dde8ef] bg-white p-4 shadow-sm">
+            <div>
+              <h3 className="text-lg font-semibold text-[#123447]">Per-Sector Results</h3>
+              <p className="mt-1 text-xs text-[#567180]">
+                Current report layout with data isolated by selected sector.
+              </p>
+            </div>
+
+            {isLoadingAggregateMeta ? (
+              <p className="mt-3 text-xs text-[#567180]">Loading sector selector...</p>
+            ) : sectorOptions.length === 0 ? (
+              <p className="mt-3 text-xs text-[#567180]">
+                No sectors with eligible responses available for isolated per-sector results.
+              </p>
+            ) : (
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                {sectorOptions.map((sectorName) => (
+                  <button
+                    key={`per-sector-nav-${sectorName}`}
+                    type="button"
+                    onClick={() => {
+                      if (typeof window !== "undefined") {
+                        pendingScrollRestoreY.current = window.scrollY;
+                      }
+                      setSelectedPerSector(sectorName);
+                    }}
+                    className={`rounded-full border px-3 py-1 text-xs font-semibold ${
+                      effectivePerSector === sectorName
+                        ? "border-[#0f5b73] bg-[#e8f4f9] text-[#0f5b73]"
+                        : "border-[#c7d8e2] bg-white text-[#274657]"
+                    }`}
+                  >
+                    {sectorName}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {effectivePerSector ? (
+            <ClientDiagnosticResultsSection
+              clientSlug={clientSlug}
+              campaignId={campaignId}
+              fromHistory={fromHistory}
+              managerClientId={managerClientId}
+              managerClientName={managerClientName}
+              managerFromHome={managerFromHome}
+              sectorFilter={effectivePerSector}
+              embeddedView
+            />
+          ) : null}
+        </section>
+      )}
     </div>
   );
 }
@@ -1403,6 +1411,12 @@ export function ClientDiagnosticResultsSection({
   const managerBreadcrumbClientLabel = managerClientName?.trim() || data?.client.companyName || "Cliente";
   const dashboard = data?.dashboard ?? null;
   const metrics = dashboard?.metrics;
+  const riskScoreScaleMax = Math.max(1, metrics?.global.gravityScoreScaleMax ?? 5);
+  const gravityWeightSource = metrics?.global.gravitySeverityWeightSource ?? "topic_default";
+  const companyOccurrenceRiskWeight = metrics?.global.companyOccurrenceRiskWeight ?? null;
+  const lowMax = riskScoreScaleMax * 0.25;
+  const moderateMax = riskScoreScaleMax * 0.5;
+  const highMax = riskScoreScaleMax * 0.75;
   const participationSector = useMemo(() => {
     if (!isPerSectorResults) return null;
     const targetLookup = normalizeSectorLookupValue(normalizedSectorFilter);
@@ -1909,7 +1923,7 @@ export function ClientDiagnosticResultsSection({
     const xSpan = Math.max(maxX - minX, 1);
     const xScale = (value: number) => chartPadding.left + ((value - minX) / xSpan) * plotWidth;
     const yMin = 0;
-    const yMax = 5;
+    const yMax = riskScoreScaleMax;
     const yScale = (value: number) => chartPadding.top + (1 - (value - yMin) / Math.max(yMax - yMin, 1)) * plotHeight;
 
     const xTickTarget = Math.min(6, allTimes.length);
@@ -1926,16 +1940,19 @@ export function ClientDiagnosticResultsSection({
       }))
       .sort((a, b) => a.timeMs - b.timeMs);
 
-    const yTicks = [0, 1, 2, 3, 4, 5].map((value) => ({
-      value,
-      y: yScale(value),
-      label: value.toFixed(0),
-    }));
+    const yTicks = [0, 0.25, 0.5, 0.75, 1].map((step) => {
+      const value = yMin + step * (yMax - yMin);
+      return {
+        value,
+        y: yScale(value),
+        label: value.toFixed(2),
+      };
+    });
 
     const cards = parsedSeries
       .map((series) => {
         const points = series.points.map((point) => {
-          const score = Math.min(5, Math.max(0, point.riskScore));
+          const score = Math.min(riskScoreScaleMax, Math.max(0, point.riskScore));
           return {
             ...point,
             score,
@@ -1946,7 +1963,7 @@ export function ClientDiagnosticResultsSection({
         if (points.length === 0) return null;
 
         const avgScore = points.reduce((sum, point) => sum + point.score, 0) / points.length;
-        const strokeColor = riskGradientColorFromRatio(avgScore / 5);
+        const strokeColor = riskGradientColorFromRatio(avgScore / riskScoreScaleMax);
         const latestPoint = points[points.length - 1] ?? null;
 
         return {
@@ -1974,7 +1991,7 @@ export function ClientDiagnosticResultsSection({
       yTicks,
       cards,
     };
-  }, [trends]);
+  }, [riskScoreScaleMax, trends]);
 
   const trendDetailsModalChartModel = useMemo(() => {
     if (!trendDetailsModal) return null;
@@ -2043,8 +2060,8 @@ export function ClientDiagnosticResultsSection({
       { key: "prevalence", title: "Prevalence", yLabel: "Prevalence", min: 0, max: 1, decimals: 0, percent: true, showBand: false },
       { key: "severityIndex", title: "Severity idx", yLabel: "Severity idx", min: 0, max: 1, decimals: 0, percent: true, showBand: false },
       { key: "probability", title: "Prob.", yLabel: "Prob.", min: 0, max: 1, decimals: 0, percent: true, showBand: false },
-      { key: "severity", title: "Sev.", yLabel: "Severity", min: 1, max: 5, decimals: 0, percent: false, showBand: false },
-      { key: "riskScore", title: "Score", yLabel: "Score", min: 0, max: 5, decimals: 2, percent: false, showBand: false },
+      { key: "severity", title: "Weight", yLabel: "Weight", min: 1, max: riskScoreScaleMax, decimals: 2, percent: false, showBand: false },
+      { key: "riskScore", title: "Score", yLabel: "Score", min: 0, max: riskScoreScaleMax, decimals: 2, percent: false, showBand: false },
     ] as const;
 
     function pointMetricValue(
@@ -2130,7 +2147,7 @@ export function ClientDiagnosticResultsSection({
     if (charts.length === 0) return null;
 
     return { charts };
-  }, [trendDetailsModal]);
+  }, [riskScoreScaleMax, trendDetailsModal]);
 
   if (isLoading && !data) return <p className="text-sm text-[#49697a]">Carregando resultados do diagnostico...</p>;
   if ((error && !data) || !data) return <p className="text-sm text-red-600">{error || "Resultados indisponiveis."}</p>;
@@ -2256,14 +2273,17 @@ export function ClientDiagnosticResultsSection({
                   <th className="px-2 py-2 text-left">Prevalence</th>
                   <th className="px-2 py-2 text-left">Severity idx</th>
                   <th className="px-2 py-2 text-left">Prob.</th>
-                  <th className="px-2 py-2 text-left">Sev.</th>
+                  <th className="px-2 py-2 text-left">Weight</th>
                   <th className="px-2 py-2 text-left">Score</th>
                   <th className="px-2 py-2 text-left">Ranking</th>
                 </tr>
               </thead>
               <tbody>
                 {rankedRiskFactors.map((risk, index) => (
-                  <tr key={`${risk.topicId}-${risk.riskFactor}`} className={`border-b ${riskScoreRowTone(risk.riskScore)}`}>
+                  <tr
+                    key={`${risk.topicId}-${risk.riskFactor}`}
+                    className={`border-b ${riskScoreRowTone(risk.riskScore, riskScoreScaleMax)}`}
+                  >
                     <td className="px-2 py-2 font-semibold text-[#334e5c]">#{index + 1}</td>
                     <td className="px-2 py-2">
                       {topicCode(risk.topicId)} {risk.riskFactor}
@@ -2275,7 +2295,7 @@ export function ClientDiagnosticResultsSection({
                     <td className="px-2 py-2">{risk.severity}</td>
                     <td className="px-2 py-2">
                       <span
-                        className={`inline-flex min-w-[56px] justify-center rounded-full border px-2 py-0.5 font-semibold ${riskScoreTone(risk.riskScore)}`}
+                        className={`inline-flex min-w-[56px] justify-center rounded-full border px-2 py-0.5 font-semibold ${riskScoreTone(risk.riskScore, riskScoreScaleMax)}`}
                       >
                         {risk.riskScore !== null ? risk.riskScore.toFixed(2) : "-"}
                       </span>
@@ -2285,7 +2305,7 @@ export function ClientDiagnosticResultsSection({
                         <div className="h-2 flex-1 rounded-full bg-[#ecf3f7]">
                           <div
                             className={`h-2 rounded-full ${metricBarTone(risk.riskCategory)}`}
-                            style={{ width: `${((risk.riskScore ?? 0) / 5) * 100}%` }}
+                            style={{ width: `${((risk.riskScore ?? 0) / riskScoreScaleMax) * 100}%` }}
                           />
                         </div>
                         <span className={`rounded-full border px-2 py-0.5 ${metricTone(risk.riskCategory)}`}>
@@ -2334,7 +2354,7 @@ export function ClientDiagnosticResultsSection({
                   <td className="px-2 py-2 text-[#496879]">{row.nResponses}</td>
                   <td className="px-2 py-2">
                     <span
-                      className={`inline-flex min-w-[58px] justify-center rounded-md border px-2 py-0.5 text-xs font-semibold ${riskScoreTone(row.sectorRiskIndex)}`}
+                      className={`inline-flex min-w-[58px] justify-center rounded-md border px-2 py-0.5 text-xs font-semibold ${riskScoreTone(row.sectorRiskIndex, riskScoreScaleMax)}`}
                     >
                       {row.sectorRiskIndex !== null ? row.sectorRiskIndex.toFixed(2) : "n/a"}
                     </span>
@@ -2380,21 +2400,27 @@ export function ClientDiagnosticResultsSection({
               <span className="font-semibold text-[#223845]">Gravidade (color):</span>
               <span className="inline-flex items-center gap-1 rounded-full border border-[#d8e5ec] bg-white px-2 py-0.5">
                 <span className="inline-block h-2.5 w-2.5 rounded-full bg-[#86efac]" />
-                low (&lt;1.5)
+                {`low (<${lowMax.toFixed(2)})`}
               </span>
               <span className="inline-flex items-center gap-1 rounded-full border border-[#d8e5ec] bg-white px-2 py-0.5">
                 <span className="inline-block h-2.5 w-2.5 rounded-full bg-[#fde68a]" />
-                moderate (1.5-2.49)
+                {`moderate (${lowMax.toFixed(2)}-${(moderateMax - 0.01).toFixed(2)})`}
               </span>
               <span className="inline-flex items-center gap-1 rounded-full border border-[#d8e5ec] bg-white px-2 py-0.5">
                 <span className="inline-block h-2.5 w-2.5 rounded-full bg-[#fdba74]" />
-                high (2.5-3.49)
+                {`high (${moderateMax.toFixed(2)}-${(highMax - 0.01).toFixed(2)})`}
               </span>
               <span className="inline-flex items-center gap-1 rounded-full border border-[#d8e5ec] bg-white px-2 py-0.5">
                 <span className="inline-block h-2.5 w-2.5 rounded-full bg-[#fca5a5]" />
-                critical (&gt;=3.5)
+                {`critical (>=${highMax.toFixed(2)})`}
               </span>
-              <span className="text-[#5f7785]">gravity score = probability x fixed topic severity weight</span>
+              <span className="text-[#5f7785]">
+                {`gravity score = probability x ${
+                  gravityWeightSource === "company_risk_profile_occurrence_risk"
+                    ? `company occurrence-risk weight (${companyOccurrenceRiskWeight?.toFixed(2) ?? "-"})`
+                    : "default topic weight"
+                }`}
+              </span>
             </div>
           </div>
           <div className="mt-3 flex-1 overflow-x-auto">

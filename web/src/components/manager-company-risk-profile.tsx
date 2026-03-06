@@ -341,18 +341,30 @@ export function ManagerCompanyRiskProfile({ clientId }: { clientId: string }) {
   return (
     <div className="space-y-6">
       <section className="rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
-        <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="space-y-3">
+          <nav className="text-xs text-[#4f6977]" aria-label="Breadcrumb">
+            <Link href="/manager/clients" className="font-semibold text-[#0f5b73] hover:underline">
+              Client area
+            </Link>
+            <span className="px-1 text-[#8aa4b5]">/</span>
+            <Link href={`/manager/clients/${clientId}`} className="font-semibold text-[#0f5b73] hover:underline">
+              {payload.client.companyName}
+            </Link>
+            <span className="px-1 text-[#8aa4b5]">/</span>
+            <Link
+              href={`/manager/clients/${clientId}?tab=company-data`}
+              className="font-semibold text-[#0f5b73] hover:underline"
+            >
+              Company data
+            </Link>
+            <span className="px-1 text-[#8aa4b5]">/</span>
+            <span className="font-semibold text-[#123447]">Company profile risk results</span>
+          </nav>
           <div>
             <p className="text-xs uppercase tracking-[0.18em] text-[#4f6977]">Perfil de risco da empresa</p>
             <h2 className="mt-1 text-2xl font-semibold text-[#123447]">{payload.client.companyName}</h2>
             <p className="mt-1 text-xs text-[#4f6977]">Versao do questionario: {payload.questionnaire.version}</p>
           </div>
-          <Link
-            href={`/manager/clients/${clientId}?tab=company-data`}
-            className="rounded-full border border-[#c9dce8] px-4 py-2 text-xs font-semibold text-[#123447]"
-          >
-            Voltar para company data
-          </Link>
         </div>
       </section>
 

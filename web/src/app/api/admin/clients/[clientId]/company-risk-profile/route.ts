@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 import { MANAGER_SESSION_COOKIE, parseManagerSessionToken } from "@/lib/auth/session";
+import { isAdminApiAuthorized } from "@/lib/admin-auth";
 import {
   COMPANY_RISK_PROFILE_FACTORS,
   COMPANY_RISK_PROFILE_QUESTIONNAIRE_VERSION,
@@ -272,12 +273,15 @@ function ensureManagerSession(request: NextRequest) {
   return parseManagerSessionToken(request.cookies.get(MANAGER_SESSION_COOKIE)?.value);
 }
 
+function isRequestAuthorized(request: NextRequest): boolean {
+  return Boolean(ensureManagerSession(request)) || isAdminApiAuthorized(request);
+}
+
 export async function GET(
   request: NextRequest,
   context: { params: Promise<{ clientId: string }> },
 ) {
-  const session = ensureManagerSession(request);
-  if (!session) {
+  if (!isRequestAuthorized(request)) {
     return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
   }
 
@@ -334,8 +338,7 @@ export async function PATCH(
   request: NextRequest,
   context: { params: Promise<{ clientId: string }> },
 ) {
-  const session = ensureManagerSession(request);
-  if (!session) {
+  if (!isRequestAuthorized(request)) {
     return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
   }
 
