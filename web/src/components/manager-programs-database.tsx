@@ -214,13 +214,18 @@ const COPY = {
     sessionsLibraryFilterProgram: "Filter by module",
     sessionsLibraryFilterAllPrograms: "All modules",
     sessionsLibraryTargetProgram: "Target program",
-    sessionsLibrarySelectAll: "Select all filtered",
     sessionsLibraryClear: "Clear",
     sessionsLibraryAssignSelected: "Assign selected sessions",
+    sessionsLibraryAssignModalTitle: "Select programs",
+    sessionsLibraryAssignModalSubtitle:
+      "Choose one or more programs to receive the selected sessions.",
+    sessionsLibraryAssignModalConfirm: "Assign to selected programs",
+    sessionsLibraryAssignModalNoPrograms: "No programs available.",
     sessionsLibraryAssigning: "Assigning sessions...",
-    sessionsLibraryValidationProgram: "Select a target program for session assignment.",
+    sessionsLibraryValidationProgram: "Select at least one program for session assignment.",
     sessionsLibraryValidationSessions: "Select at least one session to assign.",
-    sessionsLibraryAssignedNotice: "Sessions assigned to the selected program.",
+    sessionsLibraryAssignedNotice: "Sessions assigned to selected programs.",
+    sessionsLibraryAssignPartialError: "Some program assignments failed:",
     sessionsLibraryNone: "No sessions found.",
     sessionsLibraryProgramCol: "Module",
     sessionsLibrarySessionCol: "Topic",
@@ -357,13 +362,18 @@ const COPY = {
     sessionsLibraryFilterProgram: "Filtrar por modulo",
     sessionsLibraryFilterAllPrograms: "Todos os modulos",
     sessionsLibraryTargetProgram: "Programa de destino",
-    sessionsLibrarySelectAll: "Selecionar filtrados",
     sessionsLibraryClear: "Limpar",
     sessionsLibraryAssignSelected: "Atribuir sessoes selecionadas",
+    sessionsLibraryAssignModalTitle: "Selecionar programas",
+    sessionsLibraryAssignModalSubtitle:
+      "Escolha um ou mais programas para receber as sessoes selecionadas.",
+    sessionsLibraryAssignModalConfirm: "Atribuir aos programas selecionados",
+    sessionsLibraryAssignModalNoPrograms: "Nenhum programa disponivel.",
     sessionsLibraryAssigning: "Atribuindo sessoes...",
-    sessionsLibraryValidationProgram: "Selecione um programa de destino para atribuir sessoes.",
+    sessionsLibraryValidationProgram: "Selecione ao menos um programa para atribuir sessoes.",
     sessionsLibraryValidationSessions: "Selecione ao menos uma sessao para atribuir.",
-    sessionsLibraryAssignedNotice: "Sessoes atribuidas ao programa selecionado.",
+    sessionsLibraryAssignedNotice: "Sessoes atribuidas aos programas selecionados.",
+    sessionsLibraryAssignPartialError: "Algumas atribuicoes de programa falharam:",
     sessionsLibraryNone: "Nenhuma sessao encontrada.",
     sessionsLibraryProgramCol: "Modulo",
     sessionsLibrarySessionCol: "Topico",
@@ -524,8 +534,11 @@ export function ManagerProgramsDatabase() {
   const [sessionSearchTerm, setSessionSearchTerm] = useState("");
   const [sessionSourceProgramFilterId, setSessionSourceProgramFilterId] = useState("all");
   const [selectedSessionCatalogIds, setSelectedSessionCatalogIds] = useState<string[]>([]);
-  const [targetSessionProgramId, setTargetSessionProgramId] = useState("");
+  const [selectedSessionTargetProgramIds, setSelectedSessionTargetProgramIds] = useState<string[]>(
+    [],
+  );
   const [isAssigningCatalogSessions, setIsAssigningCatalogSessions] = useState(false);
+  const [isAssignSessionsProgramsModalOpen, setIsAssignSessionsProgramsModalOpen] = useState(false);
   const [isCreateSessionOpen, setIsCreateSessionOpen] = useState(false);
   const [createSessionTitle, setCreateSessionTitle] = useState("");
   const [createSessionModule, setCreateSessionModule] = useState("");
@@ -643,11 +656,15 @@ export function ManagerProgramsDatabase() {
     () => new Set(selectedSessionCatalogIds),
     [selectedSessionCatalogIds],
   );
+  const selectedSessionTargetProgramIdSet = useMemo(
+    () => new Set(selectedSessionTargetProgramIds),
+    [selectedSessionTargetProgramIds],
+  );
   useEffect(() => {
     setOpenContinuousGroupByKey((previous) => {
       const next: Record<string, boolean> = {};
       for (const group of continuousProgramGroups) {
-        next[group.key] = previous[group.key] ?? true;
+        next[group.key] = previous[group.key] ?? false;
       }
       return next;
     });
@@ -740,7 +757,7 @@ export function ManagerProgramsDatabase() {
     setOpenSessionModuleByKey((previous) => {
       const next: Record<string, boolean> = {};
       for (const group of groupedFilteredSessionsCatalog) {
-        next[group.groupKey] = previous[group.groupKey] ?? true;
+        next[group.groupKey] = previous[group.groupKey] ?? false;
       }
       return next;
     });
@@ -798,10 +815,8 @@ export function ManagerProgramsDatabase() {
       setSelectedProgramIds((current) =>
         current.filter((programId) => nextPrograms.some((program) => program.id === programId)),
       );
-      setTargetSessionProgramId((current) =>
-        current && nextPrograms.some((program) => program.id === current)
-          ? current
-          : (nextPrograms[0]?.id ?? ""),
+      setSelectedSessionTargetProgramIds((current) =>
+        current.filter((programId) => nextPrograms.some((program) => program.id === programId)),
       );
       setSelectedSessionCatalogIds((current) =>
         current.filter((catalogId) =>
@@ -816,7 +831,7 @@ export function ManagerProgramsDatabase() {
       setClients([]);
       setSelectedClientId("");
       setSelectedProgramIds([]);
-      setTargetSessionProgramId("");
+      setSelectedSessionTargetProgramIds([]);
       setSelectedSessionCatalogIds([]);
     } finally {
       setIsLoading(false);
@@ -1101,6 +1116,31 @@ export function ManagerProgramsDatabase() {
     );
   }
 
+  function toggleSessionTargetProgramSelection(programId: string) {
+    setSelectedSessionTargetProgramIds((current) =>
+      current.includes(programId)
+        ? current.filter((item) => item !== programId)
+        : [...current, programId],
+    );
+  }
+
+  function openAssignSelectedSessionsProgramsModal() {
+    setNotice("");
+    setError("");
+
+    if (selectedSessionCatalogIds.length === 0) {
+      setError(t.sessionsLibraryValidationSessions);
+      return;
+    }
+    if (continuousProgramGroups.length === 0) {
+      setError(t.sessionsLibraryAssignModalNoPrograms);
+      return;
+    }
+
+    setSelectedSessionTargetProgramIds([]);
+    setIsAssignSessionsProgramsModalOpen(true);
+  }
+
   function toggleContinuousGroup(groupKey: string) {
     setOpenContinuousGroupByKey((current) => ({
       ...current,
@@ -1119,7 +1159,7 @@ export function ManagerProgramsDatabase() {
     setNotice("");
     setError("");
 
-    if (!targetSessionProgramId) {
+    if (selectedSessionTargetProgramIds.length === 0) {
       setError(t.sessionsLibraryValidationProgram);
       return;
     }
@@ -1139,25 +1179,43 @@ export function ManagerProgramsDatabase() {
     }
 
     setIsAssigningCatalogSessions(true);
+    const failedProgramIds: string[] = [];
+    const failureMessages: string[] = [];
+    let successfulProgramsCount = 0;
     try {
-      const response = await fetch("/api/admin/programs-database/continuous/sessions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "assign",
-          targetProgramId: targetSessionProgramId,
-          sessions: selectedSessions,
-        }),
-      });
+      setIsAssignSessionsProgramsModalOpen(false);
 
-      const payload = (await response.json().catch(() => ({}))) as { error?: string };
-      if (!response.ok) {
-        throw new Error(payload.error ?? "Could not assign sessions.");
+      for (const targetProgramId of selectedSessionTargetProgramIds) {
+        const response = await fetch("/api/admin/programs-database/continuous/sessions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "assign",
+            targetProgramId,
+            sessions: selectedSessions,
+          }),
+        });
+
+        const payload = (await response.json().catch(() => ({}))) as { error?: string };
+        if (!response.ok) {
+          failedProgramIds.push(targetProgramId);
+          failureMessages.push(payload.error ?? `Could not assign sessions to ${targetProgramId}.`);
+          continue;
+        }
+        successfulProgramsCount += 1;
       }
 
-      setSelectedSessionCatalogIds([]);
-      setNotice(t.sessionsLibraryAssignedNotice);
       await loadDatabase();
+      if (failedProgramIds.length === 0) {
+        setSelectedSessionCatalogIds([]);
+      }
+
+      if (successfulProgramsCount > 0) {
+        setNotice(t.sessionsLibraryAssignedNotice);
+      }
+      if (failedProgramIds.length > 0) {
+        setError(`${t.sessionsLibraryAssignPartialError} ${failureMessages.join(" ")}`);
+      }
     } catch (assignError) {
       setError(assignError instanceof Error ? assignError.message : "Could not assign sessions.");
     } finally {
@@ -1394,7 +1452,7 @@ export function ManagerProgramsDatabase() {
               <p className="text-xs text-[#5a7383]">{t.prgNone}</p>
             ) : (
               continuousProgramGroups.map((group) => {
-                const isGroupOpen = openContinuousGroupByKey[group.key] ?? true;
+                const isGroupOpen = openContinuousGroupByKey[group.key] ?? false;
                 return (
                   <div key={group.key} className="overflow-hidden rounded-xl border border-[#d8e4ee]">
                     <div className="border-b border-[#d8e4ee] bg-gradient-to-r from-[#eaf4fb] to-[#f4f9fc] px-4 py-3">
@@ -1537,47 +1595,19 @@ export function ManagerProgramsDatabase() {
         {isSessionsLibraryOpen ? (
           <>
             <div className="mt-3 rounded-xl border border-[#d8e4ee] bg-[#f8fbfd] p-3">
-              <div className="flex flex-wrap items-center gap-2">
-                <label className="flex min-w-[18rem] flex-1 items-center gap-2 text-sm text-[#35515f]">
-                  <span className="shrink-0 font-medium text-[#2f5163]">{t.sessionsLibraryTargetProgram}</span>
-                  <select
-                    value={targetSessionProgramId}
-                    onChange={(event) => setTargetSessionProgramId(event.target.value)}
-                    className="h-12 min-w-56 flex-1 rounded-lg border border-[#b8cfde] bg-white px-4 text-sm text-[#234457]"
-                  >
-                    {continuousPrograms.length === 0 ? <option value="">-</option> : null}
-                    {continuousPrograms.map((program) => (
-                      <option key={`session-target-program-${program.id}`} value={program.id}>
-                        {program.title}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setSelectedSessionCatalogIds(filteredSessionsCatalog.map((item) => item.catalogId))
-                  }
-                  className="h-12 rounded-full border border-[#97c3d9] bg-white px-5 text-sm font-semibold text-[#0f5b73]"
-                >
-                  {t.sessionsLibrarySelectAll}
-                </button>
+              <div className="flex flex-wrap items-end gap-2">
                 <button
                   type="button"
                   onClick={() => setSelectedSessionCatalogIds([])}
-                  className="h-12 rounded-full border border-[#b8cfde] bg-white px-5 text-sm font-semibold text-[#35515f]"
+                  className="rounded-full border border-[#c9dce8] px-3 py-2 text-xs font-semibold text-[#35515f]"
                 >
                   {t.sessionsLibraryClear}
                 </button>
                 <button
                   type="button"
-                  onClick={() => void handleAssignSelectedSessionsToProgram()}
-                  disabled={
-                    isAssigningCatalogSessions ||
-                    selectedSessionCatalogIds.length === 0 ||
-                    !targetSessionProgramId
-                  }
-                  className="h-12 rounded-full bg-[#8eafbe] px-6 text-sm font-semibold text-white disabled:opacity-50"
+                  onClick={openAssignSelectedSessionsProgramsModal}
+                  disabled={isAssigningCatalogSessions || selectedSessionCatalogIds.length === 0}
+                  className="rounded-full bg-[#0f5b73] px-4 py-2 text-xs font-semibold text-white disabled:opacity-50"
                 >
                   {isAssigningCatalogSessions
                     ? t.sessionsLibraryAssigning
@@ -1620,7 +1650,7 @@ export function ManagerProgramsDatabase() {
                   <p className="text-xs text-[#5a7383]">{t.sessionsLibraryNone}</p>
                 ) : null}
                 {groupedFilteredSessionsCatalog.map((group) => {
-                  const isModuleOpen = openSessionModuleByKey[group.groupKey] ?? true;
+                  const isModuleOpen = openSessionModuleByKey[group.groupKey] ?? false;
                   return (
                     <div key={`session-module-group-${group.groupKey}`} className="space-y-1">
                       <div className="rounded-lg border border-[#d8e4ee] bg-gradient-to-r from-[#edf6fb] to-[#f8fbfd] px-3 py-2">
@@ -1704,18 +1734,11 @@ export function ManagerProgramsDatabase() {
       {isAssignProgramsModalOpen ? (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/35 p-4">
           <div className="w-full max-w-lg rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-xl">
-            <div className="flex items-center justify-between gap-3">
+            <div>
               <div>
                 <h4 className="text-lg font-semibold text-[#123447]">{t.assignModalTitle}</h4>
                 <p className="text-sm text-[#4f6977]">{t.assignModalSubtitle}</p>
               </div>
-              <button
-                type="button"
-                onClick={() => setIsAssignProgramsModalOpen(false)}
-                className="rounded-full border border-[#c9dce8] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
-              >
-                {t.modalClose}
-              </button>
             </div>
 
             <label className="mt-4 block text-xs text-[#4f6977]">
@@ -1748,6 +1771,82 @@ export function ManagerProgramsDatabase() {
               <button
                 type="button"
                 onClick={() => setIsAssignProgramsModalOpen(false)}
+                className="rounded-full border border-[#9ec8db] px-4 py-2 text-sm font-semibold text-[#0f5b73]"
+              >
+                {t.modalCancel}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {isAssignSessionsProgramsModalOpen ? (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/35 p-4">
+          <div className="w-full max-w-2xl rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-xl">
+            <div>
+              <div>
+                <h4 className="text-lg font-semibold text-[#123447]">
+                  {t.sessionsLibraryAssignModalTitle}
+                </h4>
+                <p className="text-sm text-[#4f6977]">{t.sessionsLibraryAssignModalSubtitle}</p>
+              </div>
+            </div>
+
+            <div className="mt-4 max-h-[50vh] overflow-auto rounded-lg border border-[#d8e4ee]">
+              {continuousProgramGroups.length === 0 ? (
+                <p className="px-3 py-3 text-sm text-[#5a7383]">{t.sessionsLibraryAssignModalNoPrograms}</p>
+              ) : (
+                <div className="divide-y divide-[#d8e4ee]">
+                  {continuousProgramGroups.map((group) => (
+                    <div key={`session-assign-group-${group.key}`} className="p-3">
+                      <div className="mb-2">
+                        {!group.isSpecialCategory ? (
+                          <p className="text-[11px] font-semibold uppercase tracking-wide text-[#2d5569]">
+                            {t.prgRiskGroup}
+                          </p>
+                        ) : null}
+                        <p className="text-sm font-bold text-[#123447]">{group.label}</p>
+                      </div>
+                      <ul className="space-y-1">
+                        {group.programs.map((program) => (
+                          <li key={`session-assign-target-${program.id}`} className="rounded-md px-1 py-1">
+                            <label className="flex cursor-pointer items-start gap-3">
+                              <input
+                                type="checkbox"
+                                checked={selectedSessionTargetProgramIdSet.has(program.id)}
+                                onChange={() => toggleSessionTargetProgramSelection(program.id)}
+                                className="mt-0.5 h-4 w-4 rounded border-[#9ec8db] text-[#0f5b73]"
+                              />
+                              <span>
+                                <span className="block font-semibold text-[#123447]">{program.title}</span>
+                                <span className="block text-xs text-[#55707f]">
+                                  {formatRiskTopic(program.targetRiskTopic, locale, t.prgTopicUnknown)}
+                                </span>
+                              </span>
+                            </label>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="mt-4 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => void handleAssignSelectedSessionsToProgram()}
+                disabled={isAssigningCatalogSessions || selectedSessionTargetProgramIds.length === 0}
+                className="rounded-full bg-[#0f5b73] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+              >
+                {isAssigningCatalogSessions
+                  ? t.sessionsLibraryAssigning
+                  : `${t.sessionsLibraryAssignModalConfirm} (${selectedSessionTargetProgramIds.length})`}
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsAssignSessionsProgramsModalOpen(false)}
                 className="rounded-full border border-[#9ec8db] px-4 py-2 text-sm font-semibold text-[#0f5b73]"
               >
                 {t.modalCancel}

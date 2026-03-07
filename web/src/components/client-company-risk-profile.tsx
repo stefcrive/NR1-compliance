@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   type CompanyRiskProbabilityClass,
@@ -95,6 +95,27 @@ function probabilityClassTone(value: CompanyRiskProbabilityClass) {
   return "border-[#e1b8b8] bg-[#fdf0f0] text-[#8a2d2d]";
 }
 
+function groupQuestionScoresByCriterion(questionScores: CompanyRiskProfileFactorScore["questionScores"]) {
+  const preferredOrder = ["Frequencia", "Historico do Risco no Setor", "Recursos Disponiveis"];
+  const grouped = new Map<string, CompanyRiskProfileFactorScore["questionScores"]>();
+
+  questionScores.forEach((questionScore) => {
+    const bucket = grouped.get(questionScore.criterion) ?? [];
+    bucket.push(questionScore);
+    grouped.set(questionScore.criterion, bucket);
+  });
+
+  const orderedCriteria = [
+    ...preferredOrder.filter((criterion) => grouped.has(criterion)),
+    ...Array.from(grouped.keys()).filter((criterion) => !preferredOrder.includes(criterion)),
+  ];
+
+  return orderedCriteria.map((criterion) => ({
+    criterion,
+    items: grouped.get(criterion) ?? [],
+  }));
+}
+
 export function ClientCompanyRiskProfile({ clientSlug }: { clientSlug: string }) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -103,11 +124,16 @@ export function ClientCompanyRiskProfile({ clientSlug }: { clientSlug: string })
   const [answers, setAnswers] = useState<CompanyRiskProfileAnswers>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [isAutoSaving, setIsAutoSaving] = useState(false);
+  const [autoSaveError, setAutoSaveError] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [factorPageIndex, setFactorPageIndex] = useState(0);
   const [selectedReportId, setSelectedReportId] = useState<string | null>(null);
   const [showSelectedResponses, setShowSelectedResponses] = useState(false);
+  const [expandedResponseTopics, setExpandedResponseTopics] = useState<Record<string, boolean>>({});
+  const [hasUserInteracted, setHasUserInteracted] = useState(false);
+  const lastSavedAnswersSignatureRef = useRef<string | null>(null);
 
   const fromOnboarding = searchParams.get("from") === "onboarding";
   const fromHistory = searchParams.get("from") === "history";
@@ -117,6 +143,7 @@ export function ClientCompanyRiskProfile({ clientSlug }: { clientSlug: string })
   const loadData = useCallback(async () => {
     setLoading(true);
     setError("");
+    setAutoSaveError("");
     setNotice("");
     try {
       const query = new URLSearchParams();
@@ -137,6 +164,8 @@ export function ClientCompanyRiskProfile({ clientSlug }: { clientSlug: string })
         allowIncomplete: true,
       });
       setAnswers(normalized);
+      lastSavedAnswersSignatureRef.current = JSON.stringify(normalized);
+      setHasUserInteracted(false);
       const firstPendingFactorIndex = body.questionnaire.factors.findIndex((factor) =>
         body.questionnaire.questions.some((question) => (normalized[factor.key]?.[question.key] ?? -1) < 0),
       );
@@ -181,6 +210,29 @@ export function ClientCompanyRiskProfile({ clientSlug }: { clientSlug: string })
     return payload.questionnaire.factors[factorPageIndex] ?? null;
   }, [factorPageIndex, payload]);
 
+  const currentFactorQuestionGroups = useMemo(() => {
+    if (!payload) return [];
+
+    const preferredOrder = ["Frequencia", "Historico do Risco no Setor", "Recursos Disponiveis"];
+    const grouped = new Map<string, Array<{ question: CompanyRiskProfileQuestionDefinition }>>();
+
+    payload.questionnaire.questions.forEach((question) => {
+      const bucket = grouped.get(question.criterion) ?? [];
+      bucket.push({ question });
+      grouped.set(question.criterion, bucket);
+    });
+
+    const orderedCriteria = [
+      ...preferredOrder.filter((criterion) => grouped.has(criterion)),
+      ...Array.from(grouped.keys()).filter((criterion) => !preferredOrder.includes(criterion)),
+    ];
+
+    return orderedCriteria.map((criterion) => ({
+      criterion,
+      items: grouped.get(criterion) ?? [],
+    }));
+  }, [payload]);
+
   const currentFactorAnsweredCount = useMemo(() => {
     if (!payload || !currentFactor) return 0;
     return payload.questionnaire.questions.filter(
@@ -201,6 +253,7 @@ export function ClientCompanyRiskProfile({ clientSlug }: { clientSlug: string })
       return null;
     }
   }, [answers, answeredCount, payload, totalQuestions]);
+  const answersSignature = useMemo(() => JSON.stringify(answers), [answers]);
 
   const selectedHistoryReport = useMemo(() => {
     if (!payload) return null;
@@ -210,26 +263,98 @@ export function ClientCompanyRiskProfile({ clientSlug }: { clientSlug: string })
     return payload.reports.find((report) => report.id === targetId) ?? payload.reports[0] ?? null;
   }, [historyReportId, payload, selectedReportId]);
 
+  useEffect(() => {
+    setExpandedResponseTopics({});
+  }, [selectedHistoryReport?.id, showSelectedResponses]);
+
   const onAnswerChange = useCallback(
     (factorKey: string, questionKey: string, rawValue: string) => {
       const parsed = Number.parseInt(rawValue, 10);
       const optionIndex = Number.isFinite(parsed) ? parsed : -1;
-      setAnswers((previous) => ({
-        ...previous,
-        [factorKey]: {
-          ...(previous[factorKey] ?? {}),
-          [questionKey]: optionIndex,
-        },
-      }));
+      setHasUserInteracted(true);
+      setAutoSaveError("");
+      setAnswers((previous) => {
+        if ((previous[factorKey]?.[questionKey] ?? -1) === optionIndex) {
+          return previous;
+        }
+        return {
+          ...previous,
+          [factorKey]: {
+            ...(previous[factorKey] ?? {}),
+            [questionKey]: optionIndex,
+          },
+        };
+      });
     },
     [],
   );
+
+  const autoSaveProgress = useCallback(
+    async (answersSnapshot: CompanyRiskProfileAnswers, signature: string) => {
+      if (!payload || historyReadOnlyMode || isCycleLocked || isComplete) return;
+      if (signature === lastSavedAnswersSignatureRef.current) return;
+
+      setIsAutoSaving(true);
+      try {
+        const response = await fetch(`/api/client/portal/${encodeURIComponent(clientSlug)}/company-risk-profile`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "save", answers: answersSnapshot }),
+        });
+        const body = (await response.json().catch(() => ({}))) as {
+          error?: string;
+          progress?: ClientRiskProfilePayload["progress"];
+        };
+        if (!response.ok || !body.progress) {
+          throw new Error(body.error ?? "Nao foi possivel salvar automaticamente.");
+        }
+        setPayload((previous) => {
+          if (!previous) return previous;
+          return { ...previous, progress: body.progress! };
+        });
+        lastSavedAnswersSignatureRef.current = signature;
+        setAutoSaveError("");
+      } catch {
+        setAutoSaveError("Falha no salvamento automatico. Use o botao Salvar e continuar depois.");
+      } finally {
+        setIsAutoSaving(false);
+      }
+    },
+    [clientSlug, historyReadOnlyMode, isComplete, isCycleLocked, payload],
+  );
+
+  useEffect(() => {
+    if (!payload || historyReadOnlyMode || isCycleLocked || isComplete) return;
+    if (!hasUserInteracted) return;
+    if (saving || isAutoSaving) return;
+    if (answersSignature === lastSavedAnswersSignatureRef.current) return;
+
+    const answersSnapshot = answers;
+    const signature = answersSignature;
+    const timeoutId = window.setTimeout(() => {
+      void autoSaveProgress(answersSnapshot, signature);
+    }, 1200);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [
+    answers,
+    answersSignature,
+    autoSaveProgress,
+    hasUserInteracted,
+    historyReadOnlyMode,
+    isAutoSaving,
+    isComplete,
+    isCycleLocked,
+    payload,
+    saving,
+  ]);
 
   const saveProgress = useCallback(
     async (action: "save" | "skip") => {
       if (!payload) return;
       setSaving(true);
       setError("");
+      setAutoSaveError("");
       setNotice("");
       try {
         const response = await fetch(`/api/client/portal/${encodeURIComponent(clientSlug)}/company-risk-profile`, {
@@ -248,6 +373,7 @@ export function ClientCompanyRiskProfile({ clientSlug }: { clientSlug: string })
           if (!previous) return previous;
           return { ...previous, progress: body.progress! };
         });
+        lastSavedAnswersSignatureRef.current = answersSignature;
 
         if (action === "skip") {
           router.push(`/client/${clientSlug}/company`);
@@ -261,7 +387,7 @@ export function ClientCompanyRiskProfile({ clientSlug }: { clientSlug: string })
         setSaving(false);
       }
     },
-    [answers, clientSlug, payload, router],
+    [answers, answersSignature, clientSlug, payload, router],
   );
 
   const completeQuestionnaire = useCallback(async () => {
@@ -273,6 +399,7 @@ export function ClientCompanyRiskProfile({ clientSlug }: { clientSlug: string })
 
     setSaving(true);
     setError("");
+    setAutoSaveError("");
     setNotice("");
     try {
       const response = await fetch(`/api/client/portal/${encodeURIComponent(clientSlug)}/company-risk-profile`, {
@@ -426,39 +553,60 @@ export function ClientCompanyRiskProfile({ clientSlug }: { clientSlug: string })
                     <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[#4f6977]">
                       Respostas detalhadas
                     </p>
-                    {selectedHistoryReport.factorScores.map((factorScore) => (
-                      <article
-                        key={`responses-${selectedHistoryReport.id}-${factorScore.factorKey}`}
-                        className="rounded-xl border border-[#d8e4ee] bg-white p-3"
-                      >
-                        <h4 className="text-sm font-semibold text-[#123447]">{factorScore.factorLabel}</h4>
-                        <div className="mt-2 overflow-x-auto">
-                          <table className="nr-table min-w-full text-xs">
-                            <thead>
-                              <tr className="border-b bg-[#f8fbfd]">
-                                <th className="px-2 py-2 text-left text-[#4f6977]">Criterio</th>
-                                <th className="px-2 py-2 text-left text-[#4f6977]">Pergunta</th>
-                                <th className="px-2 py-2 text-left text-[#4f6977]">Resposta marcada</th>
-                                <th className="px-2 py-2 text-left text-[#4f6977]">Score</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {factorScore.questionScores.map((questionScore) => (
-                                <tr
-                                  key={`response-row-${factorScore.factorKey}-${questionScore.questionKey}`}
-                                  className="border-b last:border-b-0"
-                                >
-                                  <td className="px-2 py-2 text-[#123447]">{questionScore.criterion}</td>
-                                  <td className="px-2 py-2 text-[#123447]">{questionScore.prompt}</td>
-                                  <td className="px-2 py-2 text-[#123447]">{questionScore.optionLabel}</td>
-                                  <td className="px-2 py-2 text-[#123447]">{questionScore.score.toFixed(2)}</td>
-                                </tr>
+                    {selectedHistoryReport.factorScores.map((factorScore) => {
+                      const groupedQuestionScores = groupQuestionScoresByCriterion(factorScore.questionScores);
+                      const topicKey = `${selectedHistoryReport.id}-${factorScore.factorKey}`;
+                      const isExpanded = Boolean(expandedResponseTopics[topicKey]);
+                      return (
+                        <article
+                          key={`responses-${selectedHistoryReport.id}-${factorScore.factorKey}`}
+                          className="rounded-xl border border-[#d8e4ee] bg-white p-3"
+                        >
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setExpandedResponseTopics((previous) => ({
+                                ...previous,
+                                [topicKey]: !previous[topicKey],
+                              }))
+                            }
+                            className="flex w-full items-center justify-between gap-2 text-left"
+                          >
+                            <h4 className="text-base font-semibold text-[#123447]">{factorScore.factorLabel}</h4>
+                            <span className="text-lg font-bold text-[#305164]" aria-hidden="true">
+                              {isExpanded ? "↑" : "↓"}
+                            </span>
+                          </button>
+                          {isExpanded ? (
+                            <div className="mt-3 space-y-4">
+                              {groupedQuestionScores.map((group) => (
+                                <section key={`responses-${factorScore.factorKey}-${group.criterion}`} className="space-y-2">
+                                  <div className="rounded-lg border border-[#c6dbea] bg-[#eef6fb] px-3 py-2">
+                                    <p className="text-sm font-extrabold uppercase tracking-[0.08em] text-[#1b495d]">
+                                      {group.criterion}
+                                    </p>
+                                  </div>
+                                  {group.items.map((questionScore) => (
+                                    <article
+                                      key={`response-row-${factorScore.factorKey}-${questionScore.questionKey}`}
+                                      className="rounded-lg border border-[#d8e4ee] bg-[#fcfdff] p-3"
+                                    >
+                                      <p className="mt-1 text-sm font-semibold text-[#123447]">{questionScore.prompt}</p>
+                                      <div className="mt-2 grid gap-1 text-xs sm:grid-cols-[170px_1fr]">
+                                        <p className="font-semibold text-[#4f6977]">Resposta marcada</p>
+                                        <p className="text-[#123447]">{questionScore.optionLabel}</p>
+                                        <p className="font-semibold text-[#4f6977]">Score</p>
+                                        <p className="text-[#123447]">{questionScore.score.toFixed(2)}</p>
+                                      </div>
+                                    </article>
+                                  ))}
+                                </section>
                               ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      </article>
-                    ))}
+                            </div>
+                          ) : null}
+                        </article>
+                      );
+                    })}
                   </div>
                 ) : null}
               </article>
@@ -602,58 +750,64 @@ export function ClientCompanyRiskProfile({ clientSlug }: { clientSlug: string })
           {currentFactor ? (
             <article className="mt-4 rounded-xl border border-[#d8e4ee] bg-[#fbfdff] p-4">
               <header className="flex flex-wrap items-center justify-between gap-2">
-                <h4 className="text-base font-semibold text-[#123447]">{currentFactor.label}</h4>
+                <h4 className="text-xl font-extrabold tracking-tight text-[#123447]">{currentFactor.label}</h4>
                 <p className="text-xs text-[#4f6977]">
                   Topico {factorPageIndex + 1} de {factorCount}
                 </p>
               </header>
 
-              <div className="mt-3 space-y-3">
-                {payload.questionnaire.questions.map((question, questionIndex) => {
-                  const selectedIndex = answers[currentFactor.key]?.[question.key] ?? -1;
-                  return (
-                    <article
-                      key={`${currentFactor.key}-${question.key}`}
-                      className="rounded-xl border border-[#d8e4ee] bg-white p-4"
-                    >
-                      <p className="text-xs font-semibold text-[#4f6977]">
-                        Pergunta {questionIndex + 1} | {question.criterion}
+              <div className="mt-3 space-y-5">
+                {currentFactorQuestionGroups.map((group) => (
+                  <section key={`${currentFactor.key}-${group.criterion}`} className="space-y-3">
+                    <div className="rounded-lg border border-[#c6dbea] bg-[#eef6fb] px-3 py-2">
+                      <p className="text-sm font-extrabold uppercase tracking-[0.08em] text-[#1b495d]">
+                        {group.criterion}
                       </p>
-                      <p className="mt-1 text-sm font-semibold text-[#123447]">{question.prompt}</p>
-                      <div className="mt-3 flex flex-nowrap gap-2 overflow-x-auto pb-1">
-                        {question.options.map((option, optionIndex) => {
-                          const selected = selectedIndex === optionIndex;
-                          return (
-                            <label
-                              key={`${question.key}-${optionIndex}`}
-                              className={`flex min-w-[150px] shrink-0 cursor-pointer items-start gap-2 rounded-xl border px-3 py-2 text-sm transition-colors ${
-                                selected
-                                  ? "border-[#1e5266] bg-[#eaf4f8] text-[#103243]"
-                                  : "border-[#c8cfd4] bg-white text-[#1f2b34]"
-                              }`}
-                            >
-                              <input
-                                type="radio"
-                                name={`${currentFactor.key}-${question.key}`}
-                                value={String(optionIndex)}
-                                checked={selected}
-                                disabled={isCycleLocked}
-                                onChange={(event) =>
-                                  onAnswerChange(currentFactor.key, question.key, event.target.value)
-                                }
-                                className="mt-0.5"
-                              />
-                              <span className="space-y-0.5">
-                                <span className="block font-semibold">{optionIndex + 1}</span>
-                                <span className="block text-xs text-[#51636d]">{option}</span>
-                              </span>
-                            </label>
-                          );
-                        })}
-                      </div>
-                    </article>
-                  );
-                })}
+                    </div>
+                    {group.items.map(({ question }) => {
+                      const selectedIndex = answers[currentFactor.key]?.[question.key] ?? -1;
+                      return (
+                        <article
+                          key={`${currentFactor.key}-${question.key}`}
+                          className="rounded-xl border border-[#d8e4ee] bg-white p-4"
+                        >
+                          <p className="mt-1 text-base font-semibold text-[#123447]">{question.prompt}</p>
+                          <div className="mt-3 flex flex-nowrap gap-2 overflow-x-auto pb-1">
+                            {question.options.map((option, optionIndex) => {
+                              const selected = selectedIndex === optionIndex;
+                              return (
+                                <label
+                                  key={`${question.key}-${optionIndex}`}
+                                  className={`flex min-w-[150px] shrink-0 cursor-pointer items-start gap-2 rounded-xl border px-3 py-2 text-sm transition-colors ${
+                                    selected
+                                      ? "border-[#1e5266] bg-[#eaf4f8] text-[#103243]"
+                                      : "border-[#c8cfd4] bg-white text-[#1f2b34]"
+                                  }`}
+                                >
+                                  <input
+                                    type="radio"
+                                    name={`${currentFactor.key}-${question.key}`}
+                                    value={String(optionIndex)}
+                                    checked={selected}
+                                    disabled={isCycleLocked}
+                                    onChange={(event) =>
+                                      onAnswerChange(currentFactor.key, question.key, event.target.value)
+                                    }
+                                    className="mt-0.5"
+                                  />
+                                  <span className="space-y-0.5">
+                                    <span className="block font-semibold">{optionIndex + 1}</span>
+                                    <span className="block text-xs text-[#51636d]">{option}</span>
+                                  </span>
+                                </label>
+                              );
+                            })}
+                          </div>
+                        </article>
+                      );
+                    })}
+                  </section>
+                ))}
               </div>
             </article>
           ) : null}
@@ -717,8 +871,12 @@ export function ClientCompanyRiskProfile({ clientSlug }: { clientSlug: string })
             >
               Pular por agora
             </button>
+            <p className="self-center text-xs text-[#4f6977]">
+              {isAutoSaving ? "Salvando automaticamente..." : "Salvamento automatico ativo."}
+            </p>
           </div>
 
+          {autoSaveError ? <p className="mt-2 text-sm text-[#8a5b2d]">{autoSaveError}</p> : null}
           {error ? <p className="mt-3 text-sm text-red-600">{error}</p> : null}
           {notice ? <p className="mt-2 text-sm text-[#1f6b2f]">{notice}</p> : null}
         </section>

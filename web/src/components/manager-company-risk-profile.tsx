@@ -118,6 +118,27 @@ function statusLabel(value: RiskProfilePayload["progress"]["status"]) {
   return "Concluido";
 }
 
+function groupQuestionScoresByCriterion(questionScores: CompanyRiskProfileFactorScore["questionScores"]) {
+  const preferredOrder = ["Frequencia", "Historico do Risco no Setor", "Recursos Disponiveis"];
+  const grouped = new Map<string, CompanyRiskProfileFactorScore["questionScores"]>();
+
+  questionScores.forEach((questionScore) => {
+    const bucket = grouped.get(questionScore.criterion) ?? [];
+    bucket.push(questionScore);
+    grouped.set(questionScore.criterion, bucket);
+  });
+
+  const orderedCriteria = [
+    ...preferredOrder.filter((criterion) => grouped.has(criterion)),
+    ...Array.from(grouped.keys()).filter((criterion) => !preferredOrder.includes(criterion)),
+  ];
+
+  return orderedCriteria.map((criterion) => ({
+    criterion,
+    items: grouped.get(criterion) ?? [],
+  }));
+}
+
 function parseIsoToMs(value: string): number | null {
   const ms = new Date(value).getTime();
   if (!Number.isFinite(ms)) return null;
@@ -139,6 +160,7 @@ export function ManagerCompanyRiskProfile({ clientId }: { clientId: string }) {
   const [notice, setNotice] = useState("");
   const [selectedReportId, setSelectedReportId] = useState<string | null>(null);
   const [showSelectedResponses, setShowSelectedResponses] = useState(false);
+  const [expandedResponseTopics, setExpandedResponseTopics] = useState<Record<string, boolean>>({});
   const [reassignAfterDays, setReassignAfterDays] = useState("0");
   const [isReassigning, setIsReassigning] = useState(false);
 
@@ -170,6 +192,10 @@ export function ManagerCompanyRiskProfile({ clientId }: { clientId: string }) {
     if (!selectedReportId) return payload.reports[0] ?? null;
     return payload.reports.find((report) => report.id === selectedReportId) ?? payload.reports[0] ?? null;
   }, [payload, selectedReportId]);
+
+  useEffect(() => {
+    setExpandedResponseTopics({});
+  }, [selectedReport?.id, showSelectedResponses]);
 
   const trendChartsModel = useMemo(() => {
     if (!payload || payload.trendSeries.length === 0) return null;
@@ -455,99 +481,64 @@ export function ManagerCompanyRiskProfile({ clientId }: { clientId: string }) {
                     <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[#4f6977]">
                       Respostas detalhadas
                     </p>
-                    {selectedReport.factorScores.map((factorScore) => (
-                      <article
-                        key={`responses-${selectedReport.id}-${factorScore.factorKey}`}
-                        className="rounded-xl border border-[#d8e4ee] bg-white p-3"
-                      >
-                        <h4 className="text-sm font-semibold text-[#123447]">{factorScore.factorLabel}</h4>
-                        <div className="mt-2 overflow-x-auto">
-                          <table className="nr-table min-w-full text-xs">
-                            <thead>
-                              <tr className="border-b bg-[#f8fbfd]">
-                                <th className="px-2 py-2 text-left text-[#4f6977]">Criterio</th>
-                                <th className="px-2 py-2 text-left text-[#4f6977]">Pergunta</th>
-                                <th className="px-2 py-2 text-left text-[#4f6977]">Resposta marcada</th>
-                                <th className="px-2 py-2 text-left text-[#4f6977]">Score</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {factorScore.questionScores.map((questionScore) => (
-                                <tr
-                                  key={`response-row-${factorScore.factorKey}-${questionScore.questionKey}`}
-                                  className="border-b last:border-b-0"
-                                >
-                                  <td className="px-2 py-2 text-[#123447]">{questionScore.criterion}</td>
-                                  <td className="px-2 py-2 text-[#123447]">{questionScore.prompt}</td>
-                                  <td className="px-2 py-2 text-[#123447]">{questionScore.optionLabel}</td>
-                                  <td className="px-2 py-2 text-[#123447]">{questionScore.score.toFixed(2)}</td>
-                                </tr>
+                    {selectedReport.factorScores.map((factorScore) => {
+                      const groupedQuestionScores = groupQuestionScoresByCriterion(factorScore.questionScores);
+                      const topicKey = `${selectedReport.id}-${factorScore.factorKey}`;
+                      const isExpanded = Boolean(expandedResponseTopics[topicKey]);
+                      return (
+                        <article
+                          key={`responses-${selectedReport.id}-${factorScore.factorKey}`}
+                          className="rounded-xl border border-[#d8e4ee] bg-white p-3"
+                        >
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setExpandedResponseTopics((previous) => ({
+                                ...previous,
+                                [topicKey]: !previous[topicKey],
+                              }))
+                            }
+                            className="flex w-full items-center justify-between gap-2 text-left"
+                          >
+                            <h4 className="text-base font-semibold text-[#123447]">{factorScore.factorLabel}</h4>
+                            <span className="text-lg font-bold text-[#305164]" aria-hidden="true">
+                              {isExpanded ? "↑" : "↓"}
+                            </span>
+                          </button>
+                          {isExpanded ? (
+                            <div className="mt-3 space-y-4">
+                              {groupedQuestionScores.map((group) => (
+                                <section key={`responses-${factorScore.factorKey}-${group.criterion}`} className="space-y-2">
+                                  <div className="rounded-lg border border-[#c6dbea] bg-[#eef6fb] px-3 py-2">
+                                    <p className="text-sm font-extrabold uppercase tracking-[0.08em] text-[#1b495d]">
+                                      {group.criterion}
+                                    </p>
+                                  </div>
+                                  {group.items.map((questionScore) => (
+                                    <article
+                                      key={`response-row-${factorScore.factorKey}-${questionScore.questionKey}`}
+                                      className="rounded-lg border border-[#d8e4ee] bg-[#fcfdff] p-3"
+                                    >
+                                      <p className="mt-1 text-sm font-semibold text-[#123447]">{questionScore.prompt}</p>
+                                      <div className="mt-2 grid gap-1 text-xs sm:grid-cols-[170px_1fr]">
+                                        <p className="font-semibold text-[#4f6977]">Resposta marcada</p>
+                                        <p className="text-[#123447]">{questionScore.optionLabel}</p>
+                                        <p className="font-semibold text-[#4f6977]">Score</p>
+                                        <p className="text-[#123447]">{questionScore.score.toFixed(2)}</p>
+                                      </div>
+                                    </article>
+                                  ))}
+                                </section>
                               ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      </article>
-                    ))}
+                            </div>
+                          ) : null}
+                        </article>
+                      );
+                    })}
                   </div>
                 ) : null}
               </article>
             ) : null}
-
-            <div className="mt-4 overflow-x-auto rounded-xl border border-[#d8e4ee]">
-              <table className="nr-table min-w-full text-sm">
-                <thead>
-                  <tr className="border-b bg-[#f8fbfd]">
-                    <th className="px-3 py-2 text-left text-xs font-semibold text-[#4f6977]">Data</th>
-                    <th className="px-3 py-2 text-left text-xs font-semibold text-[#4f6977]">Score geral</th>
-                    <th className="px-3 py-2 text-left text-xs font-semibold text-[#4f6977]">Probabilidade</th>
-                    <th className="px-3 py-2 text-left text-xs font-semibold text-[#4f6977]">Avaliador</th>
-                    <th className="px-3 py-2 text-left text-xs font-semibold text-[#4f6977]">Acao</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {payload.reports.map((report) => (
-                    <tr key={report.id} className="border-b last:border-b-0">
-                      <td className="px-3 py-2 text-[#123447]">{formatDateTime(report.createdAt)}</td>
-                      <td className="px-3 py-2 text-[#123447]">{report.overallScore.toFixed(2)}</td>
-                      <td className="px-3 py-2">
-                        <span
-                          className={`rounded-full border px-2 py-0.5 text-xs font-semibold ${probabilityClassTone(report.overallClass)}`}
-                        >
-                          {probabilityClassLabel(report.overallClass)}
-                        </span>
-                      </td>
-                      <td className="px-3 py-2 text-[#123447]">
-                        {report.createdByRole === "client" ? "Cliente" : "Gestor"}
-                      </td>
-                      <td className="px-3 py-2">
-                        <div className="flex flex-wrap gap-1.5">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setSelectedReportId(report.id);
-                              setShowSelectedResponses(false);
-                            }}
-                            className="rounded-full border border-[#c9dce8] px-3 py-1 text-xs font-semibold text-[#123447]"
-                          >
-                            Ver resumo
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setSelectedReportId(report.id);
-                              setShowSelectedResponses(true);
-                            }}
-                            className="rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
-                          >
-                            Ver respostas
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
           </>
         )}
       </section>
@@ -599,6 +590,67 @@ export function ManagerCompanyRiskProfile({ clientId }: { clientId: string }) {
                 {isReassigning ? "Reatribuindo..." : "Reatribuir questionario"}
               </button>
             </div>
+
+            {!payload.reportsUnavailable && payload.reports.length > 0 ? (
+              <div className="mt-5">
+                <h4 className="text-sm font-semibold text-[#123447]">Historico de questionarios</h4>
+                <div className="mt-2 overflow-x-auto rounded-xl border border-[#d8e4ee]">
+                  <table className="nr-table min-w-full text-sm">
+                    <thead>
+                      <tr className="border-b bg-[#f8fbfd]">
+                        <th className="px-3 py-2 text-left text-xs font-semibold text-[#4f6977]">Data</th>
+                        <th className="px-3 py-2 text-left text-xs font-semibold text-[#4f6977]">Score geral</th>
+                        <th className="px-3 py-2 text-left text-xs font-semibold text-[#4f6977]">Probabilidade</th>
+                        <th className="px-3 py-2 text-left text-xs font-semibold text-[#4f6977]">Avaliador</th>
+                        <th className="px-3 py-2 text-left text-xs font-semibold text-[#4f6977]">Acao</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {payload.reports.map((report) => (
+                        <tr key={report.id} className="border-b last:border-b-0">
+                          <td className="px-3 py-2 text-[#123447]">{formatDateTime(report.createdAt)}</td>
+                          <td className="px-3 py-2 text-[#123447]">{report.overallScore.toFixed(2)}</td>
+                          <td className="px-3 py-2">
+                            <span
+                              className={`rounded-full border px-2 py-0.5 text-xs font-semibold ${probabilityClassTone(report.overallClass)}`}
+                            >
+                              {probabilityClassLabel(report.overallClass)}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2 text-[#123447]">
+                            {report.createdByRole === "client" ? "Cliente" : "Gestor"}
+                          </td>
+                          <td className="px-3 py-2">
+                            <div className="flex flex-wrap gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSelectedReportId(report.id);
+                                  setShowSelectedResponses(false);
+                                }}
+                                className="rounded-full border border-[#c9dce8] px-3 py-1 text-xs font-semibold text-[#123447]"
+                              >
+                                Ver resumo
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSelectedReportId(report.id);
+                                  setShowSelectedResponses(true);
+                                }}
+                                className="rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
+                              >
+                                Ver respostas
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ) : null}
           </>
         )}
 
