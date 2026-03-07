@@ -159,7 +159,7 @@ export function RoleLoginForm({ role }: { role: Role }) {
   return (
     <form
       onSubmit={handleSubmit}
-      className="space-y-4 rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm"
+      className="space-y-4 rounded-[26px] border border-[#dfdfdf] bg-white p-5 shadow-sm"
     >
       <h1 className="text-2xl font-semibold text-[#141d24]">{title}</h1>
 

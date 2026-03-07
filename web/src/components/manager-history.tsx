@@ -421,7 +421,7 @@ export function ManagerHistory({ forcedClientId }: { forcedClientId?: string }) 
 
   return (
     <div className="space-y-6">
-      <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm md:p-6">
+      <section className="rounded-[26px] border border-[#dfdfdf] bg-white p-5 shadow-sm md:p-6">
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div>
             <h2 className="text-2xl font-semibold text-[#121b22] md:text-3xl">{t.pageTitle}</h2>
@@ -500,7 +500,7 @@ export function ManagerHistory({ forcedClientId }: { forcedClientId?: string }) 
         ) : null}
       </section>
 
-      <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+      <section className="rounded-[26px] border border-[#dfdfdf] bg-white p-5 shadow-sm">
         <h3 className="text-lg font-semibold text-[#123447]">{t.sectionDrps}</h3>
         <div className="mt-3 overflow-x-auto rounded-lg border border-[#d8e4ee] bg-white">
           <table className="nr-table min-w-full text-sm">
@@ -569,7 +569,7 @@ export function ManagerHistory({ forcedClientId }: { forcedClientId?: string }) 
         </div>
       </section>
 
-      <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+      <section className="rounded-[26px] border border-[#dfdfdf] bg-white p-5 shadow-sm">
         <h3 className="text-lg font-semibold text-[#123447]">{t.sectionCompanyRisk}</h3>
         <div className="mt-3 overflow-x-auto rounded-lg border border-[#d8e4ee] bg-white">
           <table className="nr-table min-w-full text-sm">
@@ -616,7 +616,7 @@ export function ManagerHistory({ forcedClientId }: { forcedClientId?: string }) 
         </div>
       </section>
 
-      <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+      <section className="rounded-[26px] border border-[#dfdfdf] bg-white p-5 shadow-sm">
         <h3 className="text-lg font-semibold text-[#123447]">
           {isCompanyProfileHistory ? t.sectionPastPrograms : t.sectionPrograms}
         </h3>
@@ -668,7 +668,7 @@ export function ManagerHistory({ forcedClientId }: { forcedClientId?: string }) 
         </div>
       </section>
 
-      <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+      <section className="rounded-[26px] border border-[#dfdfdf] bg-white p-5 shadow-sm">
         <h3 className="text-lg font-semibold text-[#123447]">{t.sectionEvents}</h3>
         <div className="mt-3 overflow-x-auto rounded-lg border border-[#d8e4ee] bg-white">
           <table className="nr-table min-w-full text-sm">
@@ -741,7 +741,7 @@ export function ManagerHistory({ forcedClientId }: { forcedClientId?: string }) 
       </section>
 
       {!isCompanyProfileHistory ? (
-        <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+        <section className="rounded-[26px] border border-[#dfdfdf] bg-white p-5 shadow-sm">
           <h3 className="text-lg font-semibold text-[#123447]">{t.sectionReports}</h3>
           <div className="mt-3 overflow-x-auto rounded-lg border border-[#d8e4ee] bg-white">
             <table className="nr-table min-w-full text-sm">

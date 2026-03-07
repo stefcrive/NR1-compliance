@@ -127,6 +127,10 @@ type Payload = {
     sectors: Sector[];
     metrics?: {
       riskMatrix: RiskMatrixPoint[];
+      global?: {
+        gravityScoreScaleMax?: number;
+        companyOccurrenceRiskWeight?: number | null;
+      };
     };
     latestDrps: {
       reference_period: string;
@@ -247,19 +251,23 @@ function shortRiskName(label: string, topicId?: number) {
 
 function riskMatrixCategoryStyles(category: "low" | "moderate" | "high" | "critical" | null) {
   if (category === "low") {
-    return { fill: "#36b37e66", stroke: "#0b7a52", text: "#0b7a52" };
+    return { fill: "#84dfa780", stroke: "#6bc590", text: "#2f566c" };
   }
   if (category === "moderate") {
-    return { fill: "#f5b94266", stroke: "#a06200", text: "#8a5b2d" };
+    return { fill: "#edd06780", stroke: "#d3b751", text: "#2f566c" };
   }
   if (category === "high") {
-    return { fill: "#f28b4266", stroke: "#a74600", text: "#9a4314" };
+    return { fill: "#ecac6380", stroke: "#d1924f", text: "#2f566c" };
   }
-  return { fill: "#dc5c5c66", stroke: "#9f1f1f", text: "#8a2d2d" };
+  return { fill: "#ee9ca080", stroke: "#d68488", text: "#2f566c" };
 }
 
 function topicCode(topicId: number) {
   return `T${String(topicId).padStart(2, "0")}`;
+}
+
+function formatMetricRange(value: number) {
+  return value.toFixed(2);
 }
 
 function durationMinutesFromRange(
@@ -339,6 +347,8 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
   const [riskProfileSummary, setRiskProfileSummary] = useState<CompanyRiskProfileSummary | null>(null);
   const [isLoadingRiskProfile, setIsLoadingRiskProfile] = useState(true);
   const [riskProfileError, setRiskProfileError] = useState("");
+  const [isolatedRadarSector, setIsolatedRadarSector] = useState<string | null>(null);
+  const [activeChartInfo, setActiveChartInfo] = useState<"matrix" | "radar" | null>(null);
 
   const loadData = useCallback(
     async (campaignId?: string) => {
@@ -424,10 +434,15 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
   const companyRiskProfilePending = riskProfileSummary?.progress.status !== "completed";
   const linksActionCampaign =
     selectedCampaign?.status === "live" ? selectedCampaign : openCampaigns[0] ?? null;
+  const gravityScoreScaleMax = Math.max(1, payload?.dashboard?.metrics?.global?.gravityScoreScaleMax ?? 5);
+  const companyOccurrenceRiskWeight = payload?.dashboard?.metrics?.global?.companyOccurrenceRiskWeight ?? null;
+  const lowMax = gravityScoreScaleMax * 0.25;
+  const moderateMax = gravityScoreScaleMax * 0.5;
+  const highMax = gravityScoreScaleMax * 0.75;
   const riskMatrixPoints = useMemo(
     () =>
       (payload?.dashboard?.metrics?.riskMatrix ?? [])
-        .filter((point) => point.probability !== null && Number.isFinite(point.severity))
+        .filter((point) => point.probability !== null && point.riskScore !== null && Number.isFinite(point.severity))
         .slice()
         .sort((left, right) => (right.riskScore ?? 0) - (left.riskScore ?? 0)),
     [payload?.dashboard?.metrics?.riskMatrix],
@@ -435,29 +450,88 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
   const riskMatrixModel = useMemo(() => {
     if (riskMatrixPoints.length === 0) return null;
 
-    const width = 500;
-    const height = 320;
-    const padding = { left: 46, right: 24, top: 18, bottom: 38 };
+    const width = 920;
+    const height = 540;
+    const padding = { left: 70, right: 26, top: 18, bottom: 58 };
     const plotWidth = width - padding.left - padding.right;
     const plotHeight = height - padding.top - padding.bottom;
-    const xTicks = [0, 0.25, 0.5, 0.75, 1];
-    const yTicks = [1, 2, 3, 4, 5];
+    const xTicks = [0.01, 0.25, 0.5, 0.75, 1];
+    const severities = riskMatrixPoints.map((point) => point.severity);
+    const severityMinRaw = Math.min(...severities);
+    const severityMaxRaw = Math.max(...severities);
+    const severityPad = Math.max(0.14, (severityMaxRaw - severityMinRaw) * 0.2);
+    let severityMin = Math.max(1, severityMinRaw - severityPad);
+    let severityMax = Math.min(5, severityMaxRaw + severityPad);
+    if (severityMax - severityMin < 0.5) {
+      severityMin = Math.max(1, severityMinRaw - 0.25);
+      severityMax = Math.min(5, severityMaxRaw + 0.25);
+    }
+    const yTicks = Array.from({ length: 5 }, (_, index) => {
+      return severityMin + ((severityMax - severityMin) * index) / 4;
+    });
 
-    const xScale = (value: number) => padding.left + Math.max(0, Math.min(1, value)) * plotWidth;
-    const yScale = (value: number) => padding.top + (1 - (Math.max(1, Math.min(5, value)) - 1) / 4) * plotHeight;
+    const xScale = (value: number) => {
+      const clamped = Math.max(0.01, Math.min(1, value));
+      return padding.left + ((clamped - 0.01) / 0.99) * plotWidth;
+    };
+    const yScale = (value: number) => {
+      const clamped = Math.max(severityMin, Math.min(severityMax, value));
+      const ratio = (clamped - severityMin) / Math.max(severityMax - severityMin, Number.EPSILON);
+      return padding.top + (1 - ratio) * plotHeight;
+    };
 
-    const maxAffected = Math.max(...riskMatrixPoints.map((point) => Math.max(point.affectedEmployees, 1)), 1);
-    const points = riskMatrixPoints.map((point) => {
+    const affectedValues = riskMatrixPoints.map((point) => point.affectedEmployees);
+    const maxAffected = Math.max(...affectedValues, 1);
+    const minAffected = Math.min(...affectedValues, maxAffected);
+    const minRadius = 5;
+    const maxRadius = 24;
+    const sqrtMinAffected = Math.sqrt(minAffected);
+    const sqrtMaxAffected = Math.sqrt(maxAffected);
+    const sqrtAffectedSpan = Math.max(sqrtMaxAffected - sqrtMinAffected, Number.EPSILON);
+    const points = riskMatrixPoints.map((point, index) => {
       const probability = point.probability ?? 0;
-      const affected = Math.max(point.affectedEmployees, 1);
-      const normalizedSize = Math.sqrt(affected) / Math.sqrt(maxAffected);
-      const radius = 5 + normalizedSize * 12;
+      const normalizedAffected =
+        maxAffected === minAffected
+          ? 1
+          : (Math.sqrt(Math.max(point.affectedEmployees, 0)) - sqrtMinAffected) / sqrtAffectedSpan;
+      const radius = minRadius + normalizedAffected * (maxRadius - minRadius);
+      const x = xScale(probability);
+      const y = yScale(point.severity);
+      const horizontalDirection = x > padding.left + plotWidth * 0.6 ? -1 : 1;
+      const verticalNudge = (index % 2 === 0 ? -1 : 1) * Math.min(24, 12 + radius * 0.4);
+      const labelY = Math.min(
+        height - padding.bottom - 6,
+        Math.max(padding.top + 16, y + verticalNudge),
+      );
+      const label = shortRiskName(point.riskFactor, point.topicId);
+      const labelFontPx = 17;
+      const labelPaddingX = 6;
+      const labelBoxHeight = 20;
+      const estimatedLabelWidth = Math.max(56, Math.min(220, label.length * (labelFontPx * 0.6)));
+      const labelAnchor = horizontalDirection === 1 ? ("start" as const) : ("end" as const);
+      const baseLabelX = x + horizontalDirection * (radius + 14);
+      const labelX =
+        labelAnchor === "start"
+          ? Math.min(width - padding.right - estimatedLabelWidth - 4, Math.max(padding.left + 4, baseLabelX))
+          : Math.max(padding.left + estimatedLabelWidth + 4, Math.min(width - padding.right - 4, baseLabelX));
+      const labelBoxX =
+        horizontalDirection === 1
+          ? labelX - labelPaddingX
+          : labelX - estimatedLabelWidth - labelPaddingX;
+      const labelBoxY = labelY - labelBoxHeight / 2;
       return {
         ...point,
-        x: xScale(probability),
-        y: yScale(point.severity),
+        x,
+        y,
         radius,
-        label: shortRiskName(point.riskFactor, point.topicId),
+        label,
+        labelX,
+        labelY,
+        labelAnchor,
+        labelBoxX,
+        labelBoxY,
+        labelBoxWidth: estimatedLabelWidth + labelPaddingX * 2,
+        labelBoxHeight,
         styles: riskMatrixCategoryStyles(point.category),
       };
     });
@@ -466,6 +540,8 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
       width,
       height,
       padding,
+      severityMin,
+      severityMax,
       xTicks,
       yTicks,
       points,
@@ -494,18 +570,18 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
     const axes = Array.from(topicMap.values()).sort((left, right) => left.topicId - right.topicId);
     if (axes.length === 0) return null;
 
-    const size = 360;
+    const size = 500;
     const center = size / 2;
-    const radius = 126;
-    const labelRadius = radius + 18;
-    const levels = [0.25, 0.5, 0.75, 1];
+    const radius = 172;
+    const labelRadius = radius + 32;
+    const levels = [0.2, 0.4, 0.6, 0.8, 1];
     const palette = [
-      { line: "#1d4ed8", fill: "#1d4ed833" },
-      { line: "#0f766e", fill: "#0f766e33" },
-      { line: "#b45309", fill: "#b4530933" },
-      { line: "#be123c", fill: "#be123c33" },
-      { line: "#0369a1", fill: "#0369a133" },
-      { line: "#3f6212", fill: "#3f621233" },
+      { line: "#2f5be8", fill: "#2f5be824" },
+      { line: "#2f9f9b", fill: "#2f9f9b24" },
+      { line: "#cf7a2c", fill: "#cf7a2c24" },
+      { line: "#db4064", fill: "#db406424" },
+      { line: "#8b5cf6", fill: "#8b5cf624" },
+      { line: "#48a6df", fill: "#48a6df24" },
     ];
 
     const axisVertices = axes.map((axis, index) => {
@@ -516,13 +592,27 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
       const baseLabelY = center + Math.sin(angle) * labelRadius;
       const cos = Math.cos(angle);
       const labelAnchor: "start" | "middle" | "end" = cos > 0.28 ? "start" : cos < -0.28 ? "end" : "middle";
+      const estimatedLabelWidth = Math.max(58, Math.min(142, axis.label.length * 8.2));
+      const labelInset = 18;
+      const minLabelX =
+        labelAnchor === "start"
+          ? labelInset
+          : labelAnchor === "end"
+            ? labelInset + estimatedLabelWidth
+            : labelInset + estimatedLabelWidth / 2;
+      const maxLabelX =
+        labelAnchor === "start"
+          ? size - labelInset - estimatedLabelWidth
+          : labelAnchor === "end"
+            ? size - labelInset
+            : size - labelInset - estimatedLabelWidth / 2;
       return {
         ...axis,
         angle,
         axisX,
         axisY,
-        labelX: Math.min(size - 10, Math.max(10, baseLabelX)),
-        labelY: Math.min(size - 10, Math.max(10, baseLabelY)),
+        labelX: Math.min(maxLabelX, Math.max(minLabelX, baseLabelX)),
+        labelY: Math.min(size - 20, Math.max(20, baseLabelY)),
         labelAnchor,
       };
     });
@@ -571,6 +661,17 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
       sectorPolygons,
     };
   }, [payload?.dashboard?.sectors]);
+  const effectiveIsolatedRadarSector = useMemo(() => {
+    if (!isolatedRadarSector || !sectorRadarModel) return null;
+    return sectorRadarModel.sectorPolygons.some((series) => series.sector === isolatedRadarSector)
+      ? isolatedRadarSector
+      : null;
+  }, [isolatedRadarSector, sectorRadarModel]);
+  const radarVisibleSeries = useMemo(() => {
+    if (!sectorRadarModel) return [];
+    if (!effectiveIsolatedRadarSector) return sectorRadarModel.sectorPolygons;
+    return sectorRadarModel.sectorPolygons.filter((series) => series.sector === effectiveIsolatedRadarSector);
+  }, [effectiveIsolatedRadarSector, sectorRadarModel]);
 
   useEffect(() => {
     if (!payload || !resultsCampaign) return;
@@ -1119,7 +1220,25 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
       )}
 
       <section className="rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
-        <h3 className="text-lg font-semibold text-[#123447]">Resultados atuais</h3>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h3 className="text-lg font-semibold text-[#123447]">Resultados atuais</h3>
+          {resultsHref ? (
+            <Link
+              href={resultsHref}
+              className="rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
+            >
+              Ver resultados completos
+            </Link>
+          ) : (
+            <button
+              type="button"
+              disabled
+              className="rounded-full border border-[#d6dde2] px-3 py-1 text-xs font-semibold text-[#95a4ae] disabled:cursor-not-allowed"
+            >
+              Ver resultados completos
+            </button>
+          )}
+        </div>
         {resultsCampaign ? (
           <article className="mt-3 rounded-xl border border-[#d8e4ee] p-3">
             <p className="text-xs uppercase tracking-[0.14em] text-[#4f6977]">
@@ -1140,7 +1259,8 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
         )}
 
         {payload.dashboard ? (
-          <div className="mt-3 grid gap-4 md:grid-cols-4">
+          <>
+            <div className="mt-3 grid gap-4 md:grid-cols-4">
             <article className="rounded-xl border border-[#d8e4ee] bg-white p-4">
               <p className="text-xs text-[#4f6977]">Respostas</p>
               {resultsHref ? (
@@ -1196,8 +1316,376 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
               )}
             </article>
           </div>
+
+            <div className="mt-4 grid gap-4 xl:grid-cols-2">
+              <article className="flex h-full flex-col rounded-[26px] border border-[#dfdfdf] bg-white p-5 shadow-sm">
+                <div className="flex items-center justify-between gap-2">
+                  <h4 className="text-lg font-semibold text-[#141d24]">Risk Matrix</h4>
+                  <button
+                    type="button"
+                    aria-label="Risk matrix info"
+                    onClick={() => setActiveChartInfo("matrix")}
+                    className="rounded-full border border-[#b8cfdb] px-2 py-0.5 text-xs font-semibold text-[#17465b]"
+                  >
+                    i
+                  </button>
+                </div>
+
+                <div className="mt-1">
+                  <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-[#4b6472]">
+                    <span className="font-semibold text-[#223845]">Gravidade (color):</span>
+                  {[
+                    { label: `low (<${formatMetricRange(lowMax)})`, category: "low" as const },
+                    {
+                      label: `moderate (${formatMetricRange(lowMax)}-${formatMetricRange(moderateMax)})`,
+                      category: "moderate" as const,
+                    },
+                    {
+                      label: `high (${formatMetricRange(moderateMax + 0.01)}-${formatMetricRange(highMax)})`,
+                      category: "high" as const,
+                    },
+                    { label: `critical (>=${formatMetricRange(highMax + 0.01)})`, category: "critical" as const },
+                  ].map((item) => {
+                    const style = riskMatrixCategoryStyles(item.category);
+                    return (
+                      <span
+                        key={`risk-chip-${item.category}`}
+                        className="inline-flex items-center gap-1 rounded-full border border-[#d8e5ec] bg-white px-2 py-0.5"
+                      >
+                        <span
+                          className="inline-block h-2.5 w-2.5 rounded-full"
+                          style={{ backgroundColor: style.fill, borderColor: style.stroke }}
+                        />
+                        {item.label}
+                      </span>
+                    );
+                  })}
+                  </div>
+                </div>
+
+                <div className="mt-3 flex-1 overflow-x-auto">
+                  {riskMatrixModel ? (
+                    <svg
+                      data-nr-chart
+                      viewBox={`0 0 ${riskMatrixModel.width} ${riskMatrixModel.height}`}
+                      className="h-[420px] w-full min-w-[520px]"
+                    >
+                      {riskMatrixModel.xTicks.map((tick) => {
+                        const x =
+                          riskMatrixModel.padding.left +
+                          ((tick - 0.01) / 0.99) *
+                            (riskMatrixModel.width - riskMatrixModel.padding.left - riskMatrixModel.padding.right);
+                        return (
+                          <line
+                            key={`matrix-x-grid-${tick}`}
+                            x1={x}
+                            y1={riskMatrixModel.padding.top}
+                            x2={x}
+                            y2={riskMatrixModel.height - riskMatrixModel.padding.bottom}
+                            stroke="#dce7ee"
+                            strokeDasharray="4 6"
+                          />
+                        );
+                      })}
+                      {riskMatrixModel.yTicks.map((tick) => {
+                        const y =
+                          riskMatrixModel.padding.top +
+                          (1 - (tick - riskMatrixModel.severityMin) / Math.max(riskMatrixModel.severityMax - riskMatrixModel.severityMin, Number.EPSILON)) *
+                            (riskMatrixModel.height - riskMatrixModel.padding.top - riskMatrixModel.padding.bottom);
+                        return (
+                          <line
+                            key={`matrix-y-grid-${tick.toFixed(4)}`}
+                            x1={riskMatrixModel.padding.left}
+                            y1={y}
+                            x2={riskMatrixModel.width - riskMatrixModel.padding.right}
+                            y2={y}
+                            stroke="#dce7ee"
+                            strokeDasharray="4 6"
+                          />
+                        );
+                      })}
+                      <line
+                        x1={riskMatrixModel.padding.left}
+                        y1={riskMatrixModel.height - riskMatrixModel.padding.bottom}
+                        x2={riskMatrixModel.width - riskMatrixModel.padding.right}
+                        y2={riskMatrixModel.height - riskMatrixModel.padding.bottom}
+                        stroke="#64748b"
+                        strokeWidth="1.2"
+                      />
+                      <line
+                        x1={riskMatrixModel.padding.left}
+                        y1={riskMatrixModel.padding.top}
+                        x2={riskMatrixModel.padding.left}
+                        y2={riskMatrixModel.height - riskMatrixModel.padding.bottom}
+                        stroke="#64748b"
+                        strokeWidth="1.2"
+                      />
+
+                      {riskMatrixModel.xTicks.map((tick) => {
+                        const x =
+                          riskMatrixModel.padding.left +
+                          ((tick - 0.01) / 0.99) *
+                            (riskMatrixModel.width - riskMatrixModel.padding.left - riskMatrixModel.padding.right);
+                        return (
+                          <text
+                            key={`matrix-x-tick-${tick}`}
+                            x={x}
+                            y={riskMatrixModel.height - 20}
+                            textAnchor="middle"
+                            className="fill-[#475569] text-[13px]"
+                          >
+                            {tick.toFixed(2)}
+                          </text>
+                        );
+                      })}
+                      {riskMatrixModel.yTicks.map((tick) => {
+                        const y =
+                          riskMatrixModel.padding.top +
+                          (1 - (tick - riskMatrixModel.severityMin) / Math.max(riskMatrixModel.severityMax - riskMatrixModel.severityMin, Number.EPSILON)) *
+                            (riskMatrixModel.height - riskMatrixModel.padding.top - riskMatrixModel.padding.bottom);
+                        return (
+                          <text
+                            key={`matrix-y-tick-${tick.toFixed(4)}`}
+                            x={riskMatrixModel.padding.left - 12}
+                            y={y + 6}
+                            textAnchor="end"
+                            className="fill-[#475569] text-[13px]"
+                          >
+                            {tick.toFixed(1)}
+                          </text>
+                        );
+                      })}
+
+                      <text
+                        x={(riskMatrixModel.padding.left + riskMatrixModel.width - riskMatrixModel.padding.right) / 2}
+                        y={riskMatrixModel.height - 2}
+                        textAnchor="middle"
+                        className="fill-[#334155] text-[15px] font-semibold"
+                      >
+                        Probability of occurrence
+                      </text>
+                      <text
+                        x={14}
+                        y={riskMatrixModel.height / 2}
+                        transform={`rotate(-90 14 ${riskMatrixModel.height / 2})`}
+                        textAnchor="middle"
+                        className="fill-[#334155] text-[15px] font-semibold"
+                      >
+                        Severity (observed)
+                      </text>
+                      {riskMatrixModel.points.map((point) => (
+                        <g key={`matrix-point-${point.topicId}`}>
+                          <circle
+                            cx={point.x}
+                            cy={point.y}
+                            r={point.radius}
+                            fill={
+                              point.category === "critical"
+                                ? "#fca5a5"
+                                : point.category === "high"
+                                  ? "#fdba74"
+                                  : point.category === "moderate"
+                                    ? "#fde68a"
+                                    : "#86efac"
+                            }
+                            stroke="#334155"
+                            strokeWidth="1"
+                            fillOpacity="0.8"
+                          />
+                          <line
+                            x1={point.x}
+                            y1={point.y}
+                            x2={point.labelX}
+                            y2={point.labelY}
+                            stroke="#64748b"
+                            strokeWidth="0.7"
+                          />
+                          <text
+                            x={point.labelX}
+                            y={point.labelY}
+                            textAnchor={point.labelAnchor}
+                            className="fill-[#1f2937] text-[17px] font-semibold"
+                          >
+                            {point.label}
+                          </text>
+                          <title>
+                            {`${topicCode(point.topicId)} ${point.label} | probability ${point.probability?.toFixed(2) ?? "-"} | severity ${point.severity.toFixed(2)} | affected ${point.affectedEmployees}`}
+                          </title>
+                        </g>
+                      ))}
+                    </svg>
+                  ) : (
+                    <p className="text-sm text-[#5b7482]">No matrix data available.</p>
+                  )}
+                </div>
+              </article>
+
+              <article className="flex h-full flex-col rounded-[26px] border border-[#dfdfdf] bg-white p-5 shadow-sm">
+                <div className="flex items-center justify-between gap-2">
+                  <h4 className="text-lg font-semibold text-[#141d24]">Sector Radar Profile</h4>
+                  <button
+                    type="button"
+                    aria-label="Sector radar info"
+                    onClick={() => setActiveChartInfo("radar")}
+                    className="rounded-full border border-[#b8cfdb] px-2 py-0.5 text-xs font-semibold text-[#17465b]"
+                  >
+                    i
+                  </button>
+                </div>
+                <p className="mt-1 text-xs text-[#55707f]">
+                  {sectorRadarModel
+                    ? `${sectorRadarModel.sectorPolygons.length} sectors plotted (sorted by sector risk index)`
+                    : "No sectors plotted"}
+                </p>
+                {sectorRadarModel ? (
+                  <p className="mt-1 text-[11px] text-[#6b8290]">
+                    {effectiveIsolatedRadarSector
+                      ? `Isolated sector: ${effectiveIsolatedRadarSector} (click again in legend to reset)`
+                      : "Click a legend item to isolate one sector on the radar."}
+                  </p>
+                ) : null}
+
+                {sectorRadarModel ? (
+                  <>
+                    <div className="mt-3 flex-1 overflow-x-auto">
+                      <svg
+                        data-nr-chart
+                        viewBox={`0 0 ${sectorRadarModel.size} ${sectorRadarModel.size}`}
+                        className="mx-auto h-[440px] w-full min-w-[420px] max-w-[500px]"
+                      >
+                        {sectorRadarModel.rings.map((ring, index) => (
+                          <polygon
+                            key={`radar-ring-${index}`}
+                            points={ring}
+                            fill="none"
+                            stroke="#dbe7ef"
+                            strokeWidth={1}
+                          />
+                        ))}
+                        {sectorRadarModel.axisLines.map((axis) => (
+                          <line
+                            key={`radar-axis-${axis.topicId}`}
+                            x1={axis.x1}
+                            y1={axis.y1}
+                            x2={axis.x2}
+                            y2={axis.y2}
+                            stroke="#dbe7ef"
+                            strokeWidth={1}
+                          />
+                        ))}
+                        {radarVisibleSeries.map((series) => (
+                          <g key={`radar-sector-${series.sector}`}>
+                            <polygon
+                              points={series.polygonPoints}
+                              fill={series.fillColor}
+                              stroke={series.lineColor}
+                              strokeWidth={2}
+                            />
+                            {series.vertices.map((vertex) => (
+                              <circle
+                                key={`radar-vertex-${series.sector}-${vertex.topicId}`}
+                                cx={vertex.x}
+                                cy={vertex.y}
+                                r={2.5}
+                                fill={series.lineColor}
+                              />
+                            ))}
+                          </g>
+                        ))}
+                        {sectorRadarModel.axes.map((axis) => (
+                          <text
+                            key={`radar-label-${axis.topicId}`}
+                            x={axis.labelX}
+                            y={axis.labelY}
+                            textAnchor={axis.labelAnchor}
+                            dominantBaseline="middle"
+                            className="fill-[#334155] text-[15px] font-semibold"
+                          >
+                            {axis.label}
+                          </text>
+                        ))}
+                      </svg>
+                    </div>
+
+                    <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] text-[#4b6472]">
+                      <span className="font-semibold text-[#223845]">Legend:</span>
+                      {sectorRadarModel.sectorPolygons.map((series) => (
+                        <button
+                          type="button"
+                          key={`radar-sector-legend-${series.sector}`}
+                          onClick={() =>
+                            setIsolatedRadarSector((previous) =>
+                              previous === series.sector ? null : series.sector,
+                            )
+                          }
+                          className={`inline-flex items-center gap-1.5 rounded-full border bg-white px-2.5 py-0.5 ${
+                            effectiveIsolatedRadarSector === series.sector
+                              ? "border-[#17465b] bg-[#e9f5fb]"
+                              : effectiveIsolatedRadarSector
+                                ? "border-[#d8e5ec] opacity-60"
+                                : "border-[#d8e5ec]"
+                          }`}
+                        >
+                          <span
+                            className="inline-block h-2.5 w-2.5 rounded-full border"
+                            style={{ backgroundColor: series.fillColor, borderColor: series.lineColor }}
+                          />
+                          <span className="font-medium text-[#2a4452]">{series.sector}</span>
+                          <span className="text-[#5c7482]">
+                            ({series.sectorRiskIndex !== null ? series.sectorRiskIndex.toFixed(2) : "-"})
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                ) : (
+                  <p className="mt-3 text-sm text-[#5b7482]">No radar data available.</p>
+                )}
+              </article>
+            </div>
+          </>
         ) : null}
       </section>
+
+      {activeChartInfo ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4"
+          onClick={() => setActiveChartInfo(null)}
+        >
+          <article
+            className="w-full max-w-xl rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <h4 className="text-lg font-semibold text-[#123447]">
+                {activeChartInfo === "matrix" ? "Risk Matrix . Info" : "Sector Radar Profile . Info"}
+              </h4>
+              <button
+                type="button"
+                onClick={() => setActiveChartInfo(null)}
+                className="rounded-full border border-[#c9dce8] px-3 py-1 text-xs font-semibold text-[#123447]"
+              >
+                Fechar
+              </button>
+            </div>
+
+            {activeChartInfo === "matrix" ? (
+              <div className="mt-3 space-y-2 text-sm text-[#355d72]">
+                <p>x: probability | y: severity (observed from responses) | bubble: affected employees</p>
+                <p>
+                  gravity score = probability x company occurrence-risk weight (
+                  {companyOccurrenceRiskWeight !== null ? companyOccurrenceRiskWeight.toFixed(2) : "n/a"})
+                </p>
+              </div>
+            ) : (
+              <div className="mt-3 space-y-2 text-sm text-[#355d72]">
+                <p>Radar overlays sector profiles by topic, sorted by sector risk index.</p>
+                <p>Click a legend item to isolate one sector on the radar.</p>
+              </div>
+            )}
+          </article>
+        </div>
+      ) : null}
 
       <section className="rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-3">

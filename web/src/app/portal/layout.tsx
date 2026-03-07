@@ -9,7 +9,7 @@ const NAV_ITEMS = [
 
 export default function PortalLayout({ children }: { children: React.ReactNode }) {
   return (
-    <div className="min-h-screen bg-[linear-gradient(120deg,#f6fbff_0%,#f9f7ef_45%,#ffffff_100%)]">
+    <div className="min-h-screen bg-[#f6f6f6]">
       <header className="border-b border-[#d8e4ee] bg-white/90 backdrop-blur">
         <div className="mx-auto flex w-full max-w-7xl items-center justify-between px-4 py-4">
           <div>

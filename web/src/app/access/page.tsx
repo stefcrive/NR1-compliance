@@ -29,7 +29,7 @@ export default function AccessGatewayPage() {
   return (
     <main className="min-h-screen bg-[#f6f6f6] px-4 py-10">
       <div className="mx-auto w-full max-w-6xl space-y-6">
-        <header className="flex items-center justify-between rounded-[26px] border border-[#dfdfdf] bg-[#f4f4f4] p-4 shadow-sm">
+        <header className="flex items-center justify-between rounded-[26px] border border-[#dfdfdf] bg-white p-4 shadow-sm">
           <CompanyLogoLink />
           <Link
             href="/"
@@ -39,7 +39,7 @@ export default function AccessGatewayPage() {
           </Link>
         </header>
 
-        <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-6 shadow-sm">
+        <section className="rounded-[26px] border border-[#dfdfdf] bg-white p-6 shadow-sm">
           <p className="text-xs uppercase tracking-[0.2em] text-[#5d6d77]">Platform Gateway</p>
           <h1 className="mt-2 text-3xl font-semibold text-[#141d24]">Select your role</h1>
           <p className="mt-2 text-sm text-[#4a5862]">
@@ -49,7 +49,7 @@ export default function AccessGatewayPage() {
 
         <section className="grid gap-4 md:grid-cols-3">
           {ROLES.map((role) => (
-            <article key={role.title} className="rounded-2xl border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+            <article key={role.title} className="rounded-2xl border border-[#dfdfdf] bg-white p-5 shadow-sm">
               <h2 className="text-xl font-semibold text-[#141d24]">{role.title}</h2>
               <p className="mt-2 text-sm text-[#4a5862]">{role.description}</p>
               <div className="mt-5 flex flex-wrap gap-2">

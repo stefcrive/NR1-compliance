@@ -38,3 +38,7 @@ Chronograma (8 eventos) - add link to assigned session to event
 add notification to manager for upcoming events
 
 add powerpoint and pdf visualizer to the session page
+
+test drps result and company pforfile risk timeseries
+
+apply new calendar component

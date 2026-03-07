@@ -239,7 +239,7 @@ export function ClientPortalDashboard() {
 
   return (
     <div className="space-y-6">
-      <section className="overflow-hidden rounded-3xl border border-[#c8dde9] bg-[radial-gradient(1200px_300px_at_100%_-60%,#b9dce9_0%,transparent_55%),linear-gradient(120deg,#f8fcff_0%,#eef7fb_48%,#fff5e8_100%)] p-6 shadow-sm">
+      <section className="overflow-hidden rounded-3xl border border-[#c8dde9] bg-white p-6 shadow-sm">
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div className="space-y-2">
             <p className="text-xs uppercase tracking-[0.22em] text-[#0f6077]">Painel executivo</p>

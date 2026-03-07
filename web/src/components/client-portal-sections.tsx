@@ -883,7 +883,7 @@ export function ClientCompanyDataSection({ clientSlug }: { clientSlug: string })
 
   return (
     <div className="space-y-6">
-      <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+      <section className="rounded-[26px] border border-[#dfdfdf] bg-white p-5 shadow-sm">
         <h2 className="text-2xl font-semibold text-[#141d24]">Company Data</h2>
         <p className="mt-1 text-sm text-[#475660]">
           {data.client.companyName} | CNPJ {data.client.cnpj} | Status {data.client.status}
@@ -891,25 +891,25 @@ export function ClientCompanyDataSection({ clientSlug }: { clientSlug: string })
       </section>
 
       <section className="grid gap-4 md:grid-cols-4">
-        <article className="rounded-2xl border border-[#dfdfdf] bg-[#f8f8f8] p-4 shadow-sm">
+        <article className="rounded-2xl border border-[#dfdfdf] bg-white p-4 shadow-sm">
           <p className="text-xs text-[#4f6977]">Total employees</p>
           <p className="mt-1 text-2xl font-semibold text-[#133748]">{data.client.totalEmployees}</p>
         </article>
-        <article className="rounded-2xl border border-[#dfdfdf] bg-[#f8f8f8] p-4 shadow-sm">
+        <article className="rounded-2xl border border-[#dfdfdf] bg-white p-4 shadow-sm">
           <p className="text-xs text-[#4f6977]">Home office ratio</p>
           <p className="mt-1 text-2xl font-semibold text-[#133748]">{remotePct}%</p>
         </article>
-        <article className="rounded-2xl border border-[#dfdfdf] bg-[#f8f8f8] p-4 shadow-sm">
+        <article className="rounded-2xl border border-[#dfdfdf] bg-white p-4 shadow-sm">
           <p className="text-xs text-[#4f6977]">Presential ratio</p>
           <p className="mt-1 text-2xl font-semibold text-[#133748]">{onsitePct}%</p>
         </article>
-        <article className="rounded-2xl border border-[#dfdfdf] bg-[#f8f8f8] p-4 shadow-sm">
+        <article className="rounded-2xl border border-[#dfdfdf] bg-white p-4 shadow-sm">
           <p className="text-xs text-[#4f6977]">Hybrid ratio</p>
           <p className="mt-1 text-2xl font-semibold text-[#133748]">{hybridPct}%</p>
         </article>
       </section>
 
-      <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+      <section className="rounded-[26px] border border-[#dfdfdf] bg-white p-5 shadow-sm">
         <h3 className="text-lg font-semibold text-[#141d24]">Metricas por setor (ultimo diagnostico DRPS)</h3>
         <div className="mt-3 overflow-x-auto">
           <table className="nr-table min-w-full text-sm">
@@ -1041,7 +1041,7 @@ export function ClientDiagnosticStatusSection({ clientSlug }: { clientSlug: stri
 
   return (
     <div className="space-y-6">
-      <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+      <section className="rounded-[26px] border border-[#dfdfdf] bg-white p-5 shadow-sm">
         <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
           <h2 className="text-2xl font-semibold text-[#141d24]">Diagnosticos DRPS (status e resultados)</h2>
           <div className="flex flex-wrap items-center gap-2">
@@ -1081,7 +1081,7 @@ export function ClientDiagnosticStatusSection({ clientSlug }: { clientSlug: stri
         </p>
       </section>
 
-      <section className="h-auto max-h-none overflow-visible rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+      <section className="h-auto max-h-none overflow-visible rounded-[26px] border border-[#dfdfdf] bg-white p-5 shadow-sm">
         <div className="max-h-none overflow-x-auto overflow-y-visible">
           <table className="nr-table min-w-full text-sm">
             <thead>
@@ -1332,7 +1332,7 @@ export function ClientDiagnosticAggregateResultsSection({
             </>
           )}
         </nav>
-        <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+        <section className="rounded-[26px] border border-[#dfdfdf] bg-white p-5 shadow-sm">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h2 className="text-2xl font-semibold text-[#141d24]">DRPS Results Report</h2>
             {managerRawDataDownloadHref ? (
@@ -2308,7 +2308,7 @@ export function ClientDiagnosticResultsSection({
               </>
             )}
           </nav>
-          <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+          <section className="rounded-[26px] border border-[#dfdfdf] bg-white p-5 shadow-sm">
             <h2 className="text-2xl font-semibold text-[#141d24]">{campaign?.name ?? "Resultados do diagnostico"}</h2>
             <p className="mt-1 text-sm text-[#475660]">
               Responses {dashboard?.totals.responses ?? 0} | Risks {dashboard?.totals.topics ?? 0} |
@@ -2319,7 +2319,7 @@ export function ClientDiagnosticResultsSection({
       ) : null}
 
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
-        <article className="rounded-[20px] border border-[#dfdfdf] bg-[#f8f8f8] p-4 shadow-sm">
+        <article className="rounded-[20px] border border-[#dfdfdf] bg-white p-4 shadow-sm">
           <p className="text-xs uppercase tracking-[0.12em] text-[#516b79]">Global Risk Index</p>
           <p className="mt-2 text-2xl font-semibold text-[#14384a]">
             {metrics?.global.riskIndex !== null && metrics?.global.riskIndex !== undefined
@@ -2327,14 +2327,14 @@ export function ClientDiagnosticResultsSection({
               : "-"}
           </p>
         </article>
-        <article className="rounded-[20px] border border-[#dfdfdf] bg-[#f8f8f8] p-4 shadow-sm">
+        <article className="rounded-[20px] border border-[#dfdfdf] bg-white p-4 shadow-sm">
           <p className="text-xs uppercase tracking-[0.12em] text-[#516b79]">Participation rate</p>
           <p className="mt-2 text-2xl font-semibold text-[#14384a]">{fmtPercent(participationRate)}</p>
           <p className="mt-1 text-xs text-[#587282]">
             {participationResponses}/{participationTotalEmployees} colaboradores
           </p>
         </article>
-        <article className="rounded-[20px] border border-[#dfdfdf] bg-[#f8f8f8] p-4 shadow-sm">
+        <article className="rounded-[20px] border border-[#dfdfdf] bg-white p-4 shadow-sm">
           <p className="text-xs uppercase tracking-[0.12em] text-[#516b79]">Psychosocial Load Index</p>
           <p className="mt-2 text-2xl font-semibold text-[#14384a]">
             {metrics?.global.psychosocialLoadIndex !== null &&
@@ -2343,7 +2343,7 @@ export function ClientDiagnosticResultsSection({
               : "-"}
           </p>
         </article>
-        <article className="rounded-[20px] border border-[#dfdfdf] bg-[#f8f8f8] p-4 shadow-sm">
+        <article className="rounded-[20px] border border-[#dfdfdf] bg-white p-4 shadow-sm">
           <p className="text-xs uppercase tracking-[0.12em] text-[#516b79]">Critical Exposure</p>
           <p className="mt-2 text-2xl font-semibold text-[#14384a]">
             {fmtPercent(metrics?.global.criticalExposure)}
@@ -2352,7 +2352,7 @@ export function ClientDiagnosticResultsSection({
             {metrics?.global.criticalExposureEmployees ?? 0}/{metrics?.global.employeesEvaluated ?? 0} colaboradores
           </p>
         </article>
-        <article className="rounded-[20px] border border-[#dfdfdf] bg-[#f8f8f8] p-4 shadow-sm">
+        <article className="rounded-[20px] border border-[#dfdfdf] bg-white p-4 shadow-sm">
           <p className="text-xs uppercase tracking-[0.12em] text-[#516b79]">Risk Concentration (sd)</p>
           <p className="mt-2 text-2xl font-semibold text-[#14384a]">
             {metrics?.global.riskConcentration !== null && metrics?.global.riskConcentration !== undefined
@@ -2363,7 +2363,7 @@ export function ClientDiagnosticResultsSection({
       </section>
 
       <section className="grid gap-4">
-        <article className="flex min-h-[420px] w-full flex-col rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+        <article className="flex min-h-[420px] w-full flex-col rounded-[26px] border border-[#dfdfdf] bg-white p-5 shadow-sm">
           <h3 className="text-lg font-semibold text-[#141d24]">Risk Factors (core metrics)</h3>
           <p className="mt-1 text-xs text-[#55707f]">Ordered by risk ranking (highest score first).</p>
           <div className="mt-3 flex-1 overflow-auto rounded-xl border border-[#dce8ee] bg-white">
@@ -2424,7 +2424,7 @@ export function ClientDiagnosticResultsSection({
         </article>
       </section>
 
-      <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+      <section className="rounded-[26px] border border-[#dfdfdf] bg-white p-5 shadow-sm">
         <div className="flex items-center justify-between gap-2">
           <h3 className="text-lg font-semibold text-[#141d24]">Risk Heatmap (sector x factor)</h3>
           <button
@@ -2485,7 +2485,7 @@ export function ClientDiagnosticResultsSection({
       </section>
 
       <section className="grid gap-4 xl:grid-cols-2">
-        <article className="flex h-full flex-col rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+        <article className="flex h-full flex-col rounded-[26px] border border-[#dfdfdf] bg-white p-5 shadow-sm">
           <div className="flex items-center justify-between gap-2">
             <h3 className="text-lg font-semibold text-[#141d24]">Risk Matrix</h3>
             <button
@@ -2655,7 +2655,7 @@ export function ClientDiagnosticResultsSection({
           </div>
         </article>
 
-        <article className="flex h-full flex-col rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+        <article className="flex h-full flex-col rounded-[26px] border border-[#dfdfdf] bg-white p-5 shadow-sm">
           <div className="flex items-center justify-between gap-2">
             <h3 className="text-lg font-semibold text-[#141d24]">Sector Radar Profile</h3>
             <button
@@ -2779,7 +2779,7 @@ export function ClientDiagnosticResultsSection({
       </section>
 
       <section className="grid gap-4">
-        <article className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+        <article className="rounded-[26px] border border-[#dfdfdf] bg-white p-5 shadow-sm">
           <div className="flex items-center justify-between gap-2">
             <h3 className="text-lg font-semibold text-[#141d24]">{`Distribution Plots (${distributionScopeLabel})`}</h3>
             <button
@@ -2840,7 +2840,7 @@ export function ClientDiagnosticResultsSection({
         </article>
       </section>
 
-      <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+      <section className="rounded-[26px] border border-[#dfdfdf] bg-white p-5 shadow-sm">
         <div className="flex items-center justify-between gap-2">
           <h3 className="text-lg font-semibold text-[#141d24]">Trend Analysis</h3>
           <button
@@ -2993,7 +2993,7 @@ export function ClientDiagnosticResultsSection({
         )}
       </section>
 
-      <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+      <section className="rounded-[26px] border border-[#dfdfdf] bg-white p-5 shadow-sm">
         <h3 className="text-lg font-semibold text-[#141d24]">Response Dataset Preview</h3>
         <p className="mt-1 text-xs text-[#55707f]">
           rows: {datasetRows.length} (sample up to 120 rows, anonymized employee id)
@@ -3249,14 +3249,14 @@ export function ClientProgramsListSection({ clientSlug }: { clientSlug: string }
 
   return (
     <div className="space-y-6">
-      <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+      <section className="rounded-[26px] border border-[#dfdfdf] bg-white p-5 shadow-sm">
         <h2 className="text-2xl font-semibold text-[#141d24]">Programas Continuos (Campanhas)</h2>
         <p className="mt-1 text-sm text-[#475660]">
           Campanhas preventivas e interventivas atribuidas pelo gestor.
         </p>
       </section>
 
-      <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+      <section className="rounded-[26px] border border-[#dfdfdf] bg-white p-5 shadow-sm">
         <h3 className="text-lg font-semibold text-[#141d24]">Plano anual de implementacao</h3>
         <p className="mt-1 text-xs text-[#55707f]">
           Visualizacao somente leitura do cronograma definido pelo gestor.
@@ -3324,7 +3324,7 @@ export function ClientProgramsListSection({ clientSlug }: { clientSlug: string }
         </div>
       </section>
 
-      <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+      <section className="rounded-[26px] border border-[#dfdfdf] bg-white p-5 shadow-sm">
         <h3 className="text-lg font-semibold text-[#141d24]">
           Calendario mestre ({scheduledMasterCalendarEvents.length} eventos agendados)
         </h3>
@@ -3454,12 +3454,12 @@ export function ClientReportsSection({ clientSlug }: { clientSlug: string }) {
 
   return (
     <div className="space-y-6">
-      <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+      <section className="rounded-[26px] border border-[#dfdfdf] bg-white p-5 shadow-sm">
         <h2 className="text-2xl font-semibold text-[#141d24]">Reports</h2>
         <p className="mt-1 text-sm text-[#475660]">Tabelas de relatorios DRPS e processos continuos.</p>
       </section>
 
-      <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+      <section className="rounded-[26px] border border-[#dfdfdf] bg-white p-5 shadow-sm">
         <h3 className="text-lg font-semibold text-[#141d24]">DRPS concluidos</h3>
         <div className="mt-3 overflow-x-auto">
           <table className="nr-table min-w-full text-sm">
@@ -3502,7 +3502,7 @@ export function ClientReportsSection({ clientSlug }: { clientSlug: string }) {
         </div>
       </section>
 
-      <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+      <section className="rounded-[26px] border border-[#dfdfdf] bg-white p-5 shadow-sm">
         <h3 className="text-lg font-semibold text-[#141d24]">Relatorios DRPS</h3>
         <div className="mt-3 overflow-x-auto">
           <table className="nr-table min-w-full text-sm">
@@ -3546,7 +3546,7 @@ export function ClientReportsSection({ clientSlug }: { clientSlug: string }) {
         {reportFeedback ? <p className="mt-3 text-sm text-[#0f5b73]">{reportFeedback}</p> : null}
       </section>
 
-      <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+      <section className="rounded-[26px] border border-[#dfdfdf] bg-white p-5 shadow-sm">
         <h3 className="text-lg font-semibold text-[#141d24]">Processos continuos</h3>
         <div className="mt-3 overflow-x-auto">
           <table className="nr-table min-w-full text-sm">
@@ -3600,7 +3600,7 @@ export function ClientContractsInvoicesSection({ clientSlug }: { clientSlug: str
 
   return (
     <div className="space-y-6">
-      <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+      <section className="rounded-[26px] border border-[#dfdfdf] bg-white p-5 shadow-sm">
         <h2 className="text-2xl font-semibold text-[#141d24]">Contracts and invoces</h2>
         <p className="mt-1 text-sm text-[#475660]">
           Financeiro: {data.client.billingStatus ?? "-"} | Contrato:{" "}
@@ -3609,7 +3609,7 @@ export function ClientContractsInvoicesSection({ clientSlug }: { clientSlug: str
         <p className="mt-1 text-xs text-[#5a7383]">Ultima atualizacao: {fmtDateTime(data.client.updatedAt)}</p>
       </section>
 
-      <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+      <section className="rounded-[26px] border border-[#dfdfdf] bg-white p-5 shadow-sm">
         <h3 className="text-lg font-semibold text-[#141d24]">Contracts invoces</h3>
         <div className="mt-3 overflow-x-auto">
           <table className="nr-table min-w-full text-sm">
@@ -3807,7 +3807,7 @@ export function ClientProgramDetailsSection({
             </>
           )}
         </nav>
-        <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+        <section className="rounded-[26px] border border-[#dfdfdf] bg-white p-5 shadow-sm">
           <h2 className="text-2xl font-semibold text-[#141d24]">{displayTitle}</h2>
           {displaySummary ? <p className="mt-1 text-sm text-[#475660]">{displaySummary}</p> : null}
           <p className="mt-2 text-xs text-[#55707f]">
@@ -3819,7 +3819,7 @@ export function ClientProgramDetailsSection({
       </div>
 
       {assignedFromApi ? (
-        <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+        <section className="rounded-[26px] border border-[#dfdfdf] bg-white p-5 shadow-sm">
           <h3 className="text-lg font-semibold text-[#141d24]">Dados do processo continuo</h3>
           <div className="mt-3 overflow-x-auto">
             <table className="nr-table min-w-full text-sm">
@@ -3863,7 +3863,7 @@ export function ClientProgramDetailsSection({
       ) : null}
 
       {assignedFromApi ? (
-        <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+        <section className="rounded-[26px] border border-[#dfdfdf] bg-white p-5 shadow-sm">
           <h3 className="text-lg font-semibold text-[#141d24]">Cronograma (reunioes no calendario)</h3>
           <div className="mt-3 overflow-x-auto rounded-xl border border-[#d8e4ee]">
             <table className="nr-table min-w-full text-xs">
@@ -3915,7 +3915,7 @@ export function ClientProgramDetailsSection({
       ) : null}
 
       {hasAssignment ? (
-        <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+        <section className="rounded-[26px] border border-[#dfdfdf] bg-white p-5 shadow-sm">
           <h3 className="text-lg font-semibold text-[#141d24]">Materiais para download</h3>
           <ul className="mt-3 space-y-2 text-sm">
             {materials.length === 0 ? (
@@ -3947,7 +3947,7 @@ export function ClientProgramDetailsSection({
       ) : null}
 
       {evaluationQuestions.length > 0 ? (
-        <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+        <section className="rounded-[26px] border border-[#dfdfdf] bg-white p-5 shadow-sm">
           <h3 className="text-lg font-semibold text-[#141d24]">Questionario de avaliacao</h3>
           <form onSubmit={submitEvaluation} className="mt-3 space-y-4">
             {evaluationQuestions.map((question, index) => (
@@ -3982,7 +3982,7 @@ export function ClientProgramDetailsSection({
       ) : null}
 
       {evaluationQuestions.length > 0 ? (
-        <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+        <section className="rounded-[26px] border border-[#dfdfdf] bg-white p-5 shadow-sm">
           <h3 className="text-lg font-semibold text-[#141d24]">Effectiveness metrics</h3>
           {evaluationSummary?.unavailable ? (
             <p className="mt-1 text-sm text-amber-700">

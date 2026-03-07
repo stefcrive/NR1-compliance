@@ -244,13 +244,13 @@ export function ManagerHomeOverview() {
 
   return (
     <div className="space-y-6">
-      <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm md:p-6">
+      <section className="rounded-[26px] border border-[#dfdfdf] bg-white p-5 shadow-sm md:p-6">
         <h3 className="text-2xl font-semibold text-[#121b22] md:text-3xl">{t.pageTitle}</h3>
         {loading ? <p className="mt-3 text-sm text-[#4f5f6a]">{t.loading}</p> : null}
         {error ? <p className="mt-3 text-sm text-red-600">{error}</p> : null}
       </section>
 
-      <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm md:p-6">
+      <section className="rounded-[26px] border border-[#dfdfdf] bg-white p-5 shadow-sm md:p-6">
         <h4 className="text-lg font-semibold text-[#123447]">{t.upcomingEventsTitle}</h4>
         {upcomingEvents.length === 0 ? (
           <p className="mt-3 text-sm text-[#5a7383]">{t.noUpcomingEvents}</p>
@@ -282,7 +282,7 @@ export function ManagerHomeOverview() {
         )}
       </section>
 
-      <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm md:p-6">
+      <section className="rounded-[26px] border border-[#dfdfdf] bg-white p-5 shadow-sm md:p-6">
         <div className="grid gap-4 xl:grid-cols-2">
           <section>
             <h4 className="text-lg font-semibold text-[#123447]">{t.activeDrpsTableTitle}</h4>

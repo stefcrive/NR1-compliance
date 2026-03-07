@@ -1271,7 +1271,7 @@ export function ManagerWorkspace({
   return (
     <div className="space-y-6">
       {showTabSwitch ? (
-        <section className="rounded-2xl border border-[#dfdfdf] bg-[#f8f8f8] p-4 shadow-sm">
+        <section className="rounded-2xl border border-[#dfdfdf] bg-white p-4 shadow-sm">
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
@@ -1296,7 +1296,7 @@ export function ManagerWorkspace({
       ) : null}
 
       {tab === "clients" ? (
-        <section className="space-y-4 rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm md:p-6">
+        <section className="space-y-4 rounded-[26px] border border-[#dfdfdf] bg-white p-5 shadow-sm md:p-6">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h3 className="text-2xl font-semibold text-[#121b22] md:text-3xl">{t.clientsSection}</h3>
             <Link href="/manager/clients/new" className="rounded-full bg-[#131313] px-4 py-2 text-sm font-semibold text-white">
@@ -1392,7 +1392,7 @@ export function ManagerWorkspace({
                 <Link
                   key={client.id}
                   href={`/manager/clients/${client.id}`}
-                  className="group block rounded-2xl border border-[#dcdcdc] bg-[#efefef] p-3 transition hover:border-[#b9c6cf] hover:shadow-sm"
+                  className="group block rounded-2xl border border-[#dcdcdc] bg-white p-3 transition hover:border-[#b9c6cf] hover:shadow-sm"
                 >
                   <div
                     className={`relative h-32 rounded-xl bg-gradient-to-br ${cardBannerClass(client.status)} p-3 text-white`}
@@ -1481,7 +1481,7 @@ export function ManagerWorkspace({
         </section>
       ) : (
         <section className="space-y-5">
-          <article className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+          <article className="rounded-[26px] border border-[#dfdfdf] bg-white p-5 shadow-sm">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <h3 className="text-lg font-semibold text-[#123447]">{t.calendarTitle}</h3>
               <div className="flex gap-2">
@@ -1773,7 +1773,7 @@ export function ManagerWorkspace({
             )}
           </article>
 
-          <article className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+          <article className="rounded-[26px] border border-[#dfdfdf] bg-white p-5 shadow-sm">
             <div className="grid gap-4 xl:grid-cols-2">
               <section>
                 <h4 className="text-base font-semibold text-[#123447]">{t.liveDrps}</h4>
@@ -1875,7 +1875,7 @@ export function ManagerWorkspace({
             </div>
           </article>
 
-          <article className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+          <article className="rounded-[26px] border border-[#dfdfdf] bg-white p-5 shadow-sm">
             <section className="rounded-lg border border-[#e2edf3] bg-white p-3">
               <h4 className="text-base font-semibold text-[#123447]">{t.blockWindowTitle}</h4>
               <div className="mt-2 space-y-2">

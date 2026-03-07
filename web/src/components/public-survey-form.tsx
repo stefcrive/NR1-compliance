@@ -519,7 +519,7 @@ export function PublicSurveyForm({
         strategy="afterInteractive"
       />
 
-      <header className="space-y-2 rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+      <header className="space-y-2 rounded-[26px] border border-[#dfdfdf] bg-white p-5 shadow-sm">
         <h1 className="text-2xl font-semibold text-[#141d24]">{session.title}</h1>
         <p className="text-sm text-[#4a5862]">
           Pesquisa anonima. Nao coletamos nome, email, matricula ou autenticacao do colaborador.
@@ -543,7 +543,7 @@ export function PublicSurveyForm({
       </header>
 
       {visibleGroups.length > 0 && (
-        <section className="space-y-4 rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+        <section className="space-y-4 rounded-[26px] border border-[#dfdfdf] bg-white p-5 shadow-sm">
           <h2 className="text-base font-semibold text-[#141d24]">Dados de agrupamento</h2>
           {visibleGroups.map((group) => (
             <label key={group.key} className="block space-y-1">
@@ -656,7 +656,7 @@ export function PublicSurveyForm({
 
       {isLastPage ? (
         <>
-          <section className="space-y-3 rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+          <section className="space-y-3 rounded-[26px] border border-[#dfdfdf] bg-white p-5 shadow-sm">
             <h2 className="text-base font-semibold text-[#141d24]">Validacao anti-bot</h2>
             <div
               className="cf-turnstile"

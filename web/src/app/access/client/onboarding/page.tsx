@@ -169,7 +169,7 @@ export default function ClientOnboardingPage() {
   return (
     <main className="min-h-screen bg-[#f6f6f6] px-4 py-10">
       <div className="mx-auto w-full max-w-4xl space-y-5">
-        <header className="flex items-center justify-between rounded-[26px] border border-[#dfdfdf] bg-[#f4f4f4] p-4 shadow-sm">
+        <header className="flex items-center justify-between rounded-[26px] border border-[#dfdfdf] bg-white p-4 shadow-sm">
           <CompanyLogoLink />
           <Link
             href="/access/client"
@@ -179,7 +179,7 @@ export default function ClientOnboardingPage() {
           </Link>
         </header>
 
-        <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+        <section className="rounded-[26px] border border-[#dfdfdf] bg-white p-5 shadow-sm">
           <p className="text-xs uppercase tracking-[0.2em] text-[#5d6d77]">Client Onboarding</p>
           <h1 className="mt-1 text-3xl font-semibold text-[#141d24]">Create company credentials</h1>
           <p className="mt-2 text-sm text-[#4a5862]">
@@ -187,7 +187,7 @@ export default function ClientOnboardingPage() {
           </p>
         </section>
 
-        <section className="space-y-4 rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+        <section className="space-y-4 rounded-[26px] border border-[#dfdfdf] bg-white p-5 shadow-sm">
           <form onSubmit={validateToken} className="space-y-2">
             <label className="block space-y-1">
               <span className="text-sm text-[#485762]">Invitation token</span>

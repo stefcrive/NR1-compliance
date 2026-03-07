@@ -178,7 +178,7 @@ export function ClientHistory({ clientSlug }: { clientSlug: string }) {
 
   return (
     <div className="space-y-6">
-      <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+      <section className="rounded-[26px] border border-[#dfdfdf] bg-white p-5 shadow-sm">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
             <h2 className="text-2xl font-semibold text-[#141d24]">Historico</h2>

@@ -194,12 +194,12 @@ export function ClientHistoryEventRecord({
           </Link>{" "}
           / <span>{eventTitleWithDate}</span>
         </nav>
-        <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+        <section className="rounded-[26px] border border-[#dfdfdf] bg-white p-5 shadow-sm">
           <h2 className="text-2xl font-semibold text-[#141d24]">{eventTitleWithDate}</h2>
         </section>
       </div>
 
-      <section className="grid gap-3 rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm md:grid-cols-2 xl:grid-cols-3">
+      <section className="grid gap-3 rounded-[26px] border border-[#dfdfdf] bg-white p-5 shadow-sm md:grid-cols-2 xl:grid-cols-3">
         <article className="rounded-xl border border-[#d8e4ee] bg-white p-3">
           <p className="text-xs text-[#4f6977]">Tipo</p>
           <p className="text-sm font-semibold text-[#123447]">{eventTypeLabel(record.eventType)}</p>
@@ -234,7 +234,7 @@ export function ClientHistoryEventRecord({
         </article>
       </section>
 
-      <section className="grid gap-3 rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm md:grid-cols-2">
+      <section className="grid gap-3 rounded-[26px] border border-[#dfdfdf] bg-white p-5 shadow-sm md:grid-cols-2">
         <article className="rounded-xl border border-[#d8e4ee] bg-white p-3">
           <p className="text-xs text-[#4f6977]">Conteudo</p>
           <p className="mt-1 text-sm text-[#123447]">{record.details.content ?? "Sem detalhes cadastrados."}</p>
@@ -277,7 +277,7 @@ export function ClientHistoryEventRecord({
         </article>
       </section>
 
-      <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+      <section className="rounded-[26px] border border-[#dfdfdf] bg-white p-5 shadow-sm">
         <h3 className="text-base font-semibold text-[#123447]">Event notes and files</h3>
         {!record.journal.available ? (
           <p className="mt-3 text-sm text-[#4f6977]">
@@ -326,7 +326,7 @@ export function ClientHistoryEventRecord({
         )}
       </section>
 
-      <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+      <section className="rounded-[26px] border border-[#dfdfdf] bg-white p-5 shadow-sm">
         <h3 className="text-base font-semibold text-[#123447]">Registros relacionados</h3>
         {!hasRelated ? (
           <p className="mt-3 text-sm text-[#4f6977]">Sem registros relacionados.</p>
@@ -368,7 +368,7 @@ export function ClientHistoryEventRecord({
       </section>
 
       {record.diagnostics ? (
-        <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+        <section className="rounded-[26px] border border-[#dfdfdf] bg-white p-5 shadow-sm">
           <h3 className="text-base font-semibold text-[#123447]">Snapshot diagnostico</h3>
           <div className="mt-3 grid gap-3 md:grid-cols-3">
             <article className="rounded-xl border border-[#d8e4ee] bg-white p-3">

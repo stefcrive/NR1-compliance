@@ -769,7 +769,7 @@ export function ManagerHistoryEventRecord({
             </>
           )}
         </nav>
-        <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+        <section className="rounded-[26px] border border-[#dfdfdf] bg-white p-5 shadow-sm">
           <h2 className="text-2xl font-semibold text-[#121b22]">{pageTitle}</h2>
           {record ? <p className="mt-1 text-sm text-[#4f5f6a]">{record.title}</p> : null}
           {record && isCalendarRecord ? (
@@ -812,7 +812,7 @@ export function ManagerHistoryEventRecord({
 
       {record ? (
         <>
-          <section className="grid gap-3 rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm md:grid-cols-2 xl:grid-cols-3">
+          <section className="grid gap-3 rounded-[26px] border border-[#dfdfdf] bg-white p-5 shadow-sm md:grid-cols-2 xl:grid-cols-3">
             <article className="rounded-xl border border-[#d8e4ee] bg-white p-3 xl:col-span-3">
               <p className="text-xs text-[#4f6977]">{t.eventTitle}</p>
               {isEditMode && isCalendarRecord ? (
@@ -924,7 +924,7 @@ export function ManagerHistoryEventRecord({
             </article>
           </section>
 
-          <section className="grid gap-3 rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm md:grid-cols-2">
+          <section className="grid gap-3 rounded-[26px] border border-[#dfdfdf] bg-white p-5 shadow-sm md:grid-cols-2">
             <article className="rounded-xl border border-[#d8e4ee] bg-white p-3">
               <p className="text-xs text-[#4f6977]">{t.eventContent}</p>
               <p className="mt-1 text-sm text-[#123447]">{record.details.content ?? t.eventNoText}</p>
@@ -969,7 +969,7 @@ export function ManagerHistoryEventRecord({
             </article>
           </section>
 
-          <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+          <section className="rounded-[26px] border border-[#dfdfdf] bg-white p-5 shadow-sm">
             <h3 className="text-base font-semibold text-[#123447]">{t.journalSectionTitle}</h3>
             {!record.journal.available ? (
               <p className="mt-3 text-sm text-[#4f6977]">{t.journalUnavailable}</p>
@@ -1071,7 +1071,7 @@ export function ManagerHistoryEventRecord({
             )}
           </section>
 
-          <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+          <section className="rounded-[26px] border border-[#dfdfdf] bg-white p-5 shadow-sm">
             <h3 className="text-base font-semibold text-[#123447]">{t.relatedTitle}</h3>
             {!hasRelated ? (
               <p className="mt-3 text-sm text-[#4f6977]">{t.noRelated}</p>
@@ -1121,7 +1121,7 @@ export function ManagerHistoryEventRecord({
           </section>
 
           {record.diagnostics ? (
-            <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+            <section className="rounded-[26px] border border-[#dfdfdf] bg-white p-5 shadow-sm">
               <h3 className="text-base font-semibold text-[#123447]">{t.diagnosticsTitle}</h3>
               <div className="mt-3 grid gap-3 md:grid-cols-3">
                 <article className="rounded-xl border border-[#d8e4ee] bg-white p-3">

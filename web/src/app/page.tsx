@@ -9,7 +9,7 @@ const FLOW = [
 export default function Home() {
   return (
     <div className="mx-auto w-full max-w-7xl px-4 py-8 md:py-12">
-      <header className="rounded-[28px] border border-[#d5e2ea] bg-[linear-gradient(115deg,#ffffff_0%,#edf7fb_48%,#fff4e2_100%)] p-8 shadow-sm md:p-12">
+      <header className="rounded-[28px] border border-[#d5e2ea] bg-white p-8 shadow-sm md:p-12">
         <p className="text-xs uppercase tracking-[0.22em] text-[#0f6077]">NR1 Compliance Platform</p>
         <h1 className="mt-3 max-w-4xl text-4xl font-semibold leading-tight text-[#112a38] md:text-5xl">
           Full workflow for psychossocial compliance: diagnostics, interventions, and continuous evidence

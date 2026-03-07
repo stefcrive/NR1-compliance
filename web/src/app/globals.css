@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 :root {
-  --background: #f7fafc;
+  --background: #f6f6f6;
   --foreground: #112a38;
   --surface: #ffffff;
   --surface-muted: #f8fbfd;
@@ -54,20 +54,14 @@ html.dark {
 }
 
 body {
-  background:
-    radial-gradient(1000px 500px at 95% -15%, #c7e6f2 0%, transparent 60%),
-    radial-gradient(900px 500px at -15% 0%, #ffe7c2 0%, transparent 55%),
-    var(--background);
+  background: var(--background);
   color: var(--foreground);
   font-family: var(--font-geist-sans), sans-serif;
   transition: background-color 160ms ease, color 160ms ease;
 }
 
 html.dark body {
-  background:
-    radial-gradient(1000px 500px at 95% -15%, #1d3548 0%, transparent 60%),
-    radial-gradient(900px 500px at -15% 0%, #3a2e1b 0%, transparent 55%),
-    var(--background);
+  background: var(--background);
 }
 
 .nr-table {
