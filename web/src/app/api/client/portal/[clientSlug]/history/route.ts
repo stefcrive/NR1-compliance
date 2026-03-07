@@ -448,7 +448,7 @@ async function loadProgramTitleById(programIds: string[]) {
   return result;
 }
 
-async function loadRealizedCalendarEvents(clientId: string, nowIso: string): Promise<{
+async function loadRealizedCalendarEvents(clientId: string): Promise<{
   rows: CalendarEventRow[];
   unavailable: boolean;
 }> {
@@ -459,8 +459,7 @@ async function loadRealizedCalendarEvents(clientId: string, nowIso: string): Pro
       "event_id,client_id,source_client_program_id,event_type,title,starts_at,ends_at,status,metadata",
     )
     .eq("client_id", clientId)
-    .lte("starts_at", nowIso)
-    .neq("status", "cancelled")
+    .eq("status", "completed")
     .order("starts_at", { ascending: false })
     .returns<CalendarEventRow[]>();
 
@@ -602,7 +601,7 @@ export async function GET(
     }));
 
     const assignmentById = new Map(assignedPrograms.map((program) => [program.id, program]));
-    const realizedCalendarLoaded = await loadRealizedCalendarEvents(client.client_id, nowIso);
+    const realizedCalendarLoaded = await loadRealizedCalendarEvents(client.client_id);
     const calendarEvents = realizedCalendarLoaded.rows.map((row) => {
       const details = extractCalendarEventDetails(row.metadata);
       const assignment = row.source_client_program_id

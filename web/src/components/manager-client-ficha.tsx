@@ -1331,14 +1331,13 @@ export function ManagerClientFicha({
 
   return (
     <div className="space-y-6">
-      <nav className="text-xs text-[#4f6977]">
-        <Link href="/manager/clients" className="text-[#0f5b73]">
-          Client area
-        </Link>{" "}
-        / <span>{client.companyName}</span>
-      </nav>
-
       <section className="rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
+        <nav className="mb-3 text-xs text-[#4f6977]">
+          <Link href="/manager/clients" className="text-[#0f5b73]">
+            Client area
+          </Link>{" "}
+          / <span>{client.companyName}</span>
+        </nav>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="text-2xl font-semibold text-[#123447]">{client.companyName}</h2>

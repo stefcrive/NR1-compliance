@@ -90,8 +90,10 @@ function eventTypeLabel(value: "drps_start" | "drps_close" | "continuous_meeting
   return "Bloqueio";
 }
 
-function lifecycleLabel(value: "provisory" | "committed") {
-  return value === "committed" ? "Commitado" : "Provisorio";
+function eventStatusLabel(value: "scheduled" | "completed" | "cancelled") {
+  if (value === "completed") return "Executado";
+  if (value === "cancelled") return "Cancelado";
+  return "Agendado";
 }
 
 function reportStatusLabel(value: "draft" | "processing" | "ready" | "failed") {
@@ -166,6 +168,11 @@ export function ClientHistory({ clientSlug }: { clientSlug: string }) {
     return list;
   }, [payload]);
 
+  const realizedEvents = useMemo(
+    () => (payload?.realizedEvents ?? []).filter((event) => event.status === "completed"),
+    [payload?.realizedEvents],
+  );
+
   if (loading) return <p className="text-sm text-[#49697a]">Carregando historico...</p>;
   if (error || !payload) return <p className="text-sm text-red-600">{error || "Historico indisponivel."}</p>;
 
@@ -207,7 +214,7 @@ export function ClientHistory({ clientSlug }: { clientSlug: string }) {
         </article>
         <article className="rounded-2xl border border-[#dbe8ef] bg-white p-4 shadow-sm">
           <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[#5a7383]">Eventos realizados</p>
-          <p className="mt-2 text-2xl font-semibold text-[#123447]">{payload.realizedEvents.length}</p>
+          <p className="mt-2 text-2xl font-semibold text-[#123447]">{realizedEvents.length}</p>
         </article>
         <article className="rounded-2xl border border-[#dbe8ef] bg-white p-4 shadow-sm">
           <p className="text-xs font-semibold uppercase tracking-[0.1em] text-[#5a7383]">Relatorios realizados</p>
@@ -378,24 +385,24 @@ export function ClientHistory({ clientSlug }: { clientSlug: string }) {
                 <th className="px-2 py-2 text-left">Evento</th>
                 <th className="px-2 py-2 text-left">Data/hora</th>
                 <th className="px-2 py-2 text-left">Tipo</th>
-                <th className="px-2 py-2 text-left">Ciclo</th>
+                <th className="px-2 py-2 text-left">Status</th>
                 <th className="px-2 py-2 text-left">Acoes</th>
               </tr>
             </thead>
             <tbody>
-              {payload.realizedEvents.length === 0 ? (
+              {realizedEvents.length === 0 ? (
                 <tr>
                   <td colSpan={5} className="px-2 py-3 text-xs text-[#5a7383]">
                     Nenhum evento realizado encontrado.
                   </td>
                 </tr>
               ) : (
-                payload.realizedEvents.map((event) => (
+                realizedEvents.map((event) => (
                   <tr key={event.id} className="border-b">
                     <td className="px-2 py-2">{event.title}</td>
                     <td className="px-2 py-2">{fmt(event.startsAt)}</td>
                     <td className="px-2 py-2">{eventTypeLabel(event.eventType)}</td>
-                    <td className="px-2 py-2">{lifecycleLabel(event.lifecycle)}</td>
+                    <td className="px-2 py-2">{eventStatusLabel(event.status)}</td>
                     <td className="px-2 py-2">
                       <div className="flex flex-wrap gap-2 text-xs">
                         <Link

@@ -11,6 +11,7 @@ type ClientStatusFilter = "all" | ClientStatus;
 type BillingFilter = "all" | BillingStatus;
 type ClientListView = "cards" | "table";
 type CalendarView = "day" | "week" | "month";
+type EventEditStatusOption = "provisorio" | "marcado" | "cancelado" | "esecutado";
 
 type Client = {
   id: string;
@@ -177,7 +178,7 @@ const COPY = {
     eventEditTitleLabel: "Title",
     eventEditStartLabel: "Marked date/time",
     eventEditEndLabel: "Workshop duration (minutes)",
-    eventEditLifecycleLabel: "Lifecycle",
+    eventEditLifecycleLabel: "Status",
     eventLifecycleProfileHint:
       "When lifecycle is provisory, date/time can be updated in continuous program profile.",
     eventEditSave: "Save changes",
@@ -302,7 +303,7 @@ const COPY = {
     eventEditTitleLabel: "Titulo",
     eventEditStartLabel: "Data/hora marcada",
     eventEditEndLabel: "Duracao do workshop (minutos)",
-    eventEditLifecycleLabel: "Ciclo",
+    eventEditLifecycleLabel: "Status",
     eventLifecycleProfileHint:
       "Quando o ciclo e provisorio, a data/hora pode ser ajustada no perfil do programa continuo.",
     eventEditSave: "Salvar alteracoes",
@@ -366,6 +367,13 @@ function durationMinutesFromRange(
   const diff = Math.round((end - start) / 60000);
   if (!Number.isFinite(diff) || diff <= 0) return fallbackMinutes;
   return diff;
+}
+
+function eventEditStatusFromEvent(event: MasterCalendarEvent): EventEditStatusOption {
+  if (event.status === "cancelled") return "cancelado";
+  if (event.status === "completed") return "esecutado";
+  if (event.details.eventLifecycle === "provisory") return "provisorio";
+  return "marcado";
 }
 
 function dayKey(date: Date) {
@@ -495,7 +503,7 @@ export function ManagerWorkspace({
   const [eventEditTitle, setEventEditTitle] = useState("");
   const [eventEditStartsAt, setEventEditStartsAt] = useState("");
   const [eventEditDurationMinutes, setEventEditDurationMinutes] = useState("60");
-  const [eventEditLifecycle, setEventEditLifecycle] = useState<"provisory" | "committed">("committed");
+  const [eventEditStatus, setEventEditStatus] = useState<EventEditStatusOption>("marcado");
   const [eventEditContent, setEventEditContent] = useState("");
   const [eventEditPreparation, setEventEditPreparation] = useState("");
   const [isSavingEventEdit, setIsSavingEventEdit] = useState(false);
@@ -677,7 +685,7 @@ export function ManagerWorkspace({
       setEventEditTitle("");
       setEventEditStartsAt("");
       setEventEditDurationMinutes("60");
-      setEventEditLifecycle("committed");
+      setEventEditStatus("marcado");
       setEventEditContent("");
       setEventEditPreparation("");
       setEventEditFeedback("");
@@ -688,7 +696,7 @@ export function ManagerWorkspace({
     setEventEditDurationMinutes(
       String(durationMinutesFromRange(selectedCalendarEvent.startsAt, selectedCalendarEvent.endsAt, 60)),
     );
-    setEventEditLifecycle(selectedCalendarEvent.details.eventLifecycle);
+    setEventEditStatus(eventEditStatusFromEvent(selectedCalendarEvent));
     setEventEditContent(selectedCalendarEvent.details?.content ?? "");
     setEventEditPreparation(selectedCalendarEvent.details?.preparationRequired ?? "");
     setEventEditFeedback("");
@@ -703,6 +711,7 @@ export function ManagerWorkspace({
       markedAt?: string;
       workshopDurationMinutes?: number;
       eventLifecycle?: "provisory" | "committed";
+      status?: "scheduled" | "completed" | "cancelled";
       content?: string | null;
       preparationRequired?: string | null;
       commitProvisoryReschedule?: boolean;
@@ -749,12 +758,25 @@ export function ManagerWorkspace({
     setIsSavingEventEdit(true);
     setEventEditFeedback("");
     try {
+      const nextStatus: "scheduled" | "completed" | "cancelled" =
+        eventEditStatus === "cancelado"
+          ? "cancelled"
+          : eventEditStatus === "esecutado"
+            ? "completed"
+            : "scheduled";
+      const nextLifecycle: "provisory" | "committed" =
+        eventEditStatus === "provisorio"
+          ? "provisory"
+          : eventEditStatus === "marcado"
+            ? "committed"
+            : selectedCalendarEvent.details.eventLifecycle;
       await updateCalendarEvent({
         eventId: selectedCalendarEvent.id,
         title: eventEditTitle.trim(),
         markedAt: nextMarkedAt.toISOString(),
         workshopDurationMinutes: durationMinutes,
-        eventLifecycle: eventEditLifecycle,
+        eventLifecycle: nextLifecycle,
+        status: nextStatus,
         content: eventEditContent.trim() || null,
         preparationRequired: eventEditPreparation.trim() || null,
       });
@@ -769,7 +791,7 @@ export function ManagerWorkspace({
   }, [
     eventEditContent,
     eventEditDurationMinutes,
-    eventEditLifecycle,
+    eventEditStatus,
     eventEditPreparation,
     eventEditStartsAt,
     eventEditTitle,
@@ -2007,15 +2029,17 @@ export function ManagerWorkspace({
                 <label className="block">
                   <span className="text-xs text-[#4d6a79]">{t.eventEditLifecycleLabel}</span>
                   <select
-                    value={eventEditLifecycle}
+                    value={eventEditStatus}
                     onChange={(event) =>
-                      setEventEditLifecycle(event.target.value as "provisory" | "committed")
+                      setEventEditStatus(event.target.value as EventEditStatusOption)
                     }
                     disabled={!canEditSelectedLifecycle}
                     className="mt-1 w-full rounded border border-[#c8d7e1] px-2 py-1.5 text-sm disabled:opacity-60"
                   >
-                    <option value="provisory">{t.eventLifecycleProvisory}</option>
-                    <option value="committed">{t.eventLifecycleCommitted}</option>
+                    <option value="provisorio">provisorio</option>
+                    <option value="marcado">marcado</option>
+                    <option value="cancelado">cancelado</option>
+                    <option value="esecutado">esecutado</option>
                   </select>
                 </label>
                 {selectedCalendarEvent.eventType === "continuous_meeting" &&

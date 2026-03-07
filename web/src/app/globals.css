@@ -4,11 +4,41 @@
   --background: #f7fafc;
   --foreground: #112a38;
   --surface: #ffffff;
+  --surface-muted: #f8fbfd;
+  --surface-subtle: #edf3f7;
   --line: #d5e2ea;
+  --line-strong: #b8ccd9;
   --ink-soft: #456070;
   --brand: #0f6077;
   --brand-2: #1a8ea9;
   --accent: #e8a03f;
+  --chart-grid: #dbe8f0;
+  --chart-axis: #9fb8c6;
+  --chart-text: #4f6977;
+  --chart-overlay: #94a3b81f;
+}
+
+html {
+  color-scheme: light;
+}
+
+html.dark {
+  color-scheme: dark;
+  --background: #0a131c;
+  --foreground: #deebf6;
+  --surface: #101c28;
+  --surface-muted: #142230;
+  --surface-subtle: #182837;
+  --line: #2d4150;
+  --line-strong: #40586a;
+  --ink-soft: #9db3c3;
+  --brand: #8bd2e8;
+  --brand-2: #57b7d4;
+  --accent: #f3bb70;
+  --chart-grid: #2f4657;
+  --chart-axis: #4b6578;
+  --chart-text: #b8cedd;
+  --chart-overlay: #94a3b833;
 }
 
 @theme inline {
@@ -30,28 +60,231 @@ body {
     var(--background);
   color: var(--foreground);
   font-family: var(--font-geist-sans), sans-serif;
+  transition: background-color 160ms ease, color 160ms ease;
+}
+
+html.dark body {
+  background:
+    radial-gradient(1000px 500px at 95% -15%, #1d3548 0%, transparent 60%),
+    radial-gradient(900px 500px at -15% 0%, #3a2e1b 0%, transparent 55%),
+    var(--background);
 }
 
 .nr-table {
   width: 100%;
   border-collapse: collapse;
   font-size: 0.98rem;
-  color: #2b4b5d;
+  color: var(--foreground);
 }
 
 .nr-table thead th {
-  background: #edf1f5;
-  border-bottom: 1px solid #2f495a;
+  background: var(--surface-subtle);
+  border-bottom: 1px solid var(--line-strong);
   font-weight: 700;
-  color: #0f2e42;
+  color: var(--foreground);
 }
 
 .nr-table tbody tr {
-  border-bottom: 1px solid #d4dde6;
+  border-bottom: 1px solid var(--line);
 }
 
 .nr-table :is(th, td) {
   padding: 0.9rem 0.85rem !important;
   text-align: left;
   vertical-align: top;
+}
+
+.nr-theme-toggle {
+  position: fixed;
+  right: 1rem;
+  bottom: 1rem;
+  z-index: 80;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  color: var(--foreground);
+  border-radius: 999px;
+  box-shadow: 0 8px 30px #0d23320f;
+  padding: 0.52rem 0.78rem;
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  transition: all 150ms ease;
+}
+
+.nr-theme-toggle:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 30px #0d233224;
+}
+
+.nr-theme-toggle:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
+.nr-theme-toggle__icon {
+  width: 1rem;
+  height: 1rem;
+  flex: 0 0 auto;
+}
+
+html.dark .nr-theme-toggle {
+  box-shadow: 0 8px 30px #02080f70;
+}
+
+html.dark input,
+html.dark select,
+html.dark textarea {
+  background-color: var(--surface-muted);
+  border-color: var(--line-strong);
+  color: var(--foreground);
+}
+
+html.dark input::placeholder,
+html.dark textarea::placeholder {
+  color: var(--ink-soft);
+}
+
+html.dark table:not(.nr-table) :is(th, td) {
+  border-color: var(--line);
+}
+
+html.dark [class*="bg-[radial-gradient"],
+html.dark [class*="bg-[linear-gradient"] {
+  background-image:
+    radial-gradient(900px 360px at 100% -45%, #20384a 0%, transparent 58%),
+    linear-gradient(128deg, #0f1b26 0%, #132534 48%, #182a37 100%) !important;
+}
+
+html.dark .bg-white,
+html.dark .bg-white\/90,
+html.dark .bg-white\/70,
+html.dark .bg-white\/30 {
+  background-color: var(--surface) !important;
+}
+
+html.dark [class*="bg-[#f"],
+html.dark [class*="bg-[#e"],
+html.dark [class*="bg-[#d"],
+html.dark [class*="bg-[#c"] {
+  background-color: var(--surface) !important;
+}
+
+html.dark .bg-\[\#ececec\],
+html.dark .bg-\[\#eff2f4\],
+html.dark .bg-\[\#f1f1f1\],
+html.dark .bg-\[\#f2f2f2\],
+html.dark .bg-\[\#f6f6f6\],
+html.dark .bg-\[\#f4f4f4\] {
+  background-color: var(--surface-subtle) !important;
+}
+
+html.dark .bg-\[\#0f5b73\],
+html.dark .bg-\[\#0f6077\],
+html.dark .bg-\[\#123447\],
+html.dark .bg-\[\#0c4d61\],
+html.dark .bg-\[\#111\],
+html.dark .bg-\[\#131313\],
+html.dark .bg-\[\#2f6f8d\] {
+  background-color: #24536a !important;
+  color: #e8f4fb !important;
+}
+
+html.dark .bg-\[\#eaf8ef\],
+html.dark .bg-\[\#ecf8ec\],
+html.dark .bg-\[\#d9f0df\],
+html.dark .bg-\[\#e8f8ee\] {
+  background-color: #1b3a29 !important;
+}
+
+html.dark .bg-\[\#fff7e8\],
+html.dark .bg-\[\#fff4e4\],
+html.dark .bg-\[\#fbf5e9\] {
+  background-color: #43311d !important;
+}
+
+html.dark .bg-\[\#fdf0f0\],
+html.dark .bg-\[\#f8eded\],
+html.dark .bg-\[\#fcecf4\],
+html.dark .bg-\[\#fff4f4\] {
+  background-color: #42222a !important;
+}
+
+html.dark [class*="border-[#d"],
+html.dark [class*="border-[#e"],
+html.dark [class*="border-[#c"],
+html.dark [class*="border-[#b"] {
+  border-color: var(--line) !important;
+}
+
+html.dark .border-\[\#9ec8db\],
+html.dark .border-\[\#b8d8e6\],
+html.dark .border-\[\#2f6f8d\],
+html.dark .border-\[\#0f5b73\] {
+  border-color: #557b8f !important;
+}
+
+html.dark [class*="text-[#0"],
+html.dark [class*="text-[#1"],
+html.dark [class*="text-[#2"],
+html.dark [class*="text-[#3"] {
+  color: var(--foreground) !important;
+}
+
+html.dark [class*="text-[#4"],
+html.dark [class*="text-[#5"],
+html.dark [class*="text-[#6"] {
+  color: var(--ink-soft) !important;
+}
+
+html.dark .text-\[\#0f5b73\],
+html.dark .text-\[\#0f6077\],
+html.dark .text-\[\#1f5f79\],
+html.dark .text-\[\#17465b\],
+html.dark .text-\[\#20495d\] {
+  color: var(--brand) !important;
+}
+
+html.dark .text-\[\#1f6b3d\],
+html.dark .text-\[\#2d5f23\],
+html.dark .text-\[\#1f6b2f\] {
+  color: #75cb93 !important;
+}
+
+html.dark .text-\[\#8a2d2d\],
+html.dark .text-\[\#8d1c1c\] {
+  color: #ef9a9a !important;
+}
+
+html.dark .text-\[\#8a5b2d\],
+html.dark .text-\[\#7a4b00\],
+html.dark .text-\[\#744d14\] {
+  color: #f3c37b !important;
+}
+
+html.dark [data-nr-chart] text {
+  fill: var(--chart-text) !important;
+}
+
+html.dark [data-nr-chart] line {
+  stroke: var(--chart-grid) !important;
+}
+
+html.dark [data-nr-chart] .nr-chart-axis {
+  stroke: var(--chart-axis) !important;
+}
+
+html.dark [data-nr-chart] polygon[fill="#94a3b81f"] {
+  fill: var(--chart-overlay) !important;
+}
+
+html.dark .shadow-sm,
+html.dark .shadow,
+html.dark .shadow-md,
+html.dark .shadow-lg,
+html.dark .shadow-xl {
+  box-shadow: 0 10px 24px #02080f52 !important;
 }

@@ -330,6 +330,7 @@ export function ClientPortalDashboard() {
           <div className="mt-4 overflow-x-auto rounded-xl border border-[#edf3f7] bg-[#f9fcfe] p-3">
             {chartModel ? (
               <svg
+                data-nr-chart
                 viewBox={`0 0 ${chartModel.width} ${chartModel.height + 20}`}
                 className="h-[240px] w-full min-w-[760px]"
               >

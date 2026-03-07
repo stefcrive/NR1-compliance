@@ -3,6 +3,11 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useManagerLocale } from "@/components/manager-locale";
+import {
+  CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCIES,
+  DEFAULT_CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCY,
+  type ContinuousProgramScheduleFrequency,
+} from "@/lib/continuous-programs";
 
 type DrpsDiagnostic = {
   id: string;
@@ -115,11 +120,14 @@ const COPY = {
     programModalSubtitle: "Create a new preventive or interventive program template.",
     programFieldTitle: "Title",
     programFieldDescription: "Description (optional)",
-    programFieldTopic: "Target risk topic",
+    programFieldTopic: "Risk category",
     programFieldThreshold: "Trigger threshold",
+    programFieldFrequency: "Frequency",
+    programFieldDuration: "Duration (months)",
     programValidationTitle: "Program title must have at least 3 characters.",
     programValidationTopic: "Target topic must be between 1 and 13.",
     programValidationThreshold: "Trigger threshold must be between 1.00 and 3.00.",
+    programValidationDuration: "Duration must be between 1 and 24 months.",
     programCreateError: "Could not create continuous program.",
     programCreatedNotice: "Continuous program created.",
     prgName: "Program",
@@ -149,6 +157,15 @@ const COPY = {
     assignPartialError: "Some assignments failed:",
     assigning: "Assigning...",
     prgNone: "No continuous programs available.",
+    frequencies: {
+      weekly: "Weekly",
+      biweekly: "Biweekly",
+      monthly: "Monthly",
+      quarterly: "Quarterly",
+      semiannual: "Semiannual",
+      annual: "Annual",
+      custom: "Custom",
+    } satisfies Record<ContinuousProgramScheduleFrequency, string>,
     draft: "Draft",
     live: "Active",
     closed: "Completed",
@@ -199,11 +216,14 @@ const COPY = {
     programModalSubtitle: "Crie um novo template preventivo ou interventivo.",
     programFieldTitle: "Titulo",
     programFieldDescription: "Descricao (opcional)",
-    programFieldTopic: "Topico de risco alvo",
+    programFieldTopic: "Categoria de risco",
     programFieldThreshold: "Gatilho",
+    programFieldFrequency: "Frequencia",
+    programFieldDuration: "Duracao (meses)",
     programValidationTitle: "Titulo do programa deve ter pelo menos 3 caracteres.",
     programValidationTopic: "Topico alvo deve estar entre 1 e 13.",
     programValidationThreshold: "Gatilho deve estar entre 1.00 e 3.00.",
+    programValidationDuration: "Duracao deve estar entre 1 e 24 meses.",
     programCreateError: "Nao foi possivel criar programa continuo.",
     programCreatedNotice: "Programa continuo criado.",
     prgName: "Programa",
@@ -233,6 +253,15 @@ const COPY = {
     assignPartialError: "Algumas atribuicoes falharam:",
     assigning: "Atribuindo...",
     prgNone: "Nenhum programa continuo disponivel.",
+    frequencies: {
+      weekly: "Semanal",
+      biweekly: "Quinzenal",
+      monthly: "Mensal",
+      quarterly: "Trimestral",
+      semiannual: "Semestral",
+      annual: "Anual",
+      custom: "Personalizada",
+    } satisfies Record<ContinuousProgramScheduleFrequency, string>,
     draft: "Rascunho",
     live: "Ativo",
     closed: "Concluido",
@@ -298,6 +327,10 @@ export function ManagerProgramsDatabase() {
   const [createProgramDescription, setCreateProgramDescription] = useState("");
   const [createProgramTopic, setCreateProgramTopic] = useState(1);
   const [createProgramThreshold, setCreateProgramThreshold] = useState(1);
+  const [createProgramFrequency, setCreateProgramFrequency] = useState<ContinuousProgramScheduleFrequency>(
+    DEFAULT_CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCY,
+  );
+  const [createProgramDurationMonths, setCreateProgramDurationMonths] = useState(6);
   const [createdDrpsId, setCreatedDrpsId] = useState<string | null>(null);
   const [createdProgramId, setCreatedProgramId] = useState<string | null>(null);
   const [selectedEvaluationProgramId, setSelectedEvaluationProgramId] = useState<string | null>(null);
@@ -415,6 +448,8 @@ export function ManagerProgramsDatabase() {
     setCreateProgramDescription("");
     setCreateProgramTopic(1);
     setCreateProgramThreshold(1);
+    setCreateProgramFrequency(DEFAULT_CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCY);
+    setCreateProgramDurationMonths(6);
     setIsCreateProgramOpen(true);
   }
 
@@ -485,6 +520,14 @@ export function ManagerProgramsDatabase() {
       setCreateProgramError(t.programValidationThreshold);
       return;
     }
+    if (
+      !Number.isInteger(createProgramDurationMonths) ||
+      createProgramDurationMonths < 1 ||
+      createProgramDurationMonths > 24
+    ) {
+      setCreateProgramError(t.programValidationDuration);
+      return;
+    }
 
     setIsCreatingProgram(true);
     try {
@@ -496,6 +539,7 @@ export function ManagerProgramsDatabase() {
           description: createProgramDescription.trim() || null,
           targetRiskTopic: createProgramTopic,
           triggerThreshold: Number(createProgramThreshold.toFixed(2)),
+          scheduleFrequency: createProgramFrequency,
         }),
       });
 
@@ -1081,14 +1125,17 @@ export function ManagerProgramsDatabase() {
 
               <label className="text-xs text-[#4f6977]">
                 {t.programFieldTopic}
-                <input
-                  type="number"
-                  min={1}
-                  max={13}
+                <select
                   value={createProgramTopic}
                   onChange={(event) => setCreateProgramTopic(Number(event.target.value || 1))}
                   className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
-                />
+                >
+                  {RISK_TOPICS.map((topic) => (
+                    <option key={`create-program-topic-${topic.id}`} value={topic.id}>
+                      {topic.code} - {locale === "pt" ? topic.labelPt : topic.labelEn}
+                    </option>
+                  ))}
+                </select>
               </label>
 
               <label className="text-xs text-[#4f6977]">
@@ -1100,6 +1147,38 @@ export function ManagerProgramsDatabase() {
                   step={0.01}
                   value={createProgramThreshold}
                   onChange={(event) => setCreateProgramThreshold(Number(event.target.value || 1))}
+                  className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
+                />
+              </label>
+
+              <label className="text-xs text-[#4f6977]">
+                {t.programFieldFrequency}
+                <select
+                  value={createProgramFrequency}
+                  onChange={(event) =>
+                    setCreateProgramFrequency(event.target.value as ContinuousProgramScheduleFrequency)
+                  }
+                  className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
+                >
+                  {CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCIES.map((frequency) => (
+                    <option key={`create-program-frequency-${frequency}`} value={frequency}>
+                      {t.frequencies[frequency]}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="text-xs text-[#4f6977]">
+                {t.programFieldDuration}
+                <input
+                  type="number"
+                  min={1}
+                  max={24}
+                  step={1}
+                  value={createProgramDurationMonths}
+                  onChange={(event) =>
+                    setCreateProgramDurationMonths(Number.parseInt(event.target.value || "0", 10))
+                  }
                   className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
                 />
               </label>

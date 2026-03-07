@@ -498,25 +498,24 @@ export function ManagerClientAssignDrps({ clientId }: { clientId: string }) {
 
   return (
     <div className="space-y-6">
-      <nav className="text-xs text-[#4f6977]">
-        <Link href="/manager" className="text-[#0f5b73]">
-          Home
-        </Link>{" "}
-        /{" "}
-        <Link href="/manager/clients" className="text-[#0f5b73]">
-          Client area
-        </Link>{" "}
-        /{" "}
-        <Link href={`/manager/clients/${client.id}`} className="text-[#0f5b73]">
-          {client.companyName}
-        </Link>{" "}
-        /{" "}
-        <Link href={`/manager/clients/${client.id}/assign-drps`} className="text-[#0f5b73]">
-          Atribuir diagnostico DRPS
-        </Link>
-      </nav>
-
       <section className="rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
+        <nav className="mb-3 text-xs text-[#4f6977]">
+          <Link href="/manager" className="text-[#0f5b73]">
+            Home
+          </Link>{" "}
+          /{" "}
+          <Link href="/manager/clients" className="text-[#0f5b73]">
+            Client area
+          </Link>{" "}
+          /{" "}
+          <Link href={`/manager/clients/${client.id}`} className="text-[#0f5b73]">
+            {client.companyName}
+          </Link>{" "}
+          /{" "}
+          <Link href={`/manager/clients/${client.id}/assign-drps`} className="text-[#0f5b73]">
+            Atribuir diagnostico DRPS
+          </Link>
+        </nav>
         <h2 className="text-2xl font-semibold text-[#123447]">Atribuir diagnosticos DRPS</h2>
         <p className="mt-1 text-sm text-[#35515f]">
           Crie uma campanha umbrella DRPS unica, vincule os setores como sub-questionarios e

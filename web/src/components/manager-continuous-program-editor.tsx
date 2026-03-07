@@ -89,10 +89,11 @@ const COPY = {
     assignStatus: "Status",
     assignDeployAt: "Applied at",
     assignFrequency: "Cadence",
-    assignAnchorDate: "Cadence anchor date (optional)",
+    assignDuration: "Duration (months)",
     assignLoadingClients: "Loading companies...",
     assignNoClients: "No companies available.",
     assignErrorNoClient: "Select a company.",
+    assignErrorDuration: "Duration must be between 1 and 24 months.",
     assignErrorLoadClients: "Could not load companies.",
     assignError: "Could not assign program.",
     assignSuccess: "Program assigned to company.",
@@ -167,10 +168,11 @@ const COPY = {
     assignStatus: "Status",
     assignDeployAt: "Aplicado em",
     assignFrequency: "Cadencia",
-    assignAnchorDate: "Data ancora da cadencia (opcional)",
+    assignDuration: "Duracao (meses)",
     assignLoadingClients: "Carregando empresas...",
     assignNoClients: "Nenhuma empresa disponivel.",
     assignErrorNoClient: "Selecione uma empresa.",
+    assignErrorDuration: "Duracao deve estar entre 1 e 24 meses.",
     assignErrorLoadClients: "Nao foi possivel carregar empresas.",
     assignError: "Nao foi possivel atribuir o programa.",
     assignSuccess: "Programa atribuido a empresa.",
@@ -230,6 +232,26 @@ function fromDatetimeLocal(value: string) {
   return date.toISOString();
 }
 
+function monthKey(date: Date): string {
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  return `${year}-${month}`;
+}
+
+function buildAnnualPlanMonthsFromDuration(startIso: string, durationMonths: number): string[] {
+  if (!Number.isInteger(durationMonths) || durationMonths < 1) return [];
+  const parsedStart = new Date(startIso);
+  const safeStart = Number.isNaN(parsedStart.getTime()) ? new Date() : parsedStart;
+  const startMonth = new Date(Date.UTC(safeStart.getUTCFullYear(), safeStart.getUTCMonth(), 1));
+
+  const months: string[] = [];
+  for (let index = 0; index < durationMonths; index += 1) {
+    const monthDate = new Date(Date.UTC(startMonth.getUTCFullYear(), startMonth.getUTCMonth() + index, 1));
+    months.push(monthKey(monthDate));
+  }
+  return months;
+}
+
 export function ManagerContinuousProgramEditor({ programId }: { programId: string }) {
   const { locale } = useManagerLocale();
   const t = COPY[locale];
@@ -263,6 +285,7 @@ export function ManagerContinuousProgramEditor({ programId }: { programId: strin
   const [assignFrequency, setAssignFrequency] = useState<ContinuousProgramScheduleFrequency>(
     DEFAULT_CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCY,
   );
+  const [assignDurationMonths, setAssignDurationMonths] = useState(6);
   const [assignError, setAssignError] = useState("");
 
   const loadProgram = useCallback(async () => {
@@ -333,6 +356,7 @@ export function ManagerContinuousProgramEditor({ programId }: { programId: strin
     setAssignStatus("Active");
     setAssignDeployedAt(toDatetimeLocal(new Date().toISOString()));
     setAssignFrequency(DEFAULT_CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCY);
+    setAssignDurationMonths(6);
     setAssignError("");
     setIsAssignModalOpen(true);
     if (assignClients.length === 0 && !isLoadingAssignClients) {
@@ -345,10 +369,18 @@ export function ManagerContinuousProgramEditor({ programId }: { programId: strin
       setAssignError(t.assignErrorNoClient);
       return;
     }
+    if (!Number.isInteger(assignDurationMonths) || assignDurationMonths < 1 || assignDurationMonths > 24) {
+      setAssignError(t.assignErrorDuration);
+      return;
+    }
 
     setIsAssigningProgram(true);
     setAssignError("");
     const deployedAtIso = fromDatetimeLocal(assignDeployedAt);
+    const annualPlanMonths = buildAnnualPlanMonthsFromDuration(
+      deployedAtIso || new Date().toISOString(),
+      assignDurationMonths,
+    );
     try {
       const response = await fetch(`/api/admin/clients/${assignClientId}/programs`, {
         method: "POST",
@@ -358,6 +390,7 @@ export function ManagerContinuousProgramEditor({ programId }: { programId: strin
           status: assignStatus,
           ...(deployedAtIso ? { deployedAt: deployedAtIso } : {}),
           scheduleFrequency: assignFrequency,
+          annualPlanMonths,
         }),
       });
       if (!response.ok) {
@@ -577,14 +610,13 @@ export function ManagerContinuousProgramEditor({ programId }: { programId: strin
 
   return (
     <div className="space-y-6">
-      <nav className="text-xs text-[#4f6977]">
-        <Link href="/manager/programs" className="text-[#0f5b73]">
-          {t.breadcrumbBase}
-        </Link>{" "}
-        / <span>{program.title}</span>
-      </nav>
-
       <section className="rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
+        <nav className="mb-3 text-xs text-[#4f6977]">
+          <Link href="/manager/programs" className="text-[#0f5b73]">
+            {t.breadcrumbBase}
+          </Link>{" "}
+          / <span>{program.title}</span>
+        </nav>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="text-2xl font-semibold text-[#123447]">{t.title}</h2>
@@ -950,6 +982,21 @@ export function ManagerContinuousProgramEditor({ programId }: { programId: strin
                       </option>
                     ))}
                   </select>
+                </label>
+
+                <label className="text-xs text-[#4f6977]">
+                  {t.assignDuration}
+                  <input
+                    type="number"
+                    min={1}
+                    max={24}
+                    step={1}
+                    className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
+                    value={assignDurationMonths}
+                    onChange={(event) =>
+                      setAssignDurationMonths(Number.parseInt(event.target.value || "0", 10))
+                    }
+                  />
                 </label>
 
               </div>

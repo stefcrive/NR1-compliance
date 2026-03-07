@@ -43,3 +43,8 @@ in settings page add button 'Invite manager' to create a link that allow user to
 
 in order to make the program more personalizable, add a custom icon from a icon list that appears next to the program name as decorator int he tables
 
+update dropdown lifeycle from the event modal from the calendar in manager workspace with provisorio marcado cancelado esecutado
+
+setup browser notification
+
+Develop Campaign materials for each processo continuo into 'Sessions', allow to adjust number of sessions and to upload specific files per each session. each session is attributed sequentially then to the created provisory events when a processo continuo is assigned to a company, and apply the file associated to each session to each of the generated events, generate as much events as there are sessions, mark the corresponding number of months necessary to execute all the sessions in the plano anual de impleemntaçao by default, btw in the plano anual de implementaçao if then manager reduce or increases the lengt of the marked months for the program, reduce the sessions or loop them starting from the first

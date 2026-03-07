@@ -634,7 +634,11 @@ export function ManagerCompanyRiskProfile({ clientId }: { clientId: string }) {
                   Ultima medicao: {formatDateTime(card.latestPoint?.createdAt ?? null)}
                 </p>
 
-                <svg viewBox={`0 0 ${trendChartsModel.width} ${trendChartsModel.height}`} className="mt-2 h-[220px] w-full">
+                <svg
+                  data-nr-chart
+                  viewBox={`0 0 ${trendChartsModel.width} ${trendChartsModel.height}`}
+                  className="mt-2 h-[220px] w-full"
+                >
                   {trendChartsModel.yTicks.map((tick) => (
                     <g key={`y-${card.factorKey}-${tick.value}`}>
                       <line
@@ -674,6 +678,7 @@ export function ManagerCompanyRiskProfile({ clientId }: { clientId: string }) {
                   ))}
 
                   <line
+                    className="nr-chart-axis"
                     x1={trendChartsModel.padding.left}
                     y1={trendChartsModel.xAxisY}
                     x2={trendChartsModel.width - trendChartsModel.padding.right}
@@ -682,6 +687,7 @@ export function ManagerCompanyRiskProfile({ clientId }: { clientId: string }) {
                     strokeWidth={1}
                   />
                   <line
+                    className="nr-chart-axis"
                     x1={trendChartsModel.yAxisX}
                     y1={trendChartsModel.padding.top}
                     x2={trendChartsModel.yAxisX}

@@ -1064,56 +1064,58 @@ export function ManagerAssignedContinuousProgram({
 
   return (
     <div className="space-y-6">
-      <nav className="text-xs text-[#4f6977]">
-        {fromHome ? (
-          <>
-            <Link href="/manager" className="text-[#0f5b73]">
-              Home
-            </Link>{" "}
-            /{" "}
-            <Link href={`/manager/clients/${clientId}`} className="text-[#0f5b73]">
-              {clientName || "Cliente"}
-            </Link>{" "}
-            /{" "}
-            <Link href={`/manager/clients/${clientId}?tab=assigned-continuous`} className="text-[#0f5b73]">
-              Assigned processo continuos
-            </Link>{" "}
-            / <span>{assignment.programTitle}</span>
-          </>
-        ) : fromHistory ? (
-          <>
-            <Link href="/manager/history" className="text-[#0f5b73]">
-              Historico
-            </Link>{" "}
-            /{" "}
-            <Link href={`/manager/clients/${clientId}`} className="text-[#0f5b73]">
-              {clientName || "Cliente"}
-            </Link>{" "}
-            /{" "}
-            <Link href={`/manager/clients/${clientId}?tab=assigned-continuous&from=history`} className="text-[#0f5b73]">
-              Assigned processos continuos
-            </Link>{" "}
-            / <span>Processos continuos</span>
-          </>
-        ) : (
-          <>
-            <Link href="/manager/clients" className="text-[#0f5b73]">
-              Client area
-            </Link>{" "}
-            /{" "}
-            <Link href={`/manager/clients/${clientId}`} className="text-[#0f5b73]">
-              {clientName || "Cliente"}
-            </Link>{" "}
-            /{" "}
-            <Link href={`/manager/clients/${clientId}?tab=assigned-continuous`} className="text-[#0f5b73]">
-              Assigned processo continuos
-            </Link>{" "}
-            / <span>{assignment.programTitle}</span>
-          </>
-        )}
-      </nav>
-
       <section className="rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
+        <nav className="mb-3 text-xs text-[#4f6977]">
+          {fromHome ? (
+            <>
+              <Link href="/manager" className="text-[#0f5b73]">
+                Home
+              </Link>{" "}
+              /{" "}
+              <Link href={`/manager/clients/${clientId}`} className="text-[#0f5b73]">
+                {clientName || "Cliente"}
+              </Link>{" "}
+              /{" "}
+              <Link href={`/manager/clients/${clientId}?tab=assigned-continuous`} className="text-[#0f5b73]">
+                Assigned processo continuos
+              </Link>{" "}
+              / <span>{assignment.programTitle}</span>
+            </>
+          ) : fromHistory ? (
+            <>
+              <Link href="/manager/history" className="text-[#0f5b73]">
+                Historico
+              </Link>{" "}
+              /{" "}
+              <Link href={`/manager/clients/${clientId}`} className="text-[#0f5b73]">
+                {clientName || "Cliente"}
+              </Link>{" "}
+              /{" "}
+              <Link
+                href={`/manager/clients/${clientId}?tab=assigned-continuous&from=history`}
+                className="text-[#0f5b73]"
+              >
+                Assigned processos continuos
+              </Link>{" "}
+              / <span>Processos continuos</span>
+            </>
+          ) : (
+            <>
+              <Link href="/manager/clients" className="text-[#0f5b73]">
+                Client area
+              </Link>{" "}
+              /{" "}
+              <Link href={`/manager/clients/${clientId}`} className="text-[#0f5b73]">
+                {clientName || "Cliente"}
+              </Link>{" "}
+              /{" "}
+              <Link href={`/manager/clients/${clientId}?tab=assigned-continuous`} className="text-[#0f5b73]">
+                Assigned processo continuos
+              </Link>{" "}
+              / <span>{assignment.programTitle}</span>
+            </>
+          )}
+        </nav>
         <h2 className="text-2xl font-semibold text-[#123447]">{template.title}</h2>
         <p className="mt-1 text-sm text-[#4f6977]">
           {template.description ?? assignment.programDescription ?? assignment.programId}

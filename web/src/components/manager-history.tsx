@@ -288,8 +288,13 @@ function companyRiskClassLabel(value: "baixa" | "media" | "alta", locale: Manage
   return t.probabilityMedium;
 }
 
-function lifecycleLabel(value: "provisory" | "committed", locale: ManagerLocale) {
-  return value === "committed" ? COPY[locale].lifecycleCommitted : COPY[locale].lifecycleProvisory;
+function eventStatusLabel(
+  value: "scheduled" | "completed" | "cancelled",
+  locale: ManagerLocale,
+) {
+  if (value === "completed") return locale === "pt" ? "Executado" : "Executed";
+  if (value === "cancelled") return locale === "pt" ? "Cancelado" : "Cancelled";
+  return locale === "pt" ? "Agendado" : "Scheduled";
 }
 
 function reportStatusLabel(
@@ -363,7 +368,8 @@ export function ManagerHistory({ forcedClientId }: { forcedClientId?: string }) 
   const realizedEvents = useMemo(
     () =>
       (payload?.realizedEvents ?? []).filter((item) =>
-        activeCompanyFilter === COMPANY_FILTER_ALL ? true : item.clientId === activeCompanyFilter,
+        item.status === "completed" &&
+        (activeCompanyFilter === COMPANY_FILTER_ALL ? true : item.clientId === activeCompanyFilter),
       ),
     [activeCompanyFilter, payload?.realizedEvents],
   );
@@ -672,7 +678,7 @@ export function ManagerHistory({ forcedClientId }: { forcedClientId?: string }) 
                 {showCompanyColumn ? <th className="px-2 py-2 text-left">{t.tableCompany}</th> : null}
                 <th className="px-2 py-2 text-left">{t.tableWhen}</th>
                 <th className="px-2 py-2 text-left">{t.tableType}</th>
-                <th className="px-2 py-2 text-left">{t.tableLifecycle}</th>
+                <th className="px-2 py-2 text-left">{t.tableStatus}</th>
                 <th className="px-2 py-2 text-left">{t.tableActions}</th>
               </tr>
             </thead>
@@ -695,7 +701,7 @@ export function ManagerHistory({ forcedClientId }: { forcedClientId?: string }) 
                     ) : null}
                     <td className="px-2 py-2 text-[#3e5a68]">{fmtDateTime(event.startsAt, locale)}</td>
                     <td className="px-2 py-2 text-[#3e5a68]">{eventTypeLabel(event.eventType, locale)}</td>
-                    <td className="px-2 py-2 text-[#3e5a68]">{lifecycleLabel(event.lifecycle, locale)}</td>
+                    <td className="px-2 py-2 text-[#3e5a68]">{eventStatusLabel(event.status, locale)}</td>
                     <td className="px-2 py-2">
                       <div className="flex flex-wrap gap-2 text-xs">
                         <Link

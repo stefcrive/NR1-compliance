@@ -162,14 +162,13 @@ export function ClientHistoryEventRecord({
 
   return (
     <div className="space-y-6">
-      <nav className="text-xs text-[#4f6977]">
-        <Link href={`/client/${clientSlug}/history`} className="text-[#0f5b73] hover:underline">
-          Historico
-        </Link>{" "}
-        / <span>{eventTitleWithDate}</span>
-      </nav>
-
       <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+        <nav className="mb-3 text-xs text-[#4f6977]">
+          <Link href={`/client/${clientSlug}/history`} className="text-[#0f5b73] hover:underline">
+            Historico
+          </Link>{" "}
+          / <span>{eventTitleWithDate}</span>
+        </nav>
         <h2 className="text-2xl font-semibold text-[#141d24]">{eventTitleWithDate}</h2>
       </section>
 

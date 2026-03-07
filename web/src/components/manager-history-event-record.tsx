@@ -7,6 +7,8 @@ import { type EventRecordAttachment, EVENT_RECORD_FILE_ACCEPT_ATTR } from "@/lib
 
 import { type ManagerLocale, useManagerLocale } from "@/components/manager-locale";
 
+type EventEditStatusOption = "provisorio" | "marcado" | "cancelado" | "esecutado";
+
 type EventRecordPayload = {
   record: {
     id: string;
@@ -254,6 +256,13 @@ function lifecycleLabel(value: "provisory" | "committed", locale: ManagerLocale)
   return value === "committed" ? COPY[locale].lifecycleCommitted : COPY[locale].lifecycleProvisory;
 }
 
+function eventEditStatusFromRecord(record: EventRecordPayload["record"]): EventEditStatusOption {
+  if (record.status === "cancelled") return "cancelado";
+  if (record.status === "completed") return "esecutado";
+  if (record.details.eventLifecycle === "provisory") return "provisorio";
+  return "marcado";
+}
+
 function proposalLabel(value: "assignment" | "reschedule" | null, locale: ManagerLocale) {
   const t = COPY[locale];
   if (value === "assignment") return t.proposalAssignment;
@@ -330,10 +339,9 @@ export function ManagerHistoryEventRecord({
   const [eventError, setEventError] = useState("");
   const [isSavingEvent, setIsSavingEvent] = useState(false);
   const [editTitle, setEditTitle] = useState("");
-  const [editStatus, setEditStatus] = useState<"scheduled" | "completed" | "cancelled">("scheduled");
   const [editStartsAt, setEditStartsAt] = useState("");
   const [editDurationMinutes, setEditDurationMinutes] = useState("60");
-  const [editLifecycle, setEditLifecycle] = useState<"provisory" | "committed">("committed");
+  const [editEventStatus, setEditEventStatus] = useState<EventEditStatusOption>("marcado");
   const [editProposal, setEditProposal] = useState<"assignment" | "reschedule" | "none">("none");
   const [editContent, setEditContent] = useState("");
   const [editPreparation, setEditPreparation] = useState("");
@@ -392,10 +400,9 @@ export function ManagerHistoryEventRecord({
   useEffect(() => {
     if (!record) return;
     setEditTitle(record.title);
-    setEditStatus(record.status);
     setEditStartsAt(toDatetimeLocalFromIso(record.startsAt));
     setEditDurationMinutes(String(durationMinutesFromRange(record.startsAt, record.endsAt, 60)));
-    setEditLifecycle(record.details.eventLifecycle);
+    setEditEventStatus(eventEditStatusFromRecord(record));
     setEditProposal(record.details.proposalKind ?? "none");
     setEditContent(record.details.content ?? "");
     setEditPreparation(record.details.preparationRequired ?? "");
@@ -525,10 +532,9 @@ export function ManagerHistoryEventRecord({
     if (!record) return;
     setIsEditMode(false);
     setEditTitle(record.title);
-    setEditStatus(record.status);
     setEditStartsAt(toDatetimeLocalFromIso(record.startsAt));
     setEditDurationMinutes(String(durationMinutesFromRange(record.startsAt, record.endsAt, 60)));
-    setEditLifecycle(record.details.eventLifecycle);
+    setEditEventStatus(eventEditStatusFromRecord(record));
     setEditProposal(record.details.proposalKind ?? "none");
     setEditContent(record.details.content ?? "");
     setEditPreparation(record.details.preparationRequired ?? "");
@@ -564,16 +570,24 @@ export function ManagerHistoryEventRecord({
     setEventNotice("");
     setEventError("");
     try {
+      const nextStatus: "scheduled" | "completed" | "cancelled" =
+        editEventStatus === "cancelado"
+          ? "cancelled"
+          : editEventStatus === "esecutado"
+            ? "completed"
+            : "scheduled";
+      const nextLifecycle: "provisory" | "committed" =
+        editEventStatus === "provisorio" ? "provisory" : "committed";
       const response = await fetch(`/api/admin/history/events/${encodeURIComponent(record.id)}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           event: {
             title: normalizedTitle,
-            status: editStatus,
+            status: nextStatus,
             startsAt: startsAtIso,
             endsAt: endsAtIso,
-            eventLifecycle: editLifecycle,
+            eventLifecycle: nextLifecycle,
             proposalKind: editProposal === "none" ? null : editProposal,
             content: editContent.trim() || null,
             preparationRequired: editPreparation.trim() || null,
@@ -595,11 +609,10 @@ export function ManagerHistoryEventRecord({
   }, [
     editContent,
     editDurationMinutes,
-    editLifecycle,
+    editEventStatus,
     editPreparation,
     editProposal,
     editStartsAt,
-    editStatus,
     editTitle,
     isCalendarRecord,
     loadRecord,
@@ -611,60 +624,59 @@ export function ManagerHistoryEventRecord({
 
   return (
     <div className="space-y-5">
-      <nav className="text-xs text-[#4f6977]">
-        {fromHistory ? (
-          <>
-            <Link href="/manager/history" className="text-[#0f5b73] hover:underline">
-              {t.breadcrumbHistory}
-            </Link>{" "}
-            / <span>{pageTitle}</span>
-          </>
-        ) : fromHome ? (
-          <>
-            <Link href="/manager" className="text-[#0f5b73] hover:underline">
-              {t.breadcrumbHome}
-            </Link>{" "}
-            / <span>{pageTitle}</span>
-          </>
-        ) : isClientAreaSource && isContinuousProgramJournal && breadcrumbClientId && programAssignment ? (
-          <>
-            <Link href="/manager/clients" className="text-[#0f5b73] hover:underline">
-              {t.breadcrumbClientArea}
-            </Link>{" "}
-            /{" "}
-            <Link
-              href={`/manager/clients/${breadcrumbClientId}`}
-              className="text-[#0f5b73] hover:underline"
-            >
-              {breadcrumbClientName}
-            </Link>{" "}
-            /{" "}
-            <Link
-              href={`/manager/clients/${breadcrumbClientId}?tab=assigned-continuous`}
-              className="text-[#0f5b73] hover:underline"
-            >
-              {t.breadcrumbAssignedPrograms}
-            </Link>{" "}
-            /{" "}
-            <Link
-              href={`/manager/clients/${breadcrumbClientId}/assigned-continuous/${programAssignment.id}`}
-              className="text-[#0f5b73] hover:underline"
-            >
-              {programAssignment.programTitle}
-            </Link>{" "}
-            / <span>{pageTitle}</span>
-          </>
-        ) : (
-          <>
-            <Link href="/manager/history" className="text-[#0f5b73] hover:underline">
-              {t.breadcrumbHistory}
-            </Link>{" "}
-            / <span>{pageTitle}</span>
-          </>
-        )}
-      </nav>
-
       <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+        <nav className="mb-3 text-xs text-[#4f6977]">
+          {fromHistory ? (
+            <>
+              <Link href="/manager/history" className="text-[#0f5b73] hover:underline">
+                {t.breadcrumbHistory}
+              </Link>{" "}
+              / <span>{pageTitle}</span>
+            </>
+          ) : fromHome ? (
+            <>
+              <Link href="/manager" className="text-[#0f5b73] hover:underline">
+                {t.breadcrumbHome}
+              </Link>{" "}
+              / <span>{pageTitle}</span>
+            </>
+          ) : isClientAreaSource && isContinuousProgramJournal && breadcrumbClientId && programAssignment ? (
+            <>
+              <Link href="/manager/clients" className="text-[#0f5b73] hover:underline">
+                {t.breadcrumbClientArea}
+              </Link>{" "}
+              /{" "}
+              <Link
+                href={`/manager/clients/${breadcrumbClientId}`}
+                className="text-[#0f5b73] hover:underline"
+              >
+                {breadcrumbClientName}
+              </Link>{" "}
+              /{" "}
+              <Link
+                href={`/manager/clients/${breadcrumbClientId}?tab=assigned-continuous`}
+                className="text-[#0f5b73] hover:underline"
+              >
+                {t.breadcrumbAssignedPrograms}
+              </Link>{" "}
+              /{" "}
+              <Link
+                href={`/manager/clients/${breadcrumbClientId}/assigned-continuous/${programAssignment.id}`}
+                className="text-[#0f5b73] hover:underline"
+              >
+                {programAssignment.programTitle}
+              </Link>{" "}
+              / <span>{pageTitle}</span>
+            </>
+          ) : (
+            <>
+              <Link href="/manager/history" className="text-[#0f5b73] hover:underline">
+                {t.breadcrumbHistory}
+              </Link>{" "}
+              / <span>{pageTitle}</span>
+            </>
+          )}
+        </nav>
         <h2 className="text-2xl font-semibold text-[#121b22]">{pageTitle}</h2>
         {record ? <p className="mt-1 text-sm text-[#4f5f6a]">{record.title}</p> : null}
         {record && isCalendarRecord ? (
@@ -725,21 +737,7 @@ export function ManagerHistoryEventRecord({
             </article>
             <article className="rounded-xl border border-[#d8e4ee] bg-white p-3">
               <p className="text-xs text-[#4f6977]">{t.eventStatus}</p>
-              {isEditMode && isCalendarRecord ? (
-                <select
-                  value={editStatus}
-                  onChange={(event) =>
-                    setEditStatus(event.target.value as "scheduled" | "completed" | "cancelled")
-                  }
-                  className="mt-1 w-full rounded border border-[#c9dce8] px-2 py-1.5 text-sm text-[#123447]"
-                >
-                  <option value="scheduled">{t.statusScheduled}</option>
-                  <option value="completed">{t.statusCompleted}</option>
-                  <option value="cancelled">{t.statusCancelled}</option>
-                </select>
-              ) : (
-                <p className="text-sm font-semibold text-[#123447]">{eventStatusLabel(record.status, locale)}</p>
-              )}
+              <p className="text-sm font-semibold text-[#123447]">{eventStatusLabel(record.status, locale)}</p>
             </article>
             <article className="rounded-xl border border-[#d8e4ee] bg-white p-3">
               <p className="text-xs text-[#4f6977]">{t.eventWhen}</p>
@@ -776,15 +774,17 @@ export function ManagerHistoryEventRecord({
               <p className="text-sm font-semibold text-[#123447]">{record.clientName ?? t.noCompany}</p>
             </article>
             <article className="rounded-xl border border-[#d8e4ee] bg-white p-3">
-              <p className="text-xs text-[#4f6977]">{t.eventLifecycle}</p>
+              <p className="text-xs text-[#4f6977]">{t.eventStatus}</p>
               {isEditMode && isCalendarRecord ? (
                 <select
-                  value={editLifecycle}
-                  onChange={(event) => setEditLifecycle(event.target.value as "provisory" | "committed")}
+                  value={editEventStatus}
+                  onChange={(event) => setEditEventStatus(event.target.value as EventEditStatusOption)}
                   className="mt-1 w-full rounded border border-[#c9dce8] px-2 py-1.5 text-sm text-[#123447]"
                 >
-                  <option value="committed">{t.lifecycleCommitted}</option>
-                  <option value="provisory">{t.lifecycleProvisory}</option>
+                  <option value="provisorio">provisorio</option>
+                  <option value="marcado">marcado</option>
+                  <option value="cancelado">cancelado</option>
+                  <option value="esecutado">esecutado</option>
                 </select>
               ) : (
                 <p className="text-sm font-semibold text-[#123447]">

@@ -2255,59 +2255,58 @@ export function ClientDiagnosticResultsSection({
       ) : null}
       {!embeddedView ? (
         <>
-          <nav className="text-xs text-[#4f6977]">
-            {managerClientId ? (
-              managerFromHome ? (
+          <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+            <nav className="mb-3 text-xs text-[#4f6977]">
+              {managerClientId ? (
+                managerFromHome ? (
+                  <>
+                    <Link href="/manager" className="text-[#0f5b73]">
+                      Home
+                    </Link>{" "}
+                    / <span>{campaign?.name ?? "Diagnostico"}</span> / <span>Resultados</span>
+                  </>
+                ) : managerFromHistory ? (
+                  <>
+                    <Link href="/manager/history" className="text-[#0f5b73]">
+                      Historico
+                    </Link>{" "}
+                    / <span>{campaign?.name ?? "Diagnostico"}</span> / <span>Resultados</span>
+                  </>
+                ) : (
+                  <>
+                    <Link href="/manager/clients" className="text-[#0f5b73]">
+                      Client area
+                    </Link>{" "}
+                    /{" "}
+                    <Link href={`/manager/clients/${managerClientId}`} className="text-[#0f5b73]">
+                      {managerBreadcrumbClientLabel}
+                    </Link>{" "}
+                    / <span>{campaign?.name ?? "Diagnostico"}</span> / <span>Resultados</span>
+                  </>
+                )
+              ) : fromHistory ? (
                 <>
-                  <Link href="/manager" className="text-[#0f5b73]">
-                    Home
-                  </Link>{" "}
-                  / <span>{campaign?.name ?? "Diagnostico"}</span> / <span>Resultados</span>
-                </>
-              ) : managerFromHistory ? (
-                <>
-                  <Link href="/manager/history" className="text-[#0f5b73]">
+                  <Link href={`/client/${clientSlug}/history`} className="text-[#1b2832]">
                     Historico
+                  </Link>{" "}
+                  / <span>{campaign?.name ?? "Diagnostico"}</span>
+                </>
+              ) : fromReports ? (
+                <>
+                  <Link href={`/client/${clientSlug}/reports`} className="text-[#1b2832]">
+                    Reports
                   </Link>{" "}
                   / <span>{campaign?.name ?? "Diagnostico"}</span> / <span>Resultados</span>
                 </>
               ) : (
                 <>
-                  <Link href="/manager/clients" className="text-[#0f5b73]">
-                    Client area
-                  </Link>{" "}
-                  /{" "}
-                  <Link href={`/manager/clients/${managerClientId}`} className="text-[#0f5b73]">
-                    {managerBreadcrumbClientLabel}
+                  <Link href={`/client/${clientSlug}/company`} className="text-[#1b2832]">
+                    Home
                   </Link>{" "}
                   / <span>{campaign?.name ?? "Diagnostico"}</span> / <span>Resultados</span>
                 </>
-              )
-            ) : fromHistory ? (
-              <>
-                <Link href={`/client/${clientSlug}/history`} className="text-[#1b2832]">
-                  Historico
-                </Link>{" "}
-                / <span>{campaign?.name ?? "Diagnostico"}</span>
-              </>
-            ) : fromReports ? (
-              <>
-                <Link href={`/client/${clientSlug}/reports`} className="text-[#1b2832]">
-                  Reports
-                </Link>{" "}
-                / <span>{campaign?.name ?? "Diagnostico"}</span> / <span>Resultados</span>
-              </>
-            ) : (
-              <>
-                <Link href={`/client/${clientSlug}/company`} className="text-[#1b2832]">
-                  Home
-                </Link>{" "}
-                / <span>{campaign?.name ?? "Diagnostico"}</span> / <span>Resultados</span>
-              </>
-            )}
-          </nav>
-
-          <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+              )}
+            </nav>
             <h2 className="text-2xl font-semibold text-[#141d24]">{campaign?.name ?? "Resultados do diagnostico"}</h2>
             <p className="mt-1 text-sm text-[#475660]">
               Responses {dashboard?.totals.responses ?? 0} | Risks {dashboard?.totals.topics ?? 0} |
@@ -2527,7 +2526,11 @@ export function ClientDiagnosticResultsSection({
           </div>
           <div className="mt-3 flex-1 overflow-x-auto">
             {matrixModel ? (
-              <svg viewBox={`0 0 ${matrixModel.width} ${matrixModel.height}`} className="h-[380px] w-full min-w-[520px]">
+              <svg
+                data-nr-chart
+                viewBox={`0 0 ${matrixModel.width} ${matrixModel.height}`}
+                className="h-[380px] w-full min-w-[520px]"
+              >
                 {matrixModel.xTicks.map((tick) => {
                   return (
                     <line
@@ -2676,7 +2679,11 @@ export function ClientDiagnosticResultsSection({
           ) : null}
           <div className="mt-3 flex-1 overflow-x-auto">
             {radarModel ? (
-              <svg viewBox={`0 0 ${radarModel.size} ${radarModel.size}`} className="mx-auto h-[420px] w-[420px]">
+              <svg
+                data-nr-chart
+                viewBox={`0 0 ${radarModel.size} ${radarModel.size}`}
+                className="mx-auto h-[420px] w-[420px]"
+              >
                 {radarModel.rings.map((ring, index) => (
                   <polygon
                     key={`ring-${index}`}
@@ -2887,6 +2894,7 @@ export function ClientDiagnosticResultsSection({
                 </div>
                 <div className="mt-2 overflow-x-auto">
                   <svg
+                    data-nr-chart
                     viewBox={`0 0 ${aggregateTrendScoreModel.width} ${aggregateTrendScoreModel.height}`}
                     className="h-[220px] w-full min-w-[360px]"
                   >
@@ -3089,7 +3097,11 @@ export function ClientDiagnosticResultsSection({
                     <article key={`trend-details-chart-${chart.key}`} className="rounded-xl border border-[#dce8ee] bg-white p-2.5">
                       <p className="text-sm font-semibold text-[#274353]">{chart.title}</p>
                       <div className="mt-2 overflow-x-auto">
-                        <svg viewBox={`0 0 ${chart.width} ${chart.height}`} className="h-[220px] w-full min-w-[360px]">
+                        <svg
+                          data-nr-chart
+                          viewBox={`0 0 ${chart.width} ${chart.height}`}
+                          className="h-[220px] w-full min-w-[360px]"
+                        >
                           {chart.yTicks.map((tick) => (
                             <g key={`trend-details-${chart.key}-y-${tick.value}`}>
                               <line
@@ -3768,32 +3780,31 @@ export function ClientProgramDetailsSection({
 
   return (
     <div className="space-y-6">
-      <nav className="text-xs text-[#4f6977]">
-        {fromHistory ? (
-          <>
-            <Link href={`/client/${clientSlug}/history`} className="text-[#1b2832]">
-              Historico
-            </Link>{" "}
-            / <span>{displayTitle}</span>
-          </>
-        ) : fromReports ? (
-          <>
-            <Link href={`/client/${clientSlug}/reports`} className="text-[#1b2832]">
-              Reports
-            </Link>{" "}
-            / <span>{displayTitle}</span>
-          </>
-        ) : (
-          <>
-            <Link href={`/client/${clientSlug}/programs`} className="text-[#1b2832]">
-              Programas Continuos
-            </Link>{" "}
-            / <span>{displayTitle}</span>
-          </>
-        )}
-      </nav>
-
       <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+        <nav className="mb-3 text-xs text-[#4f6977]">
+          {fromHistory ? (
+            <>
+              <Link href={`/client/${clientSlug}/history`} className="text-[#1b2832]">
+                Historico
+              </Link>{" "}
+              / <span>{displayTitle}</span>
+            </>
+          ) : fromReports ? (
+            <>
+              <Link href={`/client/${clientSlug}/reports`} className="text-[#1b2832]">
+                Reports
+              </Link>{" "}
+              / <span>{displayTitle}</span>
+            </>
+          ) : (
+            <>
+              <Link href={`/client/${clientSlug}/programs`} className="text-[#1b2832]">
+                Programas Continuos
+              </Link>{" "}
+              / <span>{displayTitle}</span>
+            </>
+          )}
+        </nav>
         <h2 className="text-2xl font-semibold text-[#141d24]">{displayTitle}</h2>
         {displaySummary ? <p className="mt-1 text-sm text-[#475660]">{displaySummary}</p> : null}
         <p className="mt-2 text-xs text-[#55707f]">
