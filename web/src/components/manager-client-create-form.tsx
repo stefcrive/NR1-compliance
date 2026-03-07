@@ -339,16 +339,18 @@ export function ManagerClientCreateForm() {
 
   return (
     <div className="space-y-6">
-      <section className="rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
-        <nav className="mb-3 text-xs text-[#4f6977]">
+      <div className="space-y-3">
+        <nav className="text-xs text-[#4f6977]">
           <Link href="/manager/clients" className="text-[#0f5b73]">
             {t.breadcrumbManager}
           </Link>{" "}
           / <span>{t.breadcrumbClients}</span> / <span>{t.breadcrumbNew}</span>
         </nav>
-        <h2 className="text-2xl font-semibold text-[#123447]">{t.title}</h2>
-        <p className="mt-1 text-sm text-[#35515f]">{t.subtitle}</p>
-      </section>
+        <section className="rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
+          <h2 className="text-2xl font-semibold text-[#123447]">{t.title}</h2>
+          <p className="mt-1 text-sm text-[#35515f]">{t.subtitle}</p>
+        </section>
+      </div>
 
       <section className="space-y-4 rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
         <h3 className="text-lg font-semibold text-[#123447]">{t.companySection}</h3>

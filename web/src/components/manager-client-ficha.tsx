@@ -453,6 +453,8 @@ export function ManagerClientFicha({
   const [activeTab, setActiveTab] = useState<ClientTab>(initialTab);
   const [isEditingCompanyProfile, setIsEditingCompanyProfile] = useState(false);
   const [isSavingCompanyProfile, setIsSavingCompanyProfile] = useState(false);
+  const [isTogglingClientAccess, setIsTogglingClientAccess] = useState(false);
+  const [isDeletingClient, setIsDeletingClient] = useState(false);
   const [companyForm, setCompanyForm] = useState<ClientProfileForm>({
     companyName: "",
     cnpj: "",
@@ -546,6 +548,7 @@ export function ManagerClientFicha({
     () => sumSectorHeadcountFromForms(sectorForms),
     [sectorForms],
   );
+  const isClientAccessBlocked = client?.billingStatus === "blocked";
 
   const loadContinuousPrograms = useCallback(async (targetClientId: string) => {
     const response = await fetch(`/api/admin/clients/${targetClientId}/programs`, { cache: "no-store" });
@@ -1148,6 +1151,67 @@ export function ManagerClientFicha({
     setIsSavingCompanyProfile(false);
   }
 
+  async function toggleClientPortalAccess() {
+    if (!client) return;
+
+    const willBlock = !isClientAccessBlocked;
+    const nextBillingStatus: ClientProfileForm["billingStatus"] = willBlock ? "blocked" : "pending";
+    const confirmationMessage = willBlock
+      ? "Bloquear este cliente para impedir acesso ao portal?"
+      : "Desbloquear este cliente para permitir acesso ao portal?";
+    if (!window.confirm(confirmationMessage)) {
+      return;
+    }
+
+    setIsTogglingClientAccess(true);
+    setError("");
+    try {
+      const response = await fetch(`/api/admin/clients/${client.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ billingStatus: nextBillingStatus }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as { error?: string };
+      if (!response.ok && response.status !== 207) {
+        setError(payload.error ?? "Falha ao atualizar bloqueio de acesso.");
+        return;
+      }
+      if (response.status === 207 && payload.error) {
+        setError(payload.error);
+        return;
+      }
+      await loadBase();
+    } finally {
+      setIsTogglingClientAccess(false);
+    }
+  }
+
+  async function deleteClientRecord() {
+    if (!client) return;
+    if (
+      !window.confirm(
+        `Excluir definitivamente o cliente \"${client.companyName}\"? Esta acao remove campanhas, relatorios e dados relacionados.`,
+      )
+    ) {
+      return;
+    }
+
+    setIsDeletingClient(true);
+    setError("");
+    try {
+      const response = await fetch(`/api/admin/clients/${client.id}`, { method: "DELETE" });
+      const payload = (await response.json().catch(() => ({}))) as { error?: string };
+      if (!response.ok) {
+        setError(payload.error ?? "Falha ao excluir cliente.");
+        return;
+      }
+      router.push("/manager/clients");
+      router.refresh();
+    } finally {
+      setIsDeletingClient(false);
+    }
+  }
+
   function exportLinksCsv() {
     if (!linksPayload) return;
     const header = ["campaign_id", "campaign_slug", "sector", "active", "submission_count", "access_link"].join(",");
@@ -1331,22 +1395,24 @@ export function ManagerClientFicha({
 
   return (
     <div className="space-y-6">
-      <section className="rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
-        <nav className="mb-3 text-xs text-[#4f6977]">
+      <div className="space-y-3">
+        <nav className="text-xs text-[#4f6977]">
           <Link href="/manager/clients" className="text-[#0f5b73]">
             Client area
           </Link>{" "}
           / <span>{client.companyName}</span>
         </nav>
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h2 className="text-2xl font-semibold text-[#123447]">{client.companyName}</h2>
-            <p className="mt-1 text-sm text-[#35515f]">
-              CNPJ {client.cnpj} | Status {client.status} | Financeiro {client.billingStatus}
-            </p>
+        <section className="rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-2xl font-semibold text-[#123447]">{client.companyName}</h2>
+              <p className="mt-1 text-sm text-[#35515f]">
+                CNPJ {client.cnpj} | Status {client.status} | Financeiro {client.billingStatus}
+              </p>
+            </div>
           </div>
-        </div>
-      </section>
+        </section>
+      </div>
 
       <div className="grid gap-6 xl:grid-cols-[220px_minmax(0,1fr)]">
         <aside className="h-fit rounded-2xl border border-[#d7d7d7] bg-[#ececec] p-2">
@@ -1453,6 +1519,30 @@ export function ManagerClientFicha({
               >
                 Company risk profile results
               </Link>
+              <button
+                type="button"
+                onClick={() => void toggleClientPortalAccess()}
+                disabled={isEditingCompanyProfile || isSavingCompanyProfile || isTogglingClientAccess || isDeletingClient}
+                className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold disabled:opacity-50 ${
+                  isClientAccessBlocked
+                    ? "border-[#9ec8db] text-[#0f5b73]"
+                    : "border-[#f0c9c9] text-[#8f2a2a]"
+                }`}
+              >
+                {isTogglingClientAccess
+                  ? "Atualizando..."
+                  : isClientAccessBlocked
+                    ? "Unblock client access"
+                    : "Block client access"}
+              </button>
+              <button
+                type="button"
+                onClick={() => void deleteClientRecord()}
+                disabled={isEditingCompanyProfile || isSavingCompanyProfile || isDeletingClient || isTogglingClientAccess}
+                className="inline-flex items-center gap-2 rounded-full border border-[#f0c9c9] px-3 py-1 text-xs font-semibold text-[#8f2a2a] disabled:opacity-50"
+              >
+                {isDeletingClient ? "Deleting..." : "Delete client"}
+              </button>
               {!isEditingCompanyProfile ? (
                 <button
                   type="button"
@@ -1740,6 +1830,9 @@ export function ManagerClientFicha({
                 </p>
                 <p className="mt-1 text-sm text-[#153748]">
                   Invitation status: {accessInvitationStatusLabel(client.access.invitationStatus)}
+                </p>
+                <p className="mt-1 text-sm text-[#153748]">
+                  Portal access: {isClientAccessBlocked ? "Blocked" : "Active"}
                 </p>
                 {client.access.invitationExpiresAt ? (
                   <p className="mt-1 text-xs text-[#4f6977]">

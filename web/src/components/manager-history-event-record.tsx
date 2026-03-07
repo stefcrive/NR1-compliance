@@ -29,6 +29,19 @@ type EventRecordPayload = {
       eventLifecycle: "provisory" | "committed";
       proposalKind: "assignment" | "reschedule" | null;
       availabilityRequestId: string | null;
+      sessionId?: string | null;
+      sessionIndex?: number | null;
+      sessionTitle?: string | null;
+      sessionMaterials?: Array<{
+        id: string;
+        title: string;
+        fileName: string;
+        mimeType: string;
+        sizeBytes: number;
+        uploadedAt: string;
+        storagePath: string;
+        downloadUrl: string;
+      }>;
     };
     journal: {
       notes: string | null;
@@ -88,8 +101,10 @@ const COPY = {
     eventCompany: "Company",
     eventLifecycle: "Lifecycle",
     eventProposal: "Proposal",
+    eventSession: "Session",
     eventContent: "Content",
     eventPreparation: "Preparation",
+    eventSessionMaterials: "Session materials",
     eventTitle: "Title",
     eventEdit: "Edit event",
     eventEditCancel: "Cancel edit",
@@ -99,6 +114,7 @@ const COPY = {
     eventSaveError: "Could not update event fields.",
     eventInvalidTime: "Invalid date/time or duration.",
     eventNoText: "No details registered.",
+    eventNoSessionMaterials: "No session materials linked.",
     diagnosticsTitle: "Diagnostic Snapshot",
     diagnosticsResponses: "Responses",
     diagnosticsLatestResponse: "Latest response",
@@ -126,7 +142,10 @@ const COPY = {
     probabilityLow: "Low",
     probabilityMedium: "Medium",
     probabilityHigh: "High",
-    journalSectionTitle: "Event journal notes and files",
+    eventInheritedFromSession: "Inherited from session record.",
+    openSessionRecord: "Open session record",
+    eventNoSessionRecord: "No linked session record.",
+    journalSectionTitle: "Event notes and files",
     journalNotesLabel: "Notes",
     journalNotesPlaceholder: "Add notes about this event.",
     journalSave: "Save notes",
@@ -161,8 +180,10 @@ const COPY = {
     eventCompany: "Empresa",
     eventLifecycle: "Ciclo",
     eventProposal: "Proposta",
+    eventSession: "Sessao",
     eventContent: "Conteudo",
     eventPreparation: "Preparacao",
+    eventSessionMaterials: "Materiais da sessao",
     eventTitle: "Titulo",
     eventEdit: "Editar evento",
     eventEditCancel: "Cancelar edicao",
@@ -172,6 +193,7 @@ const COPY = {
     eventSaveError: "Nao foi possivel atualizar os campos do evento.",
     eventInvalidTime: "Data/hora ou duracao invalida.",
     eventNoText: "Sem detalhes cadastrados.",
+    eventNoSessionMaterials: "Sem materiais associados a sessao.",
     diagnosticsTitle: "Snapshot Diagnostico",
     diagnosticsResponses: "Respostas",
     diagnosticsLatestResponse: "Ultima resposta",
@@ -199,7 +221,10 @@ const COPY = {
     probabilityLow: "Baixa",
     probabilityMedium: "Media",
     probabilityHigh: "Alta",
-    journalSectionTitle: "Diario do evento: notas e arquivos",
+    eventInheritedFromSession: "Herdado do registro da sessao.",
+    openSessionRecord: "Abrir registro da sessao",
+    eventNoSessionRecord: "Sem registro de sessao vinculado.",
+    journalSectionTitle: "Notas e arquivos do evento",
     journalNotesLabel: "Notas",
     journalNotesPlaceholder: "Adicione anotacoes sobre este evento.",
     journalSave: "Salvar notas",
@@ -268,6 +293,42 @@ function proposalLabel(value: "assignment" | "reschedule" | null, locale: Manage
   if (value === "assignment") return t.proposalAssignment;
   if (value === "reschedule") return t.proposalReschedule;
   return t.proposalNone;
+}
+
+function sessionLabel(
+  details: EventRecordPayload["record"]["details"],
+  locale: ManagerLocale,
+) {
+  const index = details.sessionIndex;
+  const title = details.sessionTitle?.trim() ?? "";
+  if (typeof index === "number" && index > 0 && title.length > 0) {
+    return `${COPY[locale].eventSession} ${index}: ${title}`;
+  }
+  if (typeof index === "number" && index > 0) {
+    return `${COPY[locale].eventSession} ${index}`;
+  }
+  if (title.length > 0) return title;
+  return "-";
+}
+
+function buildSessionRecordHref(params: {
+  sessionId: string | null | undefined;
+  programId: string | null | undefined;
+  returnTo: string;
+}): string | null {
+  const sessionId = params.sessionId?.trim() ?? "";
+  if (!sessionId) return null;
+  const returnToParam = `returnTo=${encodeURIComponent(params.returnTo)}`;
+  if (sessionId.startsWith("library-")) {
+    const libraryId = sessionId.slice("library-".length).trim();
+    if (!libraryId) return null;
+    return `/manager/programs/sessions/library/${encodeURIComponent(libraryId)}?${returnToParam}`;
+  }
+  const programId = params.programId?.trim() ?? "";
+  if (!programId) return null;
+  return `/manager/programs/sessions/program/${encodeURIComponent(programId)}/${encodeURIComponent(
+    sessionId,
+  )}?${returnToParam}`;
 }
 
 function probabilityLabel(value: "low" | "medium" | "high", locale: ManagerLocale) {
@@ -343,8 +404,6 @@ export function ManagerHistoryEventRecord({
   const [editDurationMinutes, setEditDurationMinutes] = useState("60");
   const [editEventStatus, setEditEventStatus] = useState<EventEditStatusOption>("marcado");
   const [editProposal, setEditProposal] = useState<"assignment" | "reschedule" | "none">("none");
-  const [editContent, setEditContent] = useState("");
-  const [editPreparation, setEditPreparation] = useState("");
 
   const loadRecord = useCallback(async () => {
     setLoading(true);
@@ -385,6 +444,8 @@ export function ManagerHistoryEventRecord({
       record.related.programAssignment,
   );
   const programAssignment = record?.related.programAssignment ?? null;
+  const programAssignmentId = programAssignment?.id ?? null;
+  const programAssignmentTitle = programAssignment?.programTitle ?? null;
   const breadcrumbClientId = programAssignment?.clientId ?? record?.clientId ?? null;
   const breadcrumbClientName = record?.clientName ?? t.noCompany;
   const fromHistory = from === "history";
@@ -396,6 +457,47 @@ export function ManagerHistoryEventRecord({
       ? `${record.title || t.journalTitle} (${fmtDateTime(record.startsAt, locale)})`
       : t.pageTitle;
   const isCalendarRecord = record?.recordType === "calendar";
+  const eventRecordHref = useMemo(() => {
+    const base = `/manager/history/events/${encodeURIComponent(eventId)}`;
+    const query = new URLSearchParams();
+    if (from) {
+      query.set("from", from);
+    }
+    if (isClientAreaSource && breadcrumbClientId && programAssignmentId) {
+      query.set("ctx", "client-area");
+      query.set("clientId", breadcrumbClientId);
+      query.set("clientName", breadcrumbClientName);
+      query.set("assignmentId", programAssignmentId);
+      if (programAssignmentTitle) {
+        query.set("assignmentTitle", programAssignmentTitle);
+      }
+      query.set("eventTitle", pageTitle);
+    }
+    const encoded = query.toString();
+    return encoded.length > 0 ? `${base}?${encoded}` : base;
+  }, [
+    breadcrumbClientId,
+    breadcrumbClientName,
+    eventId,
+    from,
+    isClientAreaSource,
+    pageTitle,
+    programAssignmentId,
+    programAssignmentTitle,
+  ]);
+  const sessionRecordHref = useMemo(
+    () =>
+      buildSessionRecordHref({
+        sessionId: record?.details.sessionId ?? null,
+        programId: record?.related.programAssignment?.programId ?? null,
+        returnTo: eventRecordHref,
+      }),
+    [
+      eventRecordHref,
+      record?.details.sessionId,
+      record?.related.programAssignment?.programId,
+    ],
+  );
 
   useEffect(() => {
     if (!record) return;
@@ -404,8 +506,6 @@ export function ManagerHistoryEventRecord({
     setEditDurationMinutes(String(durationMinutesFromRange(record.startsAt, record.endsAt, 60)));
     setEditEventStatus(eventEditStatusFromRecord(record));
     setEditProposal(record.details.proposalKind ?? "none");
-    setEditContent(record.details.content ?? "");
-    setEditPreparation(record.details.preparationRequired ?? "");
     setIsEditMode(false);
     setEventNotice("");
     setEventError("");
@@ -418,8 +518,6 @@ export function ManagerHistoryEventRecord({
     record?.endsAt,
     record?.details.eventLifecycle,
     record?.details.proposalKind,
-    record?.details.content,
-    record?.details.preparationRequired,
   ]);
 
   const applyJournalState = useCallback(
@@ -536,8 +634,6 @@ export function ManagerHistoryEventRecord({
     setEditDurationMinutes(String(durationMinutesFromRange(record.startsAt, record.endsAt, 60)));
     setEditEventStatus(eventEditStatusFromRecord(record));
     setEditProposal(record.details.proposalKind ?? "none");
-    setEditContent(record.details.content ?? "");
-    setEditPreparation(record.details.preparationRequired ?? "");
     setEventNotice("");
     setEventError("");
   }, [record]);
@@ -589,8 +685,6 @@ export function ManagerHistoryEventRecord({
             endsAt: endsAtIso,
             eventLifecycle: nextLifecycle,
             proposalKind: editProposal === "none" ? null : editProposal,
-            content: editContent.trim() || null,
-            preparationRequired: editPreparation.trim() || null,
           },
         }),
       });
@@ -607,10 +701,8 @@ export function ManagerHistoryEventRecord({
       setIsSavingEvent(false);
     }
   }, [
-    editContent,
     editDurationMinutes,
     editEventStatus,
-    editPreparation,
     editProposal,
     editStartsAt,
     editTitle,
@@ -624,8 +716,8 @@ export function ManagerHistoryEventRecord({
 
   return (
     <div className="space-y-5">
-      <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
-        <nav className="mb-3 text-xs text-[#4f6977]">
+      <div className="space-y-3">
+        <nav className="text-xs text-[#4f6977]">
           {fromHistory ? (
             <>
               <Link href="/manager/history" className="text-[#0f5b73] hover:underline">
@@ -677,44 +769,46 @@ export function ManagerHistoryEventRecord({
             </>
           )}
         </nav>
-        <h2 className="text-2xl font-semibold text-[#121b22]">{pageTitle}</h2>
-        {record ? <p className="mt-1 text-sm text-[#4f5f6a]">{record.title}</p> : null}
-        {record && isCalendarRecord ? (
-          <div className="mt-3 flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={() => {
-                if (isEditMode) {
-                  cancelEditMode();
-                  return;
-                }
-                setEventNotice("");
-                setEventError("");
-                setIsEditMode(true);
-              }}
-              className="rounded-full border border-[#9ec8db] px-4 py-2 text-xs font-semibold text-[#0f5b73]"
-            >
-              {isEditMode ? t.eventEditCancel : t.eventEdit}
-            </button>
-            {isEditMode ? (
+        <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+          <h2 className="text-2xl font-semibold text-[#121b22]">{pageTitle}</h2>
+          {record ? <p className="mt-1 text-sm text-[#4f5f6a]">{record.title}</p> : null}
+          {record && isCalendarRecord ? (
+            <div className="mt-3 flex flex-wrap items-center gap-2">
               <button
                 type="button"
-                onClick={() => void saveEventFields()}
-                disabled={
-                  isSavingEvent || isSavingNotes || isUploadingAttachment || removingAttachmentId !== null
-                }
-                className="rounded-full bg-[#123447] px-4 py-2 text-xs font-semibold text-white disabled:opacity-50"
+                onClick={() => {
+                  if (isEditMode) {
+                    cancelEditMode();
+                    return;
+                  }
+                  setEventNotice("");
+                  setEventError("");
+                  setIsEditMode(true);
+                }}
+                className="rounded-full border border-[#9ec8db] px-4 py-2 text-xs font-semibold text-[#0f5b73]"
               >
-                {isSavingEvent ? t.eventSaving : t.eventSave}
+                {isEditMode ? t.eventEditCancel : t.eventEdit}
               </button>
-            ) : null}
-          </div>
-        ) : null}
-        {eventNotice ? <p className="mt-2 text-xs text-[#365160]">{eventNotice}</p> : null}
-        {eventError ? <p className="mt-2 text-xs text-red-600">{eventError}</p> : null}
-        {loading ? <p className="mt-3 text-sm text-[#4f5f6a]">{t.loading}</p> : null}
-        {error ? <p className="mt-3 text-sm text-red-600">{error}</p> : null}
-      </section>
+              {isEditMode ? (
+                <button
+                  type="button"
+                  onClick={() => void saveEventFields()}
+                  disabled={
+                    isSavingEvent || isSavingNotes || isUploadingAttachment || removingAttachmentId !== null
+                  }
+                  className="rounded-full bg-[#123447] px-4 py-2 text-xs font-semibold text-white disabled:opacity-50"
+                >
+                  {isSavingEvent ? t.eventSaving : t.eventSave}
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+          {eventNotice ? <p className="mt-2 text-xs text-[#365160]">{eventNotice}</p> : null}
+          {eventError ? <p className="mt-2 text-xs text-red-600">{eventError}</p> : null}
+          {loading ? <p className="mt-3 text-sm text-[#4f5f6a]">{t.loading}</p> : null}
+          {error ? <p className="mt-3 text-sm text-red-600">{error}</p> : null}
+        </section>
+      </div>
 
       {record ? (
         <>
@@ -812,35 +906,65 @@ export function ManagerHistoryEventRecord({
                 </p>
               )}
             </article>
+            <article className="rounded-xl border border-[#d8e4ee] bg-white p-3 xl:col-span-3">
+              <p className="text-xs text-[#4f6977]">{t.eventSession}</p>
+              <p className="text-sm font-semibold text-[#123447]">
+                {sessionLabel(record.details, locale)}
+              </p>
+              {sessionRecordHref ? (
+                <Link
+                  href={sessionRecordHref}
+                  className="mt-2 inline-flex text-xs font-semibold text-[#0f5b73] hover:underline"
+                >
+                  {t.openSessionRecord}
+                </Link>
+              ) : (
+                <p className="mt-2 text-xs text-[#4f6977]">{t.eventNoSessionRecord}</p>
+              )}
+            </article>
           </section>
 
           <section className="grid gap-3 rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm md:grid-cols-2">
             <article className="rounded-xl border border-[#d8e4ee] bg-white p-3">
               <p className="text-xs text-[#4f6977]">{t.eventContent}</p>
-              {isEditMode && isCalendarRecord ? (
-                <textarea
-                  rows={4}
-                  value={editContent}
-                  onChange={(event) => setEditContent(event.target.value)}
-                  className="mt-1 w-full rounded border border-[#c9dce8] px-2 py-1.5 text-sm text-[#123447]"
-                />
-              ) : (
-                <p className="mt-1 text-sm text-[#123447]">{record.details.content ?? t.eventNoText}</p>
-              )}
+              <p className="mt-1 text-sm text-[#123447]">{record.details.content ?? t.eventNoText}</p>
+              <p className="mt-2 text-xs text-[#4f6977]">{t.eventInheritedFromSession}</p>
             </article>
             <article className="rounded-xl border border-[#d8e4ee] bg-white p-3">
               <p className="text-xs text-[#4f6977]">{t.eventPreparation}</p>
-              {isEditMode && isCalendarRecord ? (
-                <textarea
-                  rows={4}
-                  value={editPreparation}
-                  onChange={(event) => setEditPreparation(event.target.value)}
-                  className="mt-1 w-full rounded border border-[#c9dce8] px-2 py-1.5 text-sm text-[#123447]"
-                />
+              <p className="mt-1 text-sm text-[#123447]">
+                {record.details.preparationRequired ?? t.eventNoText}
+              </p>
+              <p className="mt-2 text-xs text-[#4f6977]">{t.eventInheritedFromSession}</p>
+            </article>
+            <article className="rounded-xl border border-[#d8e4ee] bg-white p-3 md:col-span-2">
+              <p className="text-xs text-[#4f6977]">{t.eventSessionMaterials}</p>
+              {(record.details.sessionMaterials ?? []).length === 0 ? (
+                <p className="mt-1 text-sm text-[#123447]">{t.eventNoSessionMaterials}</p>
               ) : (
-                <p className="mt-1 text-sm text-[#123447]">
-                  {record.details.preparationRequired ?? t.eventNoText}
-                </p>
+                <div className="mt-2 space-y-2">
+                  {(record.details.sessionMaterials ?? []).map((material) => (
+                    <div
+                      key={material.id}
+                      className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[#e3edf3] p-2"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-semibold text-[#123447]">{material.title}</p>
+                        <p className="truncate text-xs text-[#4f6977]">
+                          {material.fileName} | {formatFileSize(material.sizeBytes)}
+                        </p>
+                      </div>
+                      <a
+                        href={material.downloadUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
+                      >
+                        {t.openAttachment}
+                      </a>
+                    </div>
+                  ))}
+                </div>
               )}
             </article>
           </section>

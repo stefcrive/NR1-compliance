@@ -20,6 +20,18 @@ type EventRecordPayload = {
       eventLifecycle: "provisory" | "committed";
       proposalKind: "assignment" | "reschedule" | null;
       availabilityRequestId: string | null;
+      sessionIndex?: number | null;
+      sessionTitle?: string | null;
+      sessionMaterials?: Array<{
+        id: string;
+        title: string;
+        fileName: string;
+        mimeType: string;
+        sizeBytes: number;
+        uploadedAt: string;
+        storagePath: string;
+        downloadUrl: string;
+      }>;
     };
     journal: {
       notes: string | null;
@@ -106,6 +118,19 @@ function proposalLabel(value: "assignment" | "reschedule" | null) {
   return "Sem proposta";
 }
 
+function sessionLabel(details: EventRecordPayload["record"]["details"]): string {
+  const index = details.sessionIndex;
+  const title = details.sessionTitle?.trim() ?? "";
+  if (typeof index === "number" && index > 0 && title.length > 0) {
+    return `Sessao ${index}: ${title}`;
+  }
+  if (typeof index === "number" && index > 0) {
+    return `Sessao ${index}`;
+  }
+  if (title.length > 0) return title;
+  return "-";
+}
+
 function probabilityLabel(value: "low" | "medium" | "high") {
   if (value === "low") return "Baixa";
   if (value === "medium") return "Media";
@@ -162,15 +187,17 @@ export function ClientHistoryEventRecord({
 
   return (
     <div className="space-y-6">
-      <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
-        <nav className="mb-3 text-xs text-[#4f6977]">
+      <div className="space-y-3">
+        <nav className="text-xs text-[#4f6977]">
           <Link href={`/client/${clientSlug}/history`} className="text-[#0f5b73] hover:underline">
             Historico
           </Link>{" "}
           / <span>{eventTitleWithDate}</span>
         </nav>
-        <h2 className="text-2xl font-semibold text-[#141d24]">{eventTitleWithDate}</h2>
-      </section>
+        <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+          <h2 className="text-2xl font-semibold text-[#141d24]">{eventTitleWithDate}</h2>
+        </section>
+      </div>
 
       <section className="grid gap-3 rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm md:grid-cols-2 xl:grid-cols-3">
         <article className="rounded-xl border border-[#d8e4ee] bg-white p-3">
@@ -201,6 +228,10 @@ export function ClientHistoryEventRecord({
           <p className="text-xs text-[#4f6977]">Proposta</p>
           <p className="text-sm font-semibold text-[#123447]">{proposalLabel(record.details.proposalKind)}</p>
         </article>
+        <article className="rounded-xl border border-[#d8e4ee] bg-white p-3">
+          <p className="text-xs text-[#4f6977]">Sessao</p>
+          <p className="text-sm font-semibold text-[#123447]">{sessionLabel(record.details)}</p>
+        </article>
       </section>
 
       <section className="grid gap-3 rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm md:grid-cols-2">
@@ -214,13 +245,43 @@ export function ClientHistoryEventRecord({
             {record.details.preparationRequired ?? "Sem detalhes cadastrados."}
           </p>
         </article>
+        <article className="rounded-xl border border-[#d8e4ee] bg-white p-3 md:col-span-2">
+          <p className="text-xs text-[#4f6977]">Materiais da sessao</p>
+          {(record.details.sessionMaterials ?? []).length === 0 ? (
+            <p className="mt-1 text-sm text-[#123447]">Sem materiais associados.</p>
+          ) : (
+            <div className="mt-2 space-y-2">
+              {(record.details.sessionMaterials ?? []).map((material) => (
+                <div
+                  key={material.id}
+                  className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[#e3edf3] p-2"
+                >
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-semibold text-[#123447]">{material.title}</p>
+                    <p className="truncate text-xs text-[#4f6977]">
+                      {material.fileName} | {formatFileSize(material.sizeBytes)}
+                    </p>
+                  </div>
+                  <a
+                    href={material.downloadUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
+                  >
+                    Abrir arquivo
+                  </a>
+                </div>
+              ))}
+            </div>
+          )}
+        </article>
       </section>
 
       <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
-        <h3 className="text-base font-semibold text-[#123447]">Diario do evento</h3>
+        <h3 className="text-base font-semibold text-[#123447]">Event notes and files</h3>
         {!record.journal.available ? (
           <p className="mt-3 text-sm text-[#4f6977]">
-            Armazenamento do diario indisponivel no momento.
+            Armazenamento de notas e arquivos do evento indisponivel no momento.
           </p>
         ) : (
           <div className="mt-3 space-y-3">

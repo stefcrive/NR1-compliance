@@ -5,13 +5,17 @@ import { z } from "zod";
 
 import { isAdminApiAuthorized } from "@/lib/admin-auth";
 import {
+  CONTINUOUS_PROGRAM_MAX_SESSIONS,
   CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCIES,
   DEFAULT_CONTINUOUS_PROGRAM_METRICS,
   DEFAULT_CONTINUOUS_PROGRAM_QUESTIONS,
   DEFAULT_CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCY,
   type ContinuousProgramMaterial,
   type ContinuousProgramMetrics,
+  type ContinuousProgramSession,
   type ContinuousProgramScheduleFrequency,
+  flattenContinuousProgramSessionMaterials,
+  parseContinuousProgramSessions,
 } from "@/lib/continuous-programs";
 import { isMissingColumnError, isMissingTableError } from "@/lib/supabase-errors";
 import { getSupabaseAdminClient } from "@/lib/supabase-admin";
@@ -26,6 +30,7 @@ type PeriodicProgramRow = {
   schedule_anchor_date?: string | null;
   evaluation_questions?: unknown;
   materials?: unknown;
+  sessions?: unknown;
   metrics?: unknown;
 };
 
@@ -47,6 +52,14 @@ const metricsSchema: z.ZodType<ContinuousProgramMetrics> = z.object({
   satisfactionTarget: z.number().min(1).max(5),
 });
 
+const programSessionSchema: z.ZodType<ContinuousProgramSession> = z.object({
+  id: z.string().trim().min(1).max(120),
+  title: z.string().trim().min(1).max(240),
+  notes: z.string().trim().max(5000).nullable().default(null),
+  preparationRequired: z.string().trim().max(1500).nullable().default(null),
+  materials: z.array(programMaterialSchema).max(80).default([]),
+});
+
 const scheduleFrequencySchema = z.enum(CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCIES);
 
 const createTemplateSchema = z.object({
@@ -58,12 +71,12 @@ const createTemplateSchema = z.object({
   scheduleAnchorDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
   evaluationQuestions: z.array(z.string().trim().min(3).max(240)).min(1).max(20).optional(),
   materials: z.array(programMaterialSchema).max(80).optional(),
+  sessions: z.array(programSessionSchema).min(1).max(CONTINUOUS_PROGRAM_MAX_SESSIONS).optional(),
   metrics: metricsSchema.optional(),
 });
 
-const PROGRAM_BASE_SELECT = "program_id,title,description,target_risk_topic,trigger_threshold";
 const PROGRAM_DETAILS_SELECT =
-  "program_id,title,description,target_risk_topic,trigger_threshold,schedule_frequency,schedule_anchor_date,evaluation_questions,materials,metrics";
+  "program_id,title,description,target_risk_topic,trigger_threshold,schedule_frequency,schedule_anchor_date,evaluation_questions,materials,sessions,metrics";
 
 function todayIsoDate(): string {
   return new Date().toISOString().slice(0, 10);
@@ -84,10 +97,11 @@ function parseEvaluationQuestions(value: unknown): string[] {
   return parsed.data;
 }
 
-function parseMaterials(value: unknown): ContinuousProgramMaterial[] {
-  const parsed = z.array(programMaterialSchema).max(80).safeParse(value);
-  if (!parsed.success) return [];
-  return parsed.data;
+function parseSessions(row: Pick<PeriodicProgramRow, "sessions" | "materials">): ContinuousProgramSession[] {
+  return parseContinuousProgramSessions(row.sessions, {
+    fallbackMaterials: row.materials,
+    minCount: 1,
+  });
 }
 
 function parseMetrics(value: unknown): ContinuousProgramMetrics {
@@ -97,6 +111,7 @@ function parseMetrics(value: unknown): ContinuousProgramMetrics {
 }
 
 function mapProgram(row: PeriodicProgramRow) {
+  const sessions = parseSessions(row);
   return {
     id: row.program_id,
     title: row.title,
@@ -109,7 +124,8 @@ function mapProgram(row: PeriodicProgramRow) {
         ? row.schedule_anchor_date
         : todayIsoDate(),
     evaluationQuestions: parseEvaluationQuestions(row.evaluation_questions),
-    materials: parseMaterials(row.materials),
+    materials: flattenContinuousProgramSessionMaterials(sessions),
+    sessions,
     metrics: parseMetrics(row.metrics),
   };
 }
@@ -127,6 +143,10 @@ export async function POST(request: NextRequest) {
   }
 
   const programId = randomUUID();
+  const normalizedSessions = parseContinuousProgramSessions(parsed.sessions, {
+    fallbackMaterials: parsed.materials,
+    minCount: 1,
+  });
   const payload = {
     program_id: programId,
     title: parsed.title,
@@ -136,16 +156,9 @@ export async function POST(request: NextRequest) {
     schedule_frequency: parsed.scheduleFrequency ?? DEFAULT_CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCY,
     schedule_anchor_date: parsed.scheduleAnchorDate ?? todayIsoDate(),
     evaluation_questions: parsed.evaluationQuestions ?? DEFAULT_CONTINUOUS_PROGRAM_QUESTIONS,
-    materials: parsed.materials ?? [],
+    materials: flattenContinuousProgramSessionMaterials(normalizedSessions),
+    sessions: normalizedSessions,
     metrics: parsed.metrics ?? DEFAULT_CONTINUOUS_PROGRAM_METRICS,
-  };
-
-  const basePayload = {
-    program_id: programId,
-    title: payload.title,
-    description: payload.description,
-    target_risk_topic: payload.target_risk_topic,
-    trigger_threshold: payload.trigger_threshold,
   };
 
   const supabase = getSupabaseAdminClient();
@@ -155,14 +168,17 @@ export async function POST(request: NextRequest) {
     .select(PROGRAM_DETAILS_SELECT)
     .maybeSingle<PeriodicProgramRow>();
 
-  const insertResult =
-    detailedInsertResult.error && isMissingColumnError(detailedInsertResult.error)
-      ? await supabase
-          .from("periodic_programs")
-          .insert(basePayload)
-          .select(PROGRAM_BASE_SELECT)
-          .maybeSingle<PeriodicProgramRow>()
-      : detailedInsertResult;
+  if (detailedInsertResult.error && isMissingColumnError(detailedInsertResult.error)) {
+    return NextResponse.json(
+      {
+        error:
+          "This database schema does not support sessions/materials, frequency, questionnaire, or metrics yet. Apply migrations 20260302190000_continuous_program_details.sql and 20260307090000_continuous_program_sessions.sql.",
+      },
+      { status: 409 },
+    );
+  }
+
+  const insertResult = detailedInsertResult;
 
   if (insertResult.error && !isMissingTableError(insertResult.error, "periodic_programs")) {
     return NextResponse.json({ error: "Could not create continuous program template." }, { status: 500 });

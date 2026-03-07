@@ -6,6 +6,7 @@ import {
   parseContinuousProgramEvaluationQuestions,
   summarizeContinuousProgramEvaluations,
 } from "@/lib/continuous-program-evaluations";
+import { parseContinuousProgramSessions } from "@/lib/continuous-programs";
 import { isMissingColumnError, isMissingTableError } from "@/lib/supabase-errors";
 import { getSupabaseAdminClient } from "@/lib/supabase-admin";
 
@@ -40,12 +41,19 @@ type PeriodicProgramRow = {
   target_risk_topic: number | string;
   trigger_threshold: number | string;
   evaluation_questions?: unknown;
+  sessions?: unknown;
 };
 
 type ClientProgramRow = {
   client_program_id: string;
   program_id: string;
+  client_id?: string | null;
   status: "Recommended" | "Active" | "Completed";
+};
+
+type ClientCompanyRow = {
+  client_id: string;
+  company_name?: string | null;
 };
 
 type ProgramEvaluationRow = {
@@ -57,6 +65,11 @@ function mapLegacyStatus(status: LegacyDiagnosticRow["status"]): SurveyDiagnosti
   if (status === "Active") return "live";
   if (status === "Completed") return "closed";
   return "draft";
+}
+
+function countProgramSessions(payload: unknown) {
+  if (Array.isArray(payload)) return payload.length;
+  return 0;
 }
 
 export async function GET(request: NextRequest) {
@@ -189,21 +202,50 @@ export async function GET(request: NextRequest) {
     }));
   }
 
-  const periodicWithQuestionsResult = await supabase
+  const periodicWithQuestionsAndSessionsResult = await supabase
     .from("periodic_programs")
-    .select("program_id,title,description,target_risk_topic,trigger_threshold,evaluation_questions")
+    .select("program_id,title,description,target_risk_topic,trigger_threshold,evaluation_questions,sessions")
     .order("title", { ascending: true })
     .returns<PeriodicProgramRow[]>();
 
-  const periodicResult =
-    periodicWithQuestionsResult.error &&
-    isMissingColumnError(periodicWithQuestionsResult.error, "evaluation_questions")
-      ? await supabase
+  let periodicResult = periodicWithQuestionsAndSessionsResult;
+  if (periodicWithQuestionsAndSessionsResult.error) {
+    const missingEvaluationQuestions = isMissingColumnError(
+      periodicWithQuestionsAndSessionsResult.error,
+      "evaluation_questions",
+    );
+    const missingSessions = isMissingColumnError(
+      periodicWithQuestionsAndSessionsResult.error,
+      "sessions",
+    );
+
+    if (missingEvaluationQuestions && missingSessions) {
+      periodicResult = await supabase
+        .from("periodic_programs")
+        .select("program_id,title,description,target_risk_topic,trigger_threshold")
+        .order("title", { ascending: true })
+        .returns<PeriodicProgramRow[]>();
+    } else if (missingEvaluationQuestions) {
+      periodicResult = await supabase
+        .from("periodic_programs")
+        .select("program_id,title,description,target_risk_topic,trigger_threshold,sessions")
+        .order("title", { ascending: true })
+        .returns<PeriodicProgramRow[]>();
+    } else if (missingSessions) {
+      periodicResult = await supabase
+        .from("periodic_programs")
+        .select("program_id,title,description,target_risk_topic,trigger_threshold,evaluation_questions")
+        .order("title", { ascending: true })
+        .returns<PeriodicProgramRow[]>();
+      if (periodicResult.error && isMissingColumnError(periodicResult.error, "evaluation_questions")) {
+        periodicResult = await supabase
           .from("periodic_programs")
           .select("program_id,title,description,target_risk_topic,trigger_threshold")
           .order("title", { ascending: true })
-          .returns<PeriodicProgramRow[]>()
-      : periodicWithQuestionsResult;
+          .returns<PeriodicProgramRow[]>();
+      }
+    }
+  }
 
   if (periodicResult.error && !isMissingTableError(periodicResult.error, "periodic_programs")) {
     return NextResponse.json({ error: "Could not load continuous programs." }, { status: 500 });
@@ -211,14 +253,23 @@ export async function GET(request: NextRequest) {
 
   const periodicPrograms = periodicResult.data ?? [];
   const programIds = periodicPrograms.map((item) => item.program_id);
-  const clientProgramsResult =
+  const clientProgramsWithClientResult =
     programIds.length > 0
+      ? await supabase
+          .from("client_programs")
+          .select("client_program_id,program_id,client_id,status")
+          .in("program_id", programIds)
+          .returns<ClientProgramRow[]>()
+      : { data: [] as ClientProgramRow[], error: null };
+  const clientProgramsResult =
+    clientProgramsWithClientResult.error &&
+    isMissingColumnError(clientProgramsWithClientResult.error, "client_id")
       ? await supabase
           .from("client_programs")
           .select("client_program_id,program_id,status")
           .in("program_id", programIds)
           .returns<ClientProgramRow[]>()
-      : { data: [] as ClientProgramRow[], error: null };
+      : clientProgramsWithClientResult;
 
   if (
     clientProgramsResult.error &&
@@ -244,6 +295,46 @@ export async function GET(request: NextRequest) {
     if (row.status === "Active") current.active += 1;
     if (row.status === "Completed") current.completed += 1;
     assignmentCountByProgram.set(row.program_id, current);
+  }
+
+  const assignmentCompaniesByProgram = new Map<
+    string,
+    Array<{ id: string; companyName: string }>
+  >();
+  const assignmentRowsWithClientId = (clientProgramsResult.data ?? []).filter(
+    (row): row is ClientProgramRow & { client_id: string } => Boolean(row.client_id),
+  );
+  const assignmentClientIds = Array.from(
+    new Set(assignmentRowsWithClientId.map((row) => row.client_id)),
+  );
+  const clientNameById = new Map<string, string>();
+
+  if (assignmentClientIds.length > 0) {
+    const clientsResult = await supabase
+      .from("clients")
+      .select("client_id,company_name")
+      .in("client_id", assignmentClientIds)
+      .returns<ClientCompanyRow[]>();
+
+    if (!clientsResult.error) {
+      for (const row of clientsResult.data ?? []) {
+        const fallbackName = row.client_id;
+        const companyName = row.company_name?.trim() || fallbackName;
+        clientNameById.set(row.client_id, companyName);
+      }
+    }
+
+    for (const row of assignmentRowsWithClientId) {
+      const companyName = clientNameById.get(row.client_id) ?? row.client_id;
+      const list = assignmentCompaniesByProgram.get(row.program_id) ?? [];
+      if (!list.some((item) => item.id === row.client_id)) {
+        list.push({
+          id: row.client_id,
+          companyName,
+        });
+      }
+      assignmentCompaniesByProgram.set(row.program_id, list);
+    }
   }
 
   const assignmentProgramById = new Map(
@@ -294,12 +385,20 @@ export async function GET(request: NextRequest) {
         description: item.description,
         targetRiskTopic: Number(item.target_risk_topic),
         triggerThreshold: Number(item.trigger_threshold),
+        sessionCount: countProgramSessions(item.sessions),
+        sessions: parseContinuousProgramSessions(item.sessions, { minCount: 0 }).map((session) => ({
+          id: session.id,
+          title: session.title,
+        })),
         assignments: assignmentCountByProgram.get(item.program_id) ?? {
           total: 0,
           recommended: 0,
           active: 0,
           completed: 0,
         },
+        assignedCompanies: (assignmentCompaniesByProgram.get(item.program_id) ?? [])
+          .slice()
+          .sort((left, right) => left.companyName.localeCompare(right.companyName)),
         evaluation: {
           submissions: evaluationSummary.submissions,
           overallAverage: evaluationSummary.overallAverage,

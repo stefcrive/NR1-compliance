@@ -1,5 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import {
+  parseContinuousProgramMaterials,
+  parseContinuousProgramSessions,
+  type ContinuousProgramMaterial,
+} from "@/lib/continuous-programs";
 import { parseEventRecordAttachments, type EventRecordJournal } from "@/lib/event-record-journal";
 import { extractCalendarEventDetails } from "@/lib/master-calendar";
 import { slugify } from "@/lib/slug";
@@ -40,6 +45,28 @@ type ClientProgramRow = {
 type ProgramRow = {
   program_id: string;
   title: string;
+};
+
+type ProgramSessionsRow = {
+  program_id: string;
+  sessions?: unknown;
+  materials?: unknown;
+};
+
+type SessionLibraryRow = {
+  session_library_id: string;
+  title: string;
+  notes: string | null;
+  preparation_required: string | null;
+  materials: unknown;
+};
+
+type InheritedSessionRecord = {
+  id: string;
+  title: string;
+  notes: string | null;
+  preparationRequired: string | null;
+  materials: ContinuousProgramMaterial[];
 };
 
 type ModernCampaignRow = {
@@ -371,6 +398,106 @@ async function loadLatestDrps(surveyId: string): Promise<{
   };
 }
 
+async function loadLibrarySessionRecord(
+  sessionLibraryId: string,
+): Promise<InheritedSessionRecord | null> {
+  const supabase = getSupabaseAdminClient();
+  const result = await supabase
+    .from("continuous_program_session_library")
+    .select("session_library_id,title,notes,preparation_required,materials")
+    .eq("session_library_id", sessionLibraryId)
+    .maybeSingle<SessionLibraryRow>();
+
+  if (result.error) {
+    if (isMissingTableError(result.error, "continuous_program_session_library")) {
+      return null;
+    }
+    throw new Error("Could not load inherited session record.");
+  }
+  if (!result.data) return null;
+
+  return {
+    id: `library-${result.data.session_library_id}`,
+    title: result.data.title?.trim() || "Sessao",
+    notes: normalizeNotes(result.data.notes),
+    preparationRequired: normalizeNotes(result.data.preparation_required),
+    materials: parseContinuousProgramMaterials(result.data.materials),
+  };
+}
+
+async function loadInheritedSessionRecord(params: {
+  sessionId: string | null | undefined;
+  programId: string | null | undefined;
+}): Promise<InheritedSessionRecord | null> {
+  const sessionId = params.sessionId?.trim() ?? "";
+  if (!sessionId) return null;
+
+  if (sessionId.startsWith("library-")) {
+    const libraryId = sessionId.slice("library-".length).trim();
+    if (!libraryId) return null;
+    return loadLibrarySessionRecord(libraryId);
+  }
+
+  const programId = params.programId?.trim() ?? "";
+  if (programId) {
+    const supabase = getSupabaseAdminClient();
+    const programResult = await supabase
+      .from("periodic_programs")
+      .select("program_id,sessions,materials")
+      .eq("program_id", programId)
+      .maybeSingle<ProgramSessionsRow>();
+
+    if (programResult.error) {
+      if (
+        isMissingTableError(programResult.error, "periodic_programs") ||
+        isMissingColumnError(programResult.error, "sessions") ||
+        isMissingColumnError(programResult.error, "materials")
+      ) {
+        return null;
+      }
+      throw new Error("Could not load inherited session record.");
+    }
+
+    if (programResult.data) {
+      const sessions = parseContinuousProgramSessions(programResult.data.sessions, {
+        fallbackMaterials: programResult.data.materials,
+      });
+      const matched = sessions.find((session) => session.id === sessionId);
+      if (matched) {
+        return {
+          id: matched.id,
+          title: matched.title,
+          notes: matched.notes,
+          preparationRequired: matched.preparationRequired,
+          materials: matched.materials,
+        };
+      }
+    }
+  }
+
+  const libraryFallback = await loadLibrarySessionRecord(sessionId);
+  if (!libraryFallback) return null;
+  return {
+    ...libraryFallback,
+    id: sessionId,
+  };
+}
+
+function mergeInheritedSessionDetails(
+  details: ReturnType<typeof extractCalendarEventDetails>,
+  inheritedSession: InheritedSessionRecord | null,
+) {
+  if (!inheritedSession) return details;
+  return {
+    ...details,
+    sessionId: inheritedSession.id,
+    sessionTitle: inheritedSession.title,
+    content: inheritedSession.notes,
+    preparationRequired: inheritedSession.preparationRequired,
+    sessionMaterials: inheritedSession.materials,
+  };
+}
+
 export async function GET(
   request: NextRequest,
   context: { params: Promise<{ clientSlug: string; eventId: string }> },
@@ -476,7 +603,14 @@ export async function GET(
       ? await loadProgramAssignment(client.client_id, eventResult.data.source_client_program_id)
       : { assignment: null, programTitle: null };
     const assignment = programAssignmentLoaded.assignment;
-    const journal = await loadEventJournalForClient(eventId, client.client_id);
+    const [journal, inheritedSession] = await Promise.all([
+      loadEventJournalForClient(eventId, client.client_id),
+      loadInheritedSessionRecord({
+        sessionId: details.sessionId ?? null,
+        programId: assignment?.program_id ?? null,
+      }),
+    ]);
+    const mergedDetails = mergeInheritedSessionDetails(details, inheritedSession);
 
     return NextResponse.json({
       record: {
@@ -487,7 +621,7 @@ export async function GET(
         status: eventResult.data.status,
         startsAt: eventResult.data.starts_at,
         endsAt: eventResult.data.ends_at,
-        details,
+        details: mergedDetails,
         journal,
         related: {
           campaign: null,

@@ -6,11 +6,17 @@ import { CompanyLogoLink } from "@/components/company-logo-link";
 import { RoleLoginForm } from "@/components/role-login-form";
 import { CLIENT_SESSION_COOKIE, parseClientSessionToken } from "@/lib/auth/session";
 
-export default async function ClientAccessPage() {
+export default async function ClientAccessPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ blocked?: string }>;
+}) {
+  const { blocked } = await searchParams;
+  const blockedByPolicy = blocked === "1";
   const cookieStore = await cookies();
   const session = parseClientSessionToken(cookieStore.get(CLIENT_SESSION_COOKIE)?.value);
 
-  if (session) {
+  if (session && !blockedByPolicy) {
     redirect(`/client/${session.clientSlug}/company`);
   }
 
@@ -33,6 +39,11 @@ export default async function ClientAccessPage() {
           <p className="mt-2 text-sm text-[#4a5862]">
             Authenticate and enter your company workspace for diagnostics and programs.
           </p>
+          {blockedByPolicy ? (
+            <p className="mt-3 rounded-lg border border-[#f0c9c9] bg-[#fff5f5] px-3 py-2 text-sm text-[#8f2a2a]">
+              Client access is currently blocked for this workspace.
+            </p>
+          ) : null}
         </header>
         <RoleLoginForm role="client" />
       </div>

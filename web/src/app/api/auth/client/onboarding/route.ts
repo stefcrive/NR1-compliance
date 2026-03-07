@@ -39,6 +39,8 @@ type ClientRow = {
   client_id: string;
   company_name: string;
   portal_slug?: string | null;
+  status?: "Active" | "Pending" | "Inactive" | null;
+  billing_status?: "up_to_date" | "pending" | "overdue" | "blocked" | null;
 };
 
 type InvitationState = {
@@ -46,6 +48,7 @@ type InvitationState = {
   clientId: string;
   companyName: string;
   clientSlug: string;
+  isBlocked: boolean;
   hasCredentials: boolean;
   loginEmail: string | null;
   status: "pending" | "accepted" | "expired" | "revoked";
@@ -72,22 +75,34 @@ function inferInvitationStatus(invitation: InvitationRow): InvitationState["stat
   return "pending";
 }
 
-async function loadClientById(clientId: string): Promise<{ companyName: string; clientSlug: string } | null> {
+function isClientBlocked(
+  status: "Active" | "Pending" | "Inactive" | null | undefined,
+  billingStatus: "up_to_date" | "pending" | "overdue" | "blocked" | null | undefined,
+) {
+  return status === "Inactive" || billingStatus === "blocked";
+}
+
+async function loadClientById(
+  clientId: string,
+): Promise<{ companyName: string; clientSlug: string; isBlocked: boolean } | null> {
   const supabase = getSupabaseAdminClient();
   const result = await supabase
     .from("clients")
-    .select("client_id,company_name,portal_slug")
+    .select("client_id,company_name,portal_slug,status,billing_status")
     .eq("client_id", clientId)
     .maybeSingle<ClientRow>();
 
   if (result.error) {
-    if (!isMissingColumnError(result.error, "portal_slug")) {
+    if (
+      !isMissingColumnError(result.error, "portal_slug") &&
+      !isMissingColumnError(result.error, "billing_status")
+    ) {
       throw new Error("Could not load client workspace.");
     }
 
     const fallbackResult = await supabase
       .from("clients")
-      .select("client_id,company_name")
+      .select("client_id,company_name,status")
       .eq("client_id", clientId)
       .maybeSingle<ClientRow>();
 
@@ -98,6 +113,7 @@ async function loadClientById(clientId: string): Promise<{ companyName: string; 
     return {
       companyName: fallbackResult.data.company_name,
       clientSlug: slugify(fallbackResult.data.company_name),
+      isBlocked: isClientBlocked(fallbackResult.data.status, null),
     };
   }
 
@@ -108,6 +124,7 @@ async function loadClientById(clientId: string): Promise<{ companyName: string; 
   return {
     companyName: result.data.company_name,
     clientSlug: result.data.portal_slug?.trim() || slugify(result.data.company_name),
+    isBlocked: isClientBlocked(result.data.status, result.data.billing_status),
   };
 }
 
@@ -157,6 +174,7 @@ async function loadInvitationState(token: string): Promise<InvitationState | nul
     clientId: invitationResult.data.client_id,
     companyName: clientWorkspace.companyName,
     clientSlug: clientWorkspace.clientSlug,
+    isBlocked: clientWorkspace.isBlocked,
     hasCredentials: Boolean(credentialResult.data),
     loginEmail: credentialResult.data?.login_email ?? null,
     status: inferInvitationStatus(invitationResult.data),
@@ -193,6 +211,7 @@ export async function GET(request: NextRequest) {
       companyName: invitationState.companyName,
       clientSlug: invitationState.clientSlug,
       status: invitationState.status,
+      isBlocked: invitationState.isBlocked,
       expiresAt: invitationState.expiresAt,
       hasCredentials: invitationState.hasCredentials,
       loginEmail: invitationState.loginEmail,
@@ -225,6 +244,12 @@ export async function POST(request: NextRequest) {
 
   if (!invitationState) {
     return NextResponse.json({ error: "Invitation not found." }, { status: 404 });
+  }
+  if (invitationState.isBlocked) {
+    return NextResponse.json(
+      { error: "Client access is blocked for this workspace." },
+      { status: 403 },
+    );
   }
 
   if (invitationState.status === "revoked") {

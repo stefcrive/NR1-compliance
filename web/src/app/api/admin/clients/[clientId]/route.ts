@@ -921,3 +921,32 @@ export async function PATCH(
 
   return NextResponse.json(responsePayload);
 }
+
+export async function DELETE(
+  request: NextRequest,
+  context: { params: Promise<{ clientId: string }> },
+) {
+  if (!isAdminApiAuthorized(request)) {
+    return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
+  }
+
+  const { clientId } = await context.params;
+  const supabase = getSupabaseAdminClient();
+
+  const deleteResult = await supabase
+    .from("clients")
+    .delete()
+    .eq("client_id", clientId)
+    .select("client_id")
+    .maybeSingle<{ client_id: string }>();
+
+  if (deleteResult.error) {
+    return NextResponse.json({ error: "Could not delete client." }, { status: 500 });
+  }
+
+  if (!deleteResult.data) {
+    return NextResponse.json({ error: "Client not found." }, { status: 404 });
+  }
+
+  return NextResponse.json({ deleted: true, clientId: deleteResult.data.client_id });
+}

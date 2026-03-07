@@ -464,13 +464,14 @@ export function ManagerDrpsDiagnosticEditor({ campaignId }: { campaignId: string
 
   return (
     <div className="space-y-6">
-      <section className="rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
-        <nav className="mb-3 text-xs text-[#4f6977]">
+      <div className="space-y-3">
+        <nav className="text-xs text-[#4f6977]">
           <Link href="/manager/programs" className="text-[#0f5b73]">
             {t.breadcrumbBase}
           </Link>{" "}
           / <span>{diagnostic.name}</span>
         </nav>
+        <section className="rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="text-2xl font-semibold text-[#123447]">{diagnostic.name}</h2>
@@ -578,7 +579,8 @@ export function ManagerDrpsDiagnosticEditor({ campaignId }: { campaignId: string
             </Link>
           </div>
         ) : null}
-      </section>
+        </section>
+      </div>
 
       <section className="space-y-4 rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
         <div>

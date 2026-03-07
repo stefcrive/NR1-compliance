@@ -24,6 +24,25 @@ type Sector = {
   accessLink: string | null;
   submissionCount: number;
   lastSubmittedAt: string | null;
+  suppressed?: boolean;
+  sectorRiskIndex?: number | null;
+  riskFactors?: RiskFactorMetric[];
+};
+
+type RiskFactorMetric = {
+  topicId: number;
+  riskFactor: string;
+  meanExposure: number | null;
+};
+
+type RiskMatrixPoint = {
+  topicId: number;
+  riskFactor: string;
+  probability: number | null;
+  severity: number;
+  riskScore: number | null;
+  affectedEmployees: number;
+  category: "low" | "moderate" | "high" | "critical" | null;
 };
 
 type Report = {
@@ -106,6 +125,9 @@ type Payload = {
     totals: { responses: number; topics: number; activeSectors: number };
     riskDistribution: { low: number; medium: number; high: number; critical: number };
     sectors: Sector[];
+    metrics?: {
+      riskMatrix: RiskMatrixPoint[];
+    };
     latestDrps: {
       reference_period: string;
       part1_probability_score: number;
@@ -198,6 +220,46 @@ function riskProfileClassLabel(value: "baixa" | "media" | "alta") {
   if (value === "baixa") return "Baixa";
   if (value === "media") return "Media";
   return "Alta";
+}
+
+const TOPIC_SHORT_NAMES: Record<number, string> = {
+  1: "Assedio",
+  2: "Suporte",
+  3: "Mudancas",
+  4: "Clareza",
+  5: "Reconhecimento",
+  6: "Autonomia",
+  7: "Justica",
+  8: "Traumaticos",
+  9: "Subcarga",
+  10: "Sobrecarga",
+  11: "Relacionamentos",
+  12: "Comunicacao",
+  13: "Remoto/isolado",
+};
+
+function shortRiskName(label: string, topicId?: number) {
+  if (topicId && TOPIC_SHORT_NAMES[topicId]) return TOPIC_SHORT_NAMES[topicId];
+  const normalized = label.trim();
+  if (normalized.length <= 18) return normalized;
+  return `${normalized.slice(0, 16)}...`;
+}
+
+function riskMatrixCategoryStyles(category: "low" | "moderate" | "high" | "critical" | null) {
+  if (category === "low") {
+    return { fill: "#36b37e66", stroke: "#0b7a52", text: "#0b7a52" };
+  }
+  if (category === "moderate") {
+    return { fill: "#f5b94266", stroke: "#a06200", text: "#8a5b2d" };
+  }
+  if (category === "high") {
+    return { fill: "#f28b4266", stroke: "#a74600", text: "#9a4314" };
+  }
+  return { fill: "#dc5c5c66", stroke: "#9f1f1f", text: "#8a2d2d" };
+}
+
+function topicCode(topicId: number) {
+  return `T${String(topicId).padStart(2, "0")}`;
 }
 
 function durationMinutesFromRange(
@@ -362,6 +424,153 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
   const companyRiskProfilePending = riskProfileSummary?.progress.status !== "completed";
   const linksActionCampaign =
     selectedCampaign?.status === "live" ? selectedCampaign : openCampaigns[0] ?? null;
+  const riskMatrixPoints = useMemo(
+    () =>
+      (payload?.dashboard?.metrics?.riskMatrix ?? [])
+        .filter((point) => point.probability !== null && Number.isFinite(point.severity))
+        .slice()
+        .sort((left, right) => (right.riskScore ?? 0) - (left.riskScore ?? 0)),
+    [payload?.dashboard?.metrics?.riskMatrix],
+  );
+  const riskMatrixModel = useMemo(() => {
+    if (riskMatrixPoints.length === 0) return null;
+
+    const width = 500;
+    const height = 320;
+    const padding = { left: 46, right: 24, top: 18, bottom: 38 };
+    const plotWidth = width - padding.left - padding.right;
+    const plotHeight = height - padding.top - padding.bottom;
+    const xTicks = [0, 0.25, 0.5, 0.75, 1];
+    const yTicks = [1, 2, 3, 4, 5];
+
+    const xScale = (value: number) => padding.left + Math.max(0, Math.min(1, value)) * plotWidth;
+    const yScale = (value: number) => padding.top + (1 - (Math.max(1, Math.min(5, value)) - 1) / 4) * plotHeight;
+
+    const maxAffected = Math.max(...riskMatrixPoints.map((point) => Math.max(point.affectedEmployees, 1)), 1);
+    const points = riskMatrixPoints.map((point) => {
+      const probability = point.probability ?? 0;
+      const affected = Math.max(point.affectedEmployees, 1);
+      const normalizedSize = Math.sqrt(affected) / Math.sqrt(maxAffected);
+      const radius = 5 + normalizedSize * 12;
+      return {
+        ...point,
+        x: xScale(probability),
+        y: yScale(point.severity),
+        radius,
+        label: shortRiskName(point.riskFactor, point.topicId),
+        styles: riskMatrixCategoryStyles(point.category),
+      };
+    });
+
+    return {
+      width,
+      height,
+      padding,
+      xTicks,
+      yTicks,
+      points,
+    };
+  }, [riskMatrixPoints]);
+  const sectorRadarModel = useMemo(() => {
+    const sectors = (payload?.dashboard?.sectors ?? [])
+      .filter((sector) => !sector.suppressed && (sector.riskFactors?.length ?? 0) > 0)
+      .slice()
+      .sort((left, right) => (right.sectorRiskIndex ?? 0) - (left.sectorRiskIndex ?? 0))
+      .slice(0, 6);
+    if (sectors.length === 0) return null;
+
+    const topicMap = new Map<number, { topicId: number; label: string }>();
+    for (const sector of sectors) {
+      for (const factor of sector.riskFactors ?? []) {
+        if (!topicMap.has(factor.topicId)) {
+          topicMap.set(factor.topicId, {
+            topicId: factor.topicId,
+            label: shortRiskName(factor.riskFactor, factor.topicId),
+          });
+        }
+      }
+    }
+
+    const axes = Array.from(topicMap.values()).sort((left, right) => left.topicId - right.topicId);
+    if (axes.length === 0) return null;
+
+    const size = 360;
+    const center = size / 2;
+    const radius = 126;
+    const labelRadius = radius + 18;
+    const levels = [0.25, 0.5, 0.75, 1];
+    const palette = [
+      { line: "#1d4ed8", fill: "#1d4ed833" },
+      { line: "#0f766e", fill: "#0f766e33" },
+      { line: "#b45309", fill: "#b4530933" },
+      { line: "#be123c", fill: "#be123c33" },
+      { line: "#0369a1", fill: "#0369a133" },
+      { line: "#3f6212", fill: "#3f621233" },
+    ];
+
+    const axisVertices = axes.map((axis, index) => {
+      const angle = -Math.PI / 2 + (2 * Math.PI * index) / axes.length;
+      const axisX = center + Math.cos(angle) * radius;
+      const axisY = center + Math.sin(angle) * radius;
+      const baseLabelX = center + Math.cos(angle) * labelRadius;
+      const baseLabelY = center + Math.sin(angle) * labelRadius;
+      const cos = Math.cos(angle);
+      const labelAnchor: "start" | "middle" | "end" = cos > 0.28 ? "start" : cos < -0.28 ? "end" : "middle";
+      return {
+        ...axis,
+        angle,
+        axisX,
+        axisY,
+        labelX: Math.min(size - 10, Math.max(10, baseLabelX)),
+        labelY: Math.min(size - 10, Math.max(10, baseLabelY)),
+        labelAnchor,
+      };
+    });
+
+    const rings = levels.map((level) =>
+      axisVertices
+        .map((axis) => `${center + (axis.axisX - center) * level},${center + (axis.axisY - center) * level}`)
+        .join(" "),
+    );
+
+    const axisLines = axisVertices.map((axis) => ({
+      topicId: axis.topicId,
+      x1: center,
+      y1: center,
+      x2: axis.axisX,
+      y2: axis.axisY,
+    }));
+
+    const sectorPolygons = sectors.map((sector, index) => {
+      const colors = palette[index % palette.length];
+      const byTopicId = new Map((sector.riskFactors ?? []).map((factor) => [factor.topicId, factor]));
+      const vertices = axisVertices.map((axis) => {
+        const meanExposure = byTopicId.get(axis.topicId)?.meanExposure ?? 0;
+        const normalized = Math.max(0, Math.min(1, meanExposure / 5));
+        return {
+          topicId: axis.topicId,
+          x: center + Math.cos(axis.angle) * radius * normalized,
+          y: center + Math.sin(axis.angle) * radius * normalized,
+        };
+      });
+      return {
+        sector: sector.sector,
+        sectorRiskIndex: sector.sectorRiskIndex ?? null,
+        lineColor: colors.line,
+        fillColor: colors.fill,
+        polygonPoints: vertices.map((vertex) => `${vertex.x},${vertex.y}`).join(" "),
+        vertices,
+      };
+    });
+
+    return {
+      size,
+      axes: axisVertices,
+      rings,
+      axisLines,
+      sectorPolygons,
+    };
+  }, [payload?.dashboard?.sectors]);
 
   useEffect(() => {
     if (!payload || !resultsCampaign) return;

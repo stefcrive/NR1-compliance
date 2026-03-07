@@ -10,7 +10,16 @@ import {
 } from "@/lib/availability-scheduler";
 import { isAdminApiAuthorized } from "@/lib/admin-auth";
 import { createClientNotification } from "@/lib/client-notifications";
-import { DEFAULT_CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCY } from "@/lib/continuous-programs";
+import {
+  DEFAULT_CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCY,
+  parseContinuousProgramSessions,
+} from "@/lib/continuous-programs";
+import {
+  buildAssignmentSessionPlans,
+  buildSequentialAnnualPlanMonths,
+  normalizeAnnualPlanMonths as normalizeAnnualPlanMonthKeys,
+  type AssignmentSessionPlan,
+} from "@/lib/continuous-program-assignment-sessions";
 import {
   buildDrpsCalendarEvents,
   extractCalendarEventDetails,
@@ -34,6 +43,8 @@ type PeriodicProgramRow = {
   trigger_threshold: number | string;
   schedule_frequency?: string | null;
   schedule_anchor_date?: string | null;
+  materials?: unknown;
+  sessions?: unknown;
 };
 
 type ClientProgramRow = {
@@ -70,6 +81,9 @@ type AssignmentCalendarEvent = {
   status: "scheduled" | "completed" | "cancelled";
   lifecycle: "provisory" | "committed";
   proposalKind: "assignment" | "reschedule" | null;
+  sessionId?: string | null;
+  sessionIndex?: number | null;
+  sessionTitle?: string | null;
 };
 
 const cadenceFrequencyValues = [
@@ -85,12 +99,6 @@ const annualPlanMonthRegex = /^\d{4}-(0[1-9]|1[0-2])$/;
 
 function todayIsoDate(): string {
   return new Date().toISOString().slice(0, 10);
-}
-
-function toMonthKey(value: Date): string {
-  const year = value.getUTCFullYear();
-  const month = String(value.getUTCMonth() + 1).padStart(2, "0");
-  return `${year}-${month}`;
 }
 
 function parseScheduleFrequency(value: unknown): string {
@@ -140,28 +148,6 @@ const assignProgramSchema = z.object({
   annualPlanMonths: z.array(z.string().regex(annualPlanMonthRegex)).max(12).optional(),
 });
 
-function normalizeAnnualPlanMonths(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  const unique = new Set<string>();
-  for (const item of value) {
-    if (typeof item !== "string") continue;
-    const normalized = item.trim();
-    if (!annualPlanMonthRegex.test(normalized)) continue;
-    unique.add(normalized);
-  }
-  return Array.from(unique.values()).sort();
-}
-
-function deriveAnnualPlanMonthsFromSlots(slots: AvailabilitySlot[]): string[] {
-  const monthKeys = new Set<string>();
-  for (const slot of slots) {
-    const date = new Date(slot.startsAt);
-    if (Number.isNaN(date.getTime())) continue;
-    monthKeys.add(toMonthKey(date));
-  }
-  return normalizeAnnualPlanMonths(Array.from(monthKeys.values()));
-}
-
 function mapAvailableProgram(program: PeriodicProgramRow) {
   return {
     id: program.program_id,
@@ -197,7 +183,7 @@ function mapAssignedProgram(
     scheduleAnchorDate: cadence.scheduleAnchorDate,
     status: assignment.status,
     deployedAt: assignment.deployed_at ?? null,
-    annualPlanMonths: normalizeAnnualPlanMonths(assignment.annual_plan_months),
+    annualPlanMonths: normalizeAnnualPlanMonthKeys(assignment.annual_plan_months),
     cadenceSuggestedSlots: options?.cadenceSuggestedSlots ?? [],
     calendarProvisorySlots: options?.calendarProvisorySlots ?? [],
     calendarCommittedSlots: options?.calendarCommittedSlots ?? [],
@@ -225,7 +211,7 @@ async function loadPrograms() {
   const withSchedule = await supabase
     .from("periodic_programs")
     .select(
-      "program_id,title,description,target_risk_topic,trigger_threshold,schedule_frequency,schedule_anchor_date",
+      "program_id,title,description,target_risk_topic,trigger_threshold,schedule_frequency,schedule_anchor_date,materials,sessions",
     )
     .order("title", { ascending: true })
     .returns<PeriodicProgramRow[]>();
@@ -236,7 +222,20 @@ async function loadPrograms() {
   ) {
     return supabase
       .from("periodic_programs")
-      .select("program_id,title,description,target_risk_topic,trigger_threshold")
+      .select("program_id,title,description,target_risk_topic,trigger_threshold,materials")
+      .order("title", { ascending: true })
+      .returns<PeriodicProgramRow[]>();
+  }
+
+  if (
+    withSchedule.error &&
+    isMissingColumnError(withSchedule.error, "sessions")
+  ) {
+    return supabase
+      .from("periodic_programs")
+      .select(
+        "program_id,title,description,target_risk_topic,trigger_threshold,schedule_frequency,schedule_anchor_date,materials",
+      )
       .order("title", { ascending: true })
       .returns<PeriodicProgramRow[]>();
   }
@@ -249,7 +248,7 @@ async function loadProgramById(programId: string) {
   const withSchedule = await supabase
     .from("periodic_programs")
     .select(
-      "program_id,title,description,target_risk_topic,trigger_threshold,schedule_frequency,schedule_anchor_date",
+      "program_id,title,description,target_risk_topic,trigger_threshold,schedule_frequency,schedule_anchor_date,materials,sessions",
     )
     .eq("program_id", programId)
     .maybeSingle<PeriodicProgramRow>();
@@ -260,7 +259,20 @@ async function loadProgramById(programId: string) {
   ) {
     return supabase
       .from("periodic_programs")
-      .select("program_id,title,description,target_risk_topic,trigger_threshold")
+      .select("program_id,title,description,target_risk_topic,trigger_threshold,materials")
+      .eq("program_id", programId)
+      .maybeSingle<PeriodicProgramRow>();
+  }
+
+  if (
+    withSchedule.error &&
+    isMissingColumnError(withSchedule.error, "sessions")
+  ) {
+    return supabase
+      .from("periodic_programs")
+      .select(
+        "program_id,title,description,target_risk_topic,trigger_threshold,schedule_frequency,schedule_anchor_date,materials",
+      )
       .eq("program_id", programId)
       .maybeSingle<PeriodicProgramRow>();
   }
@@ -421,6 +433,9 @@ async function loadCommittedMeetingsByAssignment(
       status: row.status,
       lifecycle: details.eventLifecycle,
       proposalKind: details.proposalKind,
+      sessionId: details.sessionId ?? null,
+      sessionIndex: details.sessionIndex ?? null,
+      sessionTitle: details.sessionTitle ?? null,
     });
     timelineByAssignment.set(row.source_client_program_id, timeline);
     if (row.status === "cancelled") continue;
@@ -451,31 +466,69 @@ function resolveCadenceForAssignment(
   return resolveCadenceValues({ assignment, program });
 }
 
+function buildSessionEventContent(plan: AssignmentSessionPlan): string {
+  const lines: string[] = [];
+  if (plan.session.notes) {
+    lines.push(plan.session.notes);
+  } else {
+    lines.push(
+      `Sessao ${plan.sessionSequence}: ${plan.session.title} (${plan.sessionCycle}o ciclo).`,
+    );
+  }
+  if (plan.session.materials.length > 0) {
+    lines.push("");
+    lines.push("Materiais da sessao:");
+    for (const material of plan.session.materials) {
+      lines.push(`- ${material.title}: ${material.downloadUrl}`);
+    }
+  }
+  return lines.join("\n").trim();
+}
+
+function mapSlotsToSessionPlans(
+  slots: AvailabilitySlot[],
+  sessions: ReturnType<typeof parseContinuousProgramSessions>,
+): AssignmentSessionPlan[] {
+  return slots.map((slot, index) => ({
+    slot,
+    session: sessions[index % sessions.length],
+    sessionSequence: index + 1,
+    sessionCycle: Math.floor(index / sessions.length) + 1,
+  }));
+}
+
 async function insertProvisoryAssignmentEvents(params: {
   clientId: string;
   assignmentId: string;
   programTitle: string;
-  slots: AvailabilitySlot[];
+  plans: AssignmentSessionPlan[];
 }) {
-  if (params.slots.length === 0) return { unavailable: false as const };
+  if (params.plans.length === 0) return { unavailable: false as const };
   const supabase = getSupabaseAdminClient();
   const insertEvents = await supabase.from("calendar_events").insert(
-    params.slots.map((slot) => ({
+    params.plans.map((plan) => ({
       event_id: randomUUID(),
       client_id: params.clientId,
       source_client_program_id: params.assignmentId,
       event_type: "continuous_meeting",
-      title: `Reuniao processo continuo: ${params.programTitle}`,
-      starts_at: slot.startsAt,
-      ends_at: slot.endsAt,
+      title: `Reuniao processo continuo: ${params.programTitle} | Sessao ${plan.sessionSequence}`,
+      starts_at: plan.slot.startsAt,
+      ends_at: plan.slot.endsAt,
       status: "scheduled",
       created_by: "manager",
       metadata: {
         source: "manager_assignment_auto",
         eventLifecycle: "provisory",
         proposalKind: "assignment",
-        content: `Reuniao provisoria gerada pela cadencia do programa ${params.programTitle}.`,
-        preparationRequired: "Revisar indicadores recentes e alinhar proximos passos.",
+        sessionId: plan.session.id,
+        sessionIndex: plan.sessionSequence,
+        sessionTitle: plan.session.title,
+        sessionCycle: plan.sessionCycle,
+        sessionMaterials: plan.session.materials,
+        content: buildSessionEventContent(plan),
+        preparationRequired:
+          plan.session.preparationRequired ??
+          "Revisar indicadores recentes e alinhar proximos passos.",
       },
       updated_at: new Date().toISOString(),
     })),
@@ -668,7 +721,25 @@ export async function POST(
     return NextResponse.json({ error: "Program is already assigned to this company." }, { status: 409 });
   }
 
-  const annualPlanMonths = normalizeAnnualPlanMonths(parsed.annualPlanMonths);
+  const resolvedDeployedAt =
+    parsed.deployedAt && parsed.deployedAt.length > 0
+      ? parsed.deployedAt
+      : new Date().toISOString();
+  const programSessions = parseContinuousProgramSessions(programResult.data.sessions, {
+    fallbackMaterials: programResult.data.materials,
+    minCount: 1,
+  });
+  const requestedAnnualPlanMonths = normalizeAnnualPlanMonthKeys(parsed.annualPlanMonths);
+  const defaultAnnualPlanMonths = buildSequentialAnnualPlanMonths({
+    deployedAt: resolvedDeployedAt,
+    monthCount: programSessions.length,
+  });
+  const annualPlanMonths =
+    requestedAnnualPlanMonths.length > 0
+      ? requestedAnnualPlanMonths
+      : (parsed.status ?? "Active") === "Active"
+        ? defaultAnnualPlanMonths
+        : [];
   let annualPlanColumnSupported = true;
   let insertResult = await supabase
     .from("client_programs")
@@ -677,8 +748,7 @@ export async function POST(
       client_id: clientId,
       program_id: parsed.programId,
       status: parsed.status ?? "Active",
-      deployed_at:
-        parsed.deployedAt && parsed.deployedAt.length > 0 ? parsed.deployedAt : new Date().toISOString(),
+      deployed_at: resolvedDeployedAt,
       schedule_frequency_override:
         parsed.scheduleFrequency ?? DEFAULT_CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCY,
       schedule_anchor_date_override:
@@ -701,8 +771,7 @@ export async function POST(
         client_id: clientId,
         program_id: parsed.programId,
         status: parsed.status ?? "Active",
-        deployed_at:
-          parsed.deployedAt && parsed.deployedAt.length > 0 ? parsed.deployedAt : new Date().toISOString(),
+        deployed_at: resolvedDeployedAt,
         schedule_frequency_override:
           parsed.scheduleFrequency ?? DEFAULT_CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCY,
         schedule_anchor_date_override:
@@ -762,59 +831,53 @@ export async function POST(
 
   const programById = new Map([[programResult.data.program_id, programResult.data]]);
   let cadenceSuggestedSlots: AvailabilitySlot[] = [];
+  let generatedPlans: AssignmentSessionPlan[] = [];
   const cadence = resolveCadenceForAssignment(insertResult.data, programById);
   let calendarUnavailable = false;
   try {
     if (insertResult.data.status === "Active") {
       const masterEvents = await loadManagerMasterCalendarEvents();
-      cadenceSuggestedSlots = buildSuggestedAvailabilitySlots({
-        deployedAt: insertResult.data.deployed_at ?? new Date().toISOString(),
-        scheduleFrequency: cadence.scheduleFrequency,
-        scheduleAnchorDate: cadence.scheduleAnchorDate,
+      const planningMonths =
+        annualPlanColumnSupported && insertResult.data.annual_plan_months !== undefined
+          ? normalizeAnnualPlanMonthKeys(insertResult.data.annual_plan_months)
+          : defaultAnnualPlanMonths;
+      const effectivePlanningMonths =
+        planningMonths.length > 0
+          ? planningMonths
+          : buildSequentialAnnualPlanMonths({
+              deployedAt: insertResult.data.deployed_at,
+              monthCount: programSessions.length,
+            });
+
+      generatedPlans = buildAssignmentSessionPlans({
+        annualPlanMonths: effectivePlanningMonths,
+        deployedAt: insertResult.data.deployed_at ?? null,
+        sessions: programSessions,
         existingEvents: masterEvents,
-        maxSlots: DEFAULT_ASSIGNMENT_CADENCE_SLOT_COUNT,
-        enforceCadenceSeries: true,
       });
+      if (generatedPlans.length === 0) {
+        const fallbackSlots = buildSuggestedAvailabilitySlots({
+          deployedAt: insertResult.data.deployed_at ?? new Date().toISOString(),
+          scheduleFrequency: cadence.scheduleFrequency,
+          scheduleAnchorDate: cadence.scheduleAnchorDate,
+          existingEvents: masterEvents,
+          maxSlots: Math.max(programSessions.length, 1),
+          enforceCadenceSeries: true,
+        });
+        generatedPlans = mapSlotsToSessionPlans(fallbackSlots, programSessions);
+      }
+      cadenceSuggestedSlots = generatedPlans.map((plan) => plan.slot);
       const inserted = await insertProvisoryAssignmentEvents({
         clientId,
         assignmentId: insertResult.data.client_program_id,
         programTitle: programResult.data.title,
-        slots: cadenceSuggestedSlots,
+        plans: generatedPlans,
       });
       calendarUnavailable = inserted.unavailable;
     }
   } catch {
     cadenceSuggestedSlots = [];
-  }
-
-  if (annualPlanColumnSupported) {
-    const persistedAnnualPlanMonths = normalizeAnnualPlanMonths(insertResult.data.annual_plan_months);
-    const shouldBackfillAnnualPlanMonths =
-      persistedAnnualPlanMonths.length === 0 &&
-      annualPlanMonths.length === 0 &&
-      insertResult.data.status === "Active";
-
-    if (shouldBackfillAnnualPlanMonths) {
-      const derivedAnnualPlanMonths = deriveAnnualPlanMonthsFromSlots(cadenceSuggestedSlots);
-      if (derivedAnnualPlanMonths.length > 0) {
-        const annualPlanUpdate = await supabase
-          .from("client_programs")
-          .update({ annual_plan_months: derivedAnnualPlanMonths })
-          .eq("client_program_id", insertResult.data.client_program_id)
-          .select("annual_plan_months")
-          .maybeSingle<{ annual_plan_months: unknown }>();
-
-        if (!annualPlanUpdate.error && annualPlanUpdate.data) {
-          insertResult = {
-            ...insertResult,
-            data: {
-              ...insertResult.data,
-              annual_plan_months: annualPlanUpdate.data.annual_plan_months,
-            },
-          };
-        }
-      }
-    }
+    generatedPlans = [];
   }
 
   return NextResponse.json(

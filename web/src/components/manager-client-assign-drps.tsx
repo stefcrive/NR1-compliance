@@ -498,8 +498,8 @@ export function ManagerClientAssignDrps({ clientId }: { clientId: string }) {
 
   return (
     <div className="space-y-6">
-      <section className="rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
-        <nav className="mb-3 text-xs text-[#4f6977]">
+      <div className="space-y-3">
+        <nav className="text-xs text-[#4f6977]">
           <Link href="/manager" className="text-[#0f5b73]">
             Home
           </Link>{" "}
@@ -516,29 +516,31 @@ export function ManagerClientAssignDrps({ clientId }: { clientId: string }) {
             Atribuir diagnostico DRPS
           </Link>
         </nav>
-        <h2 className="text-2xl font-semibold text-[#123447]">Atribuir diagnosticos DRPS</h2>
-        <p className="mt-1 text-sm text-[#35515f]">
-          Crie uma campanha umbrella DRPS unica, vincule os setores como sub-questionarios e
-          publique a coleta em um unico pacote.
-        </p>
-        <div className="mt-4 grid gap-3 md:grid-cols-2">
-          <div className="rounded-xl border border-[#d8e4ee] p-3">
-            <p className="text-xs text-[#4f6977]">Empresa</p>
-            <p className="mt-1 text-sm font-semibold text-[#133748]">{client.companyName}</p>
+        <section className="rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
+          <h2 className="text-2xl font-semibold text-[#123447]">Atribuir diagnosticos DRPS</h2>
+          <p className="mt-1 text-sm text-[#35515f]">
+            Crie uma campanha umbrella DRPS unica, vincule os setores como sub-questionarios e
+            publique a coleta em um unico pacote.
+          </p>
+          <div className="mt-4 grid gap-3 md:grid-cols-2">
+            <div className="rounded-xl border border-[#d8e4ee] p-3">
+              <p className="text-xs text-[#4f6977]">Empresa</p>
+              <p className="mt-1 text-sm font-semibold text-[#133748]">{client.companyName}</p>
+            </div>
+            <label className="rounded-xl border border-[#d8e4ee] p-3">
+              <span className="text-xs text-[#4f6977]">Status inicial da campanha umbrella</span>
+              <select
+                className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
+                value={campaignStatus}
+                onChange={(event) => setCampaignStatus(event.target.value as "draft" | "live")}
+              >
+                <option value="live">Ativo</option>
+                <option value="draft">Rascunho</option>
+              </select>
+            </label>
           </div>
-          <label className="rounded-xl border border-[#d8e4ee] p-3">
-            <span className="text-xs text-[#4f6977]">Status inicial da campanha umbrella</span>
-            <select
-              className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
-              value={campaignStatus}
-              onChange={(event) => setCampaignStatus(event.target.value as "draft" | "live")}
-            >
-              <option value="live">Ativo</option>
-              <option value="draft">Rascunho</option>
-            </select>
-          </label>
-        </div>
-      </section>
+        </section>
+      </div>
 
       <section className="space-y-4 rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
         <div className="flex flex-wrap items-end justify-between gap-3">

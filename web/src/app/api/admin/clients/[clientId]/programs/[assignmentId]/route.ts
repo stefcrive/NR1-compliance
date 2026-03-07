@@ -5,12 +5,19 @@ import { z } from "zod";
 
 import {
   buildSuggestedAvailabilitySlots,
-  DEFAULT_ASSIGNMENT_CADENCE_SLOT_COUNT,
   slotOverlapsMasterCalendar,
   type AvailabilitySlot,
 } from "@/lib/availability-scheduler";
 import { isAdminApiAuthorized } from "@/lib/admin-auth";
-import { DEFAULT_CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCY } from "@/lib/continuous-programs";
+import {
+  DEFAULT_CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCY,
+  parseContinuousProgramSessions,
+} from "@/lib/continuous-programs";
+import {
+  buildAssignmentSessionPlans,
+  normalizeAnnualPlanMonths as normalizeAnnualPlanMonthKeys,
+  type AssignmentSessionPlan,
+} from "@/lib/continuous-program-assignment-sessions";
 import {
   buildDrpsCalendarEvents,
   extractCalendarEventDetails,
@@ -36,6 +43,8 @@ type ProgramRow = {
   title: string;
   schedule_frequency?: string | null;
   schedule_anchor_date?: string | null;
+  materials?: unknown;
+  sessions?: unknown;
 };
 
 type CampaignRow = {
@@ -61,6 +70,9 @@ type AssignmentCalendarEvent = {
   status: "scheduled" | "completed" | "cancelled";
   lifecycle: "provisory" | "committed";
   proposalKind: "assignment" | "reschedule" | null;
+  sessionId?: string | null;
+  sessionIndex?: number | null;
+  sessionTitle?: string | null;
 };
 
 const cadenceFrequencyValues = [
@@ -73,9 +85,6 @@ const cadenceFrequencyValues = [
   "custom",
 ] as const;
 const annualPlanMonthRegex = /^\d{4}-(0[1-9]|1[0-2])$/;
-// 09:00-18:00 in America/Sao_Paulo corresponds to 12:00-21:00 UTC.
-const annualPlanBusinessStartHourUtc = 12;
-const annualPlanBusinessEndHourUtc = 21;
 
 function todayIsoDate(): string {
   return new Date().toISOString().slice(0, 10);
@@ -132,14 +141,22 @@ async function loadProgram(programId: string) {
   const supabase = getSupabaseAdminClient();
   const withSchedule = await supabase
     .from("periodic_programs")
-    .select("program_id,title,schedule_frequency,schedule_anchor_date")
+    .select("program_id,title,schedule_frequency,schedule_anchor_date,materials,sessions")
     .eq("program_id", programId)
     .maybeSingle<ProgramRow>();
 
   if (withSchedule.error && isMissingColumnError(withSchedule.error, "schedule_frequency")) {
     return supabase
       .from("periodic_programs")
-      .select("program_id,title")
+      .select("program_id,title,materials")
+      .eq("program_id", programId)
+      .maybeSingle<ProgramRow>();
+  }
+
+  if (withSchedule.error && isMissingColumnError(withSchedule.error, "sessions")) {
+    return supabase
+      .from("periodic_programs")
+      .select("program_id,title,schedule_frequency,schedule_anchor_date,materials")
       .eq("program_id", programId)
       .maybeSingle<ProgramRow>();
   }
@@ -189,52 +206,6 @@ function sortSlots(slots: AvailabilitySlot[]): AvailabilitySlot[] {
     .sort((left, right) => new Date(left.startsAt).getTime() - new Date(right.startsAt).getTime());
 }
 
-function normalizeSlots(slots: AvailabilitySlot[]): AvailabilitySlot[] {
-  const unique = new Map<string, AvailabilitySlot>();
-  for (const slot of slots) {
-    const start = new Date(slot.startsAt);
-    const end = new Date(slot.endsAt);
-    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end <= start) {
-      continue;
-    }
-    unique.set(`${start.toISOString()}|${end.toISOString()}`, {
-      startsAt: start.toISOString(),
-      endsAt: end.toISOString(),
-    });
-  }
-  return sortSlots(Array.from(unique.values()));
-}
-
-function normalizeAnnualPlanMonths(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  const unique = new Set<string>();
-  for (const item of value) {
-    if (typeof item !== "string") continue;
-    const normalized = item.trim();
-    if (!annualPlanMonthRegex.test(normalized)) continue;
-    unique.add(normalized);
-  }
-  return Array.from(unique.values()).sort();
-}
-
-function parseAnnualPlanMonthKey(value: string): { year: number; monthIndex: number } | null {
-  if (!annualPlanMonthRegex.test(value)) return null;
-  const [yearText, monthText] = value.split("-");
-  const year = Number(yearText);
-  const monthIndex = Number(monthText) - 1;
-  if (!Number.isFinite(year) || !Number.isFinite(monthIndex)) return null;
-  return { year, monthIndex };
-}
-
-function daysInUtcMonth(year: number, monthIndex: number): number {
-  return new Date(Date.UTC(year, monthIndex + 1, 0)).getUTCDate();
-}
-
-function isWeekendUtc(date: Date): boolean {
-  const day = date.getUTCDay();
-  return day === 0 || day === 6;
-}
-
 function filterCurrentAssignmentProvisoryEvents(
   events: MasterCalendarEvent[],
   assignmentId: string,
@@ -246,123 +217,6 @@ function filterCurrentAssignmentProvisoryEvents(
       event.details.eventLifecycle === "provisory" && event.details.proposalKind === "assignment"
     );
   });
-}
-
-function buildAnnualPlanCandidateHoursUtc(preferredHour: number): number[] {
-  const minHour = annualPlanBusinessStartHourUtc;
-  const maxHour = annualPlanBusinessEndHourUtc - 1;
-  const clampedPreferred = Math.min(maxHour, Math.max(minHour, preferredHour));
-  const fallback: number[] = [];
-  for (let hour = minHour; hour <= maxHour; hour += 1) {
-    if (hour === clampedPreferred) continue;
-    fallback.push(hour);
-  }
-  return [clampedPreferred, ...fallback];
-}
-
-function cadenceIntervalDays(scheduleFrequency: string): number {
-  switch (scheduleFrequency) {
-    case "weekly":
-      return 7;
-    case "biweekly":
-      return 14;
-    case "monthly":
-      return 30;
-    case "quarterly":
-      return 90;
-    case "semiannual":
-      return 182;
-    case "annual":
-      return 365;
-    case "custom":
-      return 21;
-    default:
-      return 14;
-  }
-}
-
-function cadenceMeetingsPerMonth(scheduleFrequency: string): number {
-  switch (scheduleFrequency) {
-    case "weekly":
-      return 4;
-    case "biweekly":
-      return 2;
-    default:
-      return 1;
-  }
-}
-
-function buildAnnualPlanProvisorySlots(params: {
-  annualPlanMonths: string[];
-  deployedAt: string | null;
-  scheduleFrequency: string;
-  existingEvents: MasterCalendarEvent[];
-  durationMinutes?: number;
-}): AvailabilitySlot[] {
-  if (params.annualPlanMonths.length === 0) return [];
-
-  const deployedDate = params.deployedAt ? new Date(params.deployedAt) : null;
-  const hasDeployedDate = deployedDate && !Number.isNaN(deployedDate.getTime());
-  const preferredDay = hasDeployedDate ? Math.min(28, Math.max(1, deployedDate.getUTCDate())) : 1;
-  const preferredHour = hasDeployedDate ? deployedDate.getUTCHours() : annualPlanBusinessStartHourUtc;
-  const candidateHours = buildAnnualPlanCandidateHoursUtc(preferredHour);
-  const preferredMinute = 0;
-  const durationMinutes = params.durationMinutes ?? 60;
-  const meetingsPerMonth = cadenceMeetingsPerMonth(params.scheduleFrequency);
-  const intervalDays = cadenceIntervalDays(params.scheduleFrequency);
-  const slotDurationMs = durationMinutes * 60 * 1000;
-  const dayDurationMs = 24 * 60 * 60 * 1000;
-  const minGapMs = Math.max(1, intervalDays - 1) * dayDurationMs;
-  const minStart = new Date();
-  minStart.setUTCDate(minStart.getUTCDate() + 1);
-
-  const generated: AvailabilitySlot[] = [];
-  for (const monthKey of params.annualPlanMonths) {
-    const parsed = parseAnnualPlanMonthKey(monthKey);
-    if (!parsed) continue;
-
-    const daysInMonth = daysInUtcMonth(parsed.year, parsed.monthIndex);
-    const monthlyGenerated: AvailabilitySlot[] = [];
-    let searchStartDay = preferredDay;
-
-    const tryPick = (enforceGap: boolean): AvailabilitySlot | null => {
-      for (let dayOffset = 0; dayOffset < daysInMonth; dayOffset += 1) {
-        const day = ((searchStartDay - 1 + dayOffset) % daysInMonth) + 1;
-        for (const hour of candidateHours) {
-          const start = new Date(
-            Date.UTC(parsed.year, parsed.monthIndex, day, hour, preferredMinute, 0, 0),
-          );
-          if (start.getUTCMonth() !== parsed.monthIndex) continue;
-          if (isWeekendUtc(start) || start <= minStart) continue;
-          const end = new Date(start.getTime() + slotDurationMs);
-          const candidate = { startsAt: start.toISOString(), endsAt: end.toISOString() };
-          if (slotOverlapsMasterCalendar(candidate, params.existingEvents)) continue;
-          const hasGeneratedOverlap = [...generated, ...monthlyGenerated].some((slot) =>
-            overlaps(new Date(slot.startsAt), new Date(slot.endsAt), start, end),
-          );
-          if (hasGeneratedOverlap) continue;
-          if (enforceGap && monthlyGenerated.length > 0) {
-            const lastStart = new Date(monthlyGenerated[monthlyGenerated.length - 1].startsAt);
-            if (start.getTime() - lastStart.getTime() < minGapMs) continue;
-          }
-          searchStartDay = day + intervalDays;
-          return candidate;
-        }
-      }
-      return null;
-    };
-
-    for (let meetingIndex = 0; meetingIndex < meetingsPerMonth; meetingIndex += 1) {
-      const withGap = tryPick(true);
-      const chosen = withGap ?? tryPick(false);
-      if (!chosen) break;
-      monthlyGenerated.push(chosen);
-    }
-
-    generated.push(...monthlyGenerated);
-  }
-
-  return sortSlots(generated);
 }
 
 async function loadProvisoryAssignmentSlots(params: {
@@ -429,24 +283,83 @@ async function loadAssignmentTimelineEvents(params: {
       status: row.status,
       lifecycle: details.eventLifecycle,
       proposalKind: details.proposalKind,
+      sessionId: details.sessionId ?? null,
+      sessionIndex: details.sessionIndex ?? null,
+      sessionTitle: details.sessionTitle ?? null,
     });
   }
 
   return { events, unavailable: false };
 }
 
+function buildSessionEventContent(plan: AssignmentSessionPlan): string {
+  const lines: string[] = [];
+  if (plan.session.notes) {
+    lines.push(plan.session.notes);
+  } else {
+    lines.push(
+      `Sessao ${plan.sessionSequence}: ${plan.session.title} (${plan.sessionCycle}o ciclo).`,
+    );
+  }
+  if (plan.session.materials.length > 0) {
+    lines.push("");
+    lines.push("Materiais da sessao:");
+    for (const material of plan.session.materials) {
+      lines.push(`- ${material.title}: ${material.downloadUrl}`);
+    }
+  }
+  return lines.join("\n").trim();
+}
+
+function mapSlotsToSessionPlans(
+  slots: AvailabilitySlot[],
+  sessions: ReturnType<typeof parseContinuousProgramSessions>,
+): AssignmentSessionPlan[] {
+  return slots.map((slot, index) => ({
+    slot,
+    session: sessions[index % sessions.length],
+    sessionSequence: index + 1,
+    sessionCycle: Math.floor(index / sessions.length) + 1,
+  }));
+}
+
+function normalizeSessionPlans(plans: AssignmentSessionPlan[]): AssignmentSessionPlan[] {
+  const unique = new Map<string, AssignmentSessionPlan>();
+  for (const plan of plans) {
+    const start = new Date(plan.slot.startsAt);
+    const end = new Date(plan.slot.endsAt);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end <= start) {
+      continue;
+    }
+    const normalizedSlot = {
+      startsAt: start.toISOString(),
+      endsAt: end.toISOString(),
+    };
+    const key = `${normalizedSlot.startsAt}|${normalizedSlot.endsAt}`;
+    if (!unique.has(key)) {
+      unique.set(key, { ...plan, slot: normalizedSlot });
+    }
+  }
+  return Array.from(unique.values()).sort(
+    (left, right) =>
+      new Date(left.slot.startsAt).getTime() -
+      new Date(right.slot.startsAt).getTime(),
+  );
+}
+
 async function replaceAssignmentProvisoryEvents(params: {
   clientId: string;
   assignmentId: string;
   programTitle: string;
-  slots: AvailabilitySlot[];
+  plans: AssignmentSessionPlan[];
 }): Promise<{
   unavailable: boolean;
   invalidSlot: boolean;
   provisorySlots: AvailabilitySlot[];
 }> {
   const supabase = getSupabaseAdminClient();
-  const normalizedSlots = normalizeSlots(params.slots);
+  const normalizedPlans = normalizeSessionPlans(params.plans);
+  const normalizedSlots = normalizedPlans.map((plan) => plan.slot);
 
   const masterEvents = await loadManagerMasterCalendarEvents();
   const eventsWithoutCurrentProvisory = filterCurrentAssignmentProvisoryEvents(
@@ -516,25 +429,32 @@ async function replaceAssignmentProvisoryEvents(params: {
     }
   }
 
-  if (normalizedSlots.length > 0) {
+  if (normalizedPlans.length > 0) {
     const nowIso = new Date().toISOString();
     const insertEvents = await supabase.from("calendar_events").insert(
-      normalizedSlots.map((slot) => ({
+      normalizedPlans.map((plan) => ({
         event_id: randomUUID(),
         client_id: params.clientId,
         source_client_program_id: params.assignmentId,
         event_type: "continuous_meeting",
-        title: `Reuniao processo continuo: ${params.programTitle}`,
-        starts_at: slot.startsAt,
-        ends_at: slot.endsAt,
+        title: `Reuniao processo continuo: ${params.programTitle} | Sessao ${plan.sessionSequence}`,
+        starts_at: plan.slot.startsAt,
+        ends_at: plan.slot.endsAt,
         status: "scheduled",
         created_by: "manager",
         metadata: {
           source: "manager_assignment_edit",
           eventLifecycle: "provisory",
           proposalKind: "assignment",
-          content: `Reuniao provisoria do programa ${params.programTitle}.`,
-          preparationRequired: "Revisar indicadores recentes e alinhar proximos passos.",
+          sessionId: plan.session.id,
+          sessionIndex: plan.sessionSequence,
+          sessionTitle: plan.session.title,
+          sessionCycle: plan.sessionCycle,
+          sessionMaterials: plan.session.materials,
+          content: buildSessionEventContent(plan),
+          preparationRequired:
+            plan.session.preparationRequired ??
+            "Revisar indicadores recentes e alinhar proximos passos.",
         },
         updated_at: nowIso,
       })),
@@ -569,7 +489,7 @@ export async function PATCH(
 
   const normalizedAnnualPlanMonths =
     parsed.annualPlanMonths !== undefined
-      ? normalizeAnnualPlanMonths(parsed.annualPlanMonths)
+      ? normalizeAnnualPlanMonthKeys(parsed.annualPlanMonths)
       : undefined;
 
   const modernPayload = {
@@ -734,8 +654,12 @@ export async function PATCH(
   }
 
   const cadence = resolveCadence(assignment, programResult.data);
+  const programSessions = parseContinuousProgramSessions(programResult.data.sessions, {
+    fallbackMaterials: programResult.data.materials,
+    minCount: 1,
+  });
   const annualPlanMonths = annualPlanSupported
-    ? normalizeAnnualPlanMonths(assignment.annual_plan_months)
+    ? normalizeAnnualPlanMonthKeys(assignment.annual_plan_months)
     : [];
 
   const shouldRefreshProvisorySlots =
@@ -747,42 +671,59 @@ export async function PATCH(
 
   let provisorySlots: AvailabilitySlot[] = [];
   if (shouldRefreshProvisorySlots) {
-    let desiredSlots: AvailabilitySlot[] = [];
-    const shouldUseAnnualPlan = annualPlanSupported && parsed.annualPlanMonths !== undefined;
+    let desiredPlans: AssignmentSessionPlan[] = [];
+    const explicitAnnualPlanSelection = annualPlanSupported && parsed.annualPlanMonths !== undefined;
+    const shouldUseAnnualPlan = annualPlanSupported && annualPlanMonths.length > 0;
 
     if (assignment.status !== "Active") {
-      desiredSlots = [];
-    } else if (shouldUseAnnualPlan) {
+      desiredPlans = [];
+    } else if (parsed.provisorySlots !== undefined) {
+      desiredPlans = mapSlotsToSessionPlans(parsed.provisorySlots, programSessions);
+    } else if (shouldUseAnnualPlan || explicitAnnualPlanSelection) {
       const masterEvents = await loadManagerMasterCalendarEvents();
       const eventsWithoutCurrentProvisory = filterCurrentAssignmentProvisoryEvents(
         masterEvents,
         assignment.client_program_id,
       );
-      desiredSlots = buildAnnualPlanProvisorySlots({
+      desiredPlans = buildAssignmentSessionPlans({
         annualPlanMonths,
         deployedAt: assignment.deployed_at,
-        scheduleFrequency: cadence.scheduleFrequency,
+        sessions: programSessions,
         existingEvents: eventsWithoutCurrentProvisory,
       });
+      if (!explicitAnnualPlanSelection && annualPlanMonths.length > 0 && desiredPlans.length === 0) {
+        const fallbackSlots = buildSuggestedAvailabilitySlots({
+          deployedAt: assignment.deployed_at ?? new Date().toISOString(),
+          scheduleFrequency: cadence.scheduleFrequency,
+          scheduleAnchorDate: cadence.scheduleAnchorDate,
+          existingEvents: masterEvents.filter(
+            (event) => event.sourceClientProgramId !== assignment.client_program_id,
+          ),
+          maxSlots: Math.max(programSessions.length, 1),
+          enforceCadenceSeries: true,
+        });
+        desiredPlans = mapSlotsToSessionPlans(fallbackSlots, programSessions);
+      }
     } else {
       const masterEvents = await loadManagerMasterCalendarEvents();
-      desiredSlots = buildSuggestedAvailabilitySlots({
+      const fallbackSlots = buildSuggestedAvailabilitySlots({
         deployedAt: assignment.deployed_at ?? new Date().toISOString(),
         scheduleFrequency: cadence.scheduleFrequency,
         scheduleAnchorDate: cadence.scheduleAnchorDate,
         existingEvents: masterEvents.filter(
           (event) => event.sourceClientProgramId !== assignment.client_program_id,
         ),
-        maxSlots: DEFAULT_ASSIGNMENT_CADENCE_SLOT_COUNT,
+        maxSlots: Math.max(programSessions.length, 1),
         enforceCadenceSeries: true,
       });
+      desiredPlans = mapSlotsToSessionPlans(fallbackSlots, programSessions);
     }
 
     const replaced = await replaceAssignmentProvisoryEvents({
       clientId,
       assignmentId: assignment.client_program_id,
       programTitle: programResult.data.title,
-      slots: desiredSlots,
+      plans: desiredPlans,
     });
 
     if (replaced.unavailable) {

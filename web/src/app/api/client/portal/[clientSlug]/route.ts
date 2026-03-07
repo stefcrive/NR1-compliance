@@ -169,6 +169,10 @@ const DAY_IN_MS = 24 * 60 * 60 * 1000;
 const AFFECTED_EMPLOYEE_SCORE_THRESHOLD = 3;
 const CRITICAL_EMPLOYEE_SCORE_THRESHOLD = 4;
 
+function isClientPortalBlocked(client: Pick<ClientRow, "status" | "billing_status">) {
+  return client.status === "Inactive" || client.billing_status === "blocked";
+}
+
 type ResponseRawRow = {
   id: string;
   survey_id: string;
@@ -1078,6 +1082,9 @@ export async function GET(
   }
   if (!client) {
     return NextResponse.json({ error: "Client not found." }, { status: 404 });
+  }
+  if (isClientPortalBlocked(client)) {
+    return NextResponse.json({ error: "Client access is blocked for this workspace." }, { status: 403 });
   }
 
   const [campaignsResult, reportsResult, invoicesResult, assignmentsWithOverridesResult, availabilityResult] =

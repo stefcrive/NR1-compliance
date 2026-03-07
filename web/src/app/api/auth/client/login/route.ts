@@ -25,28 +25,46 @@ type ClientCredentialRow = {
   password_hash: string;
 };
 
+type ClientStatus = "Active" | "Pending" | "Inactive";
+type BillingStatus = "up_to_date" | "pending" | "overdue" | "blocked";
+
 type ClientRow = {
   client_id: string;
   portal_slug?: string | null;
   company_name?: string;
+  status?: ClientStatus | null;
+  billing_status?: BillingStatus | null;
 };
 
-async function loadClientById(clientId: string): Promise<{ clientId: string; clientSlug: string } | null> {
+type ClientWorkspace = {
+  clientId: string;
+  clientSlug: string;
+  isBlocked: boolean;
+};
+
+function isClientBlocked(status: ClientStatus | null | undefined, billingStatus: BillingStatus | null | undefined) {
+  return status === "Inactive" || billingStatus === "blocked";
+}
+
+async function loadClientById(clientId: string): Promise<ClientWorkspace | null> {
   const supabase = getSupabaseAdminClient();
   const result = await supabase
     .from("clients")
-    .select("client_id,portal_slug,company_name")
+    .select("client_id,portal_slug,company_name,status,billing_status")
     .eq("client_id", clientId)
     .maybeSingle<ClientRow>();
 
   if (result.error) {
-    if (!isMissingColumnError(result.error, "portal_slug")) {
+    if (
+      !isMissingColumnError(result.error, "portal_slug") &&
+      !isMissingColumnError(result.error, "billing_status")
+    ) {
       throw new Error("Could not load client workspace.");
     }
 
     const fallbackResult = await supabase
       .from("clients")
-      .select("client_id,company_name")
+      .select("client_id,company_name,status")
       .eq("client_id", clientId)
       .maybeSingle<ClientRow>();
 
@@ -57,6 +75,7 @@ async function loadClientById(clientId: string): Promise<{ clientId: string; cli
     return {
       clientId: fallbackResult.data.client_id,
       clientSlug: slugify(fallbackResult.data.company_name ?? "client"),
+      isBlocked: isClientBlocked(fallbackResult.data.status, null),
     };
   }
 
@@ -67,25 +86,29 @@ async function loadClientById(clientId: string): Promise<{ clientId: string; cli
   return {
     clientId: result.data.client_id,
     clientSlug: result.data.portal_slug?.trim() || slugify(result.data.company_name ?? "client"),
+    isBlocked: isClientBlocked(result.data.status, result.data.billing_status),
   };
 }
 
-async function loadClientBySlug(clientSlug: string): Promise<{ clientId: string; clientSlug: string } | null> {
+async function loadClientBySlug(clientSlug: string): Promise<ClientWorkspace | null> {
   const supabase = getSupabaseAdminClient();
   const result = await supabase
     .from("clients")
-    .select("client_id,portal_slug,company_name")
+    .select("client_id,portal_slug,company_name,status,billing_status")
     .eq("portal_slug", clientSlug)
     .maybeSingle<ClientRow>();
 
   if (result.error) {
-    if (!isMissingColumnError(result.error, "portal_slug")) {
+    if (
+      !isMissingColumnError(result.error, "portal_slug") &&
+      !isMissingColumnError(result.error, "billing_status")
+    ) {
       throw new Error("Could not validate client workspace.");
     }
 
     const fallbackResult = await supabase
       .from("clients")
-      .select("client_id,company_name")
+      .select("client_id,company_name,status")
       .returns<ClientRow[]>();
 
     if (fallbackResult.error) {
@@ -100,6 +123,7 @@ async function loadClientBySlug(clientSlug: string): Promise<{ clientId: string;
     return {
       clientId: matched.client_id,
       clientSlug,
+      isBlocked: isClientBlocked(matched.status, null),
     };
   }
 
@@ -110,6 +134,7 @@ async function loadClientBySlug(clientSlug: string): Promise<{ clientId: string;
   return {
     clientId: result.data.client_id,
     clientSlug: result.data.portal_slug?.trim() || slugify(result.data.company_name ?? "client"),
+    isBlocked: isClientBlocked(result.data.status, result.data.billing_status),
   };
 }
 
@@ -127,7 +152,7 @@ export async function POST(request: NextRequest) {
 
   if (isDevBypass) {
     const targetSlug = normalizedSlug || "techcorp-brasil";
-    let matchedClient: { clientId: string; clientSlug: string } | null = null;
+    let matchedClient: ClientWorkspace | null = null;
     try {
       matchedClient = await loadClientBySlug(targetSlug);
     } catch {
@@ -136,6 +161,12 @@ export async function POST(request: NextRequest) {
 
     if (!matchedClient) {
       return NextResponse.json({ error: "Client workspace not found for this slug." }, { status: 404 });
+    }
+    if (matchedClient.isBlocked) {
+      return NextResponse.json(
+        { error: "Client access is blocked for this workspace." },
+        { status: 403 },
+      );
     }
 
     const token = createClientSessionToken(
@@ -191,7 +222,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Invalid client credentials." }, { status: 401 });
   }
 
-  let workspace: { clientId: string; clientSlug: string } | null = null;
+  let workspace: ClientWorkspace | null = null;
   try {
     workspace = await loadClientById(credentialResult.data.client_id);
   } catch {
@@ -208,6 +239,12 @@ export async function POST(request: NextRequest) {
         error:
           "This login belongs to a different company workspace. Remove the slug or use the correct one.",
       },
+      { status: 403 },
+    );
+  }
+  if (workspace.isBlocked) {
+    return NextResponse.json(
+      { error: "Client access is blocked for this workspace." },
       { status: 403 },
     );
   }

@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+import { parseContinuousProgramMaterials, type ContinuousProgramMaterial } from "@/lib/continuous-programs";
 import { isMissingTableError } from "@/lib/supabase-errors";
 
 export type MasterCalendarEventType =
@@ -17,6 +18,10 @@ export type MasterCalendarEventDetails = {
   eventLifecycle: CalendarEventLifecycle;
   proposalKind: CalendarEventProposalKind;
   availabilityRequestId: string | null;
+  sessionId?: string | null;
+  sessionIndex?: number | null;
+  sessionTitle?: string | null;
+  sessionMaterials?: ContinuousProgramMaterial[];
 };
 
 export type MasterCalendarEvent = {
@@ -68,6 +73,20 @@ function normalizeProposalKind(value: unknown): CalendarEventProposalKind {
   return null;
 }
 
+function normalizeSessionIndex(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  const rounded = Math.round(value);
+  if (rounded < 1) return null;
+  return rounded;
+}
+
+function normalizeSessionId(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim();
+  if (normalized.length === 0) return null;
+  return normalized;
+}
+
 export function extractCalendarEventDetails(metadata: unknown): MasterCalendarEventDetails {
   if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
     return {
@@ -76,6 +95,9 @@ export function extractCalendarEventDetails(metadata: unknown): MasterCalendarEv
       eventLifecycle: "committed",
       proposalKind: null,
       availabilityRequestId: null,
+      sessionIndex: null,
+      sessionTitle: null,
+      sessionMaterials: [],
     };
   }
 
@@ -93,6 +115,18 @@ export function extractCalendarEventDetails(metadata: unknown): MasterCalendarEv
       typeof availabilityRequestIdRaw === "string" && availabilityRequestIdRaw.trim().length > 0
         ? availabilityRequestIdRaw
         : null,
+    sessionId:
+      normalizeSessionId(record.sessionId) ??
+      normalizeSessionId(record.session_id),
+    sessionIndex:
+      normalizeSessionIndex(record.sessionIndex) ??
+      normalizeSessionIndex(record.session_index),
+    sessionTitle:
+      normalizeDetailText(record.sessionTitle) ??
+      normalizeDetailText(record.session_title),
+    sessionMaterials: parseContinuousProgramMaterials(
+      record.sessionMaterials ?? record.session_materials,
+    ),
   };
 }
 
@@ -220,6 +254,9 @@ export function buildDrpsCalendarEvents(
         eventLifecycle: "committed",
         proposalKind: null,
         availabilityRequestId: null,
+        sessionIndex: null,
+        sessionTitle: null,
+        sessionMaterials: [],
       },
     } satisfies MasterCalendarEvent;
     pushOrAggregateDrpsWindow(

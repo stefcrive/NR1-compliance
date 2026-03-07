@@ -1280,7 +1280,7 @@ export function ClientDiagnosticAggregateResultsSection({
 
   return (
     <div className="space-y-6">
-      <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+      <div className="space-y-3">
         <nav className="text-xs text-[#4f6977]">
           {managerClientId ? (
             managerFromHome ? (
@@ -1332,41 +1332,43 @@ export function ClientDiagnosticAggregateResultsSection({
             </>
           )}
         </nav>
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <h2 className="text-2xl font-semibold text-[#141d24]">DRPS Results Report</h2>
-          {managerRawDataDownloadHref ? (
-            <a
-              href={managerRawDataDownloadHref}
-              className="rounded-full border border-[#9ec8db] bg-white px-3 py-1.5 text-xs font-semibold text-[#0f5b73] hover:bg-[#f1f8fc]"
+        <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h2 className="text-2xl font-semibold text-[#141d24]">DRPS Results Report</h2>
+            {managerRawDataDownloadHref ? (
+              <a
+                href={managerRawDataDownloadHref}
+                className="rounded-full border border-[#9ec8db] bg-white px-3 py-1.5 text-xs font-semibold text-[#0f5b73] hover:bg-[#f1f8fc]"
+              >
+                Download raw data
+              </a>
+            ) : null}
+          </div>
+          <p className="mt-1 text-sm text-[#475660]">
+            {campaignLabel} | Aggregate and per-sector views in a single page.
+          </p>
+          <div className="mt-4 inline-flex rounded-full border border-[#c6d8e4] bg-white p-1">
+            <button
+              type="button"
+              onClick={() => setActiveResultsTab("aggregate")}
+              className={`rounded-full px-3 py-1 text-xs font-semibold transition ${
+                activeResultsTab === "aggregate" ? "bg-[#eaf5fb] text-[#0f5b73]" : "text-[#24485a]"
+              }`}
             >
-              Download raw data
-            </a>
-          ) : null}
-        </div>
-        <p className="mt-1 text-sm text-[#475660]">
-          {campaignLabel} | Aggregate and per-sector views in a single page.
-        </p>
-        <div className="mt-4 inline-flex rounded-full border border-[#c6d8e4] bg-white p-1">
-          <button
-            type="button"
-            onClick={() => setActiveResultsTab("aggregate")}
-            className={`rounded-full px-3 py-1 text-xs font-semibold transition ${
-              activeResultsTab === "aggregate" ? "bg-[#eaf5fb] text-[#0f5b73]" : "text-[#24485a]"
-            }`}
-          >
-            Aggregate results
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveResultsTab("per-sector")}
-            className={`rounded-full px-3 py-1 text-xs font-semibold transition ${
-              activeResultsTab === "per-sector" ? "bg-[#eaf5fb] text-[#0f5b73]" : "text-[#24485a]"
-            }`}
-          >
-            Per-sector results
-          </button>
-        </div>
-      </section>
+              Aggregate results
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveResultsTab("per-sector")}
+              className={`rounded-full px-3 py-1 text-xs font-semibold transition ${
+                activeResultsTab === "per-sector" ? "bg-[#eaf5fb] text-[#0f5b73]" : "text-[#24485a]"
+              }`}
+            >
+              Per-sector results
+            </button>
+          </div>
+        </section>
+      </div>
 
       {activeResultsTab === "aggregate" ? (
         <section className="space-y-4">
@@ -2254,66 +2256,66 @@ export function ClientDiagnosticResultsSection({
         </div>
       ) : null}
       {!embeddedView ? (
-        <>
-          <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
-            <nav className="mb-3 text-xs text-[#4f6977]">
-              {managerClientId ? (
-                managerFromHome ? (
-                  <>
-                    <Link href="/manager" className="text-[#0f5b73]">
-                      Home
-                    </Link>{" "}
-                    / <span>{campaign?.name ?? "Diagnostico"}</span> / <span>Resultados</span>
-                  </>
-                ) : managerFromHistory ? (
-                  <>
-                    <Link href="/manager/history" className="text-[#0f5b73]">
-                      Historico
-                    </Link>{" "}
-                    / <span>{campaign?.name ?? "Diagnostico"}</span> / <span>Resultados</span>
-                  </>
-                ) : (
-                  <>
-                    <Link href="/manager/clients" className="text-[#0f5b73]">
-                      Client area
-                    </Link>{" "}
-                    /{" "}
-                    <Link href={`/manager/clients/${managerClientId}`} className="text-[#0f5b73]">
-                      {managerBreadcrumbClientLabel}
-                    </Link>{" "}
-                    / <span>{campaign?.name ?? "Diagnostico"}</span> / <span>Resultados</span>
-                  </>
-                )
-              ) : fromHistory ? (
+        <div className="space-y-3">
+          <nav className="text-xs text-[#4f6977]">
+            {managerClientId ? (
+              managerFromHome ? (
                 <>
-                  <Link href={`/client/${clientSlug}/history`} className="text-[#1b2832]">
-                    Historico
+                  <Link href="/manager" className="text-[#0f5b73]">
+                    Home
                   </Link>{" "}
-                  / <span>{campaign?.name ?? "Diagnostico"}</span>
+                  / <span>{campaign?.name ?? "Diagnostico"}</span> / <span>Resultados</span>
                 </>
-              ) : fromReports ? (
+              ) : managerFromHistory ? (
                 <>
-                  <Link href={`/client/${clientSlug}/reports`} className="text-[#1b2832]">
-                    Reports
+                  <Link href="/manager/history" className="text-[#0f5b73]">
+                    Historico
                   </Link>{" "}
                   / <span>{campaign?.name ?? "Diagnostico"}</span> / <span>Resultados</span>
                 </>
               ) : (
                 <>
-                  <Link href={`/client/${clientSlug}/company`} className="text-[#1b2832]">
-                    Home
+                  <Link href="/manager/clients" className="text-[#0f5b73]">
+                    Client area
+                  </Link>{" "}
+                  /{" "}
+                  <Link href={`/manager/clients/${managerClientId}`} className="text-[#0f5b73]">
+                    {managerBreadcrumbClientLabel}
                   </Link>{" "}
                   / <span>{campaign?.name ?? "Diagnostico"}</span> / <span>Resultados</span>
                 </>
-              )}
-            </nav>
+              )
+            ) : fromHistory ? (
+              <>
+                <Link href={`/client/${clientSlug}/history`} className="text-[#1b2832]">
+                  Historico
+                </Link>{" "}
+                / <span>{campaign?.name ?? "Diagnostico"}</span>
+              </>
+            ) : fromReports ? (
+              <>
+                <Link href={`/client/${clientSlug}/reports`} className="text-[#1b2832]">
+                  Reports
+                </Link>{" "}
+                / <span>{campaign?.name ?? "Diagnostico"}</span> / <span>Resultados</span>
+              </>
+            ) : (
+              <>
+                <Link href={`/client/${clientSlug}/company`} className="text-[#1b2832]">
+                  Home
+                </Link>{" "}
+                / <span>{campaign?.name ?? "Diagnostico"}</span> / <span>Resultados</span>
+              </>
+            )}
+          </nav>
+          <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
             <h2 className="text-2xl font-semibold text-[#141d24]">{campaign?.name ?? "Resultados do diagnostico"}</h2>
             <p className="mt-1 text-sm text-[#475660]">
               Responses {dashboard?.totals.responses ?? 0} | Risks {dashboard?.totals.topics ?? 0} |
               Setores ativos {dashboard?.totals.activeSectors ?? 0}
             </p>
           </section>
-        </>
+        </div>
       ) : null}
 
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
@@ -3780,8 +3782,8 @@ export function ClientProgramDetailsSection({
 
   return (
     <div className="space-y-6">
-      <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
-        <nav className="mb-3 text-xs text-[#4f6977]">
+      <div className="space-y-3">
+        <nav className="text-xs text-[#4f6977]">
           {fromHistory ? (
             <>
               <Link href={`/client/${clientSlug}/history`} className="text-[#1b2832]">
@@ -3805,14 +3807,16 @@ export function ClientProgramDetailsSection({
             </>
           )}
         </nav>
-        <h2 className="text-2xl font-semibold text-[#141d24]">{displayTitle}</h2>
-        {displaySummary ? <p className="mt-1 text-sm text-[#475660]">{displaySummary}</p> : null}
-        <p className="mt-2 text-xs text-[#55707f]">
-          {assignedFromApi
-            ? `${assignedFromApi.status} | Aplicado em ${fmtDate(assignedFromApi.deployedAt)}`
-            : "-"}
-        </p>
-      </section>
+        <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">
+          <h2 className="text-2xl font-semibold text-[#141d24]">{displayTitle}</h2>
+          {displaySummary ? <p className="mt-1 text-sm text-[#475660]">{displaySummary}</p> : null}
+          <p className="mt-2 text-xs text-[#55707f]">
+            {assignedFromApi
+              ? `${assignedFromApi.status} | Aplicado em ${fmtDate(assignedFromApi.deployedAt)}`
+              : "-"}
+          </p>
+        </section>
+      </div>
 
       {assignedFromApi ? (
         <section className="rounded-[26px] border border-[#dfdfdf] bg-[#f8f8f8] p-5 shadow-sm">

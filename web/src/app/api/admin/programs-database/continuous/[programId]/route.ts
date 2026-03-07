@@ -3,13 +3,17 @@ import { z } from "zod";
 
 import { isAdminApiAuthorized } from "@/lib/admin-auth";
 import {
+  CONTINUOUS_PROGRAM_MAX_SESSIONS,
   CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCIES,
   DEFAULT_CONTINUOUS_PROGRAM_METRICS,
   DEFAULT_CONTINUOUS_PROGRAM_QUESTIONS,
   DEFAULT_CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCY,
   type ContinuousProgramMaterial,
   type ContinuousProgramMetrics,
+  type ContinuousProgramSession,
   type ContinuousProgramScheduleFrequency,
+  flattenContinuousProgramSessionMaterials,
+  parseContinuousProgramSessions,
 } from "@/lib/continuous-programs";
 import { isMissingColumnError, isMissingTableError } from "@/lib/supabase-errors";
 import { getSupabaseAdminClient } from "@/lib/supabase-admin";
@@ -24,6 +28,7 @@ type PeriodicProgramRow = {
   schedule_anchor_date?: string | null;
   evaluation_questions?: unknown;
   materials?: unknown;
+  sessions?: unknown;
   metrics?: unknown;
 };
 
@@ -49,6 +54,14 @@ const metricsSchema: z.ZodType<ContinuousProgramMetrics> = z.object({
   satisfactionTarget: z.number().min(1).max(5),
 });
 
+const programSessionSchema: z.ZodType<ContinuousProgramSession> = z.object({
+  id: z.string().trim().min(1).max(120),
+  title: z.string().trim().min(1).max(240),
+  notes: z.string().trim().max(5000).nullable().default(null),
+  preparationRequired: z.string().trim().max(1500).nullable().default(null),
+  materials: z.array(programMaterialSchema).max(80).default([]),
+});
+
 const scheduleFrequencySchema = z.enum(CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCIES);
 
 const updateProgramSchema = z
@@ -61,6 +74,7 @@ const updateProgramSchema = z
     scheduleAnchorDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
     evaluationQuestions: z.array(z.string().trim().min(3).max(240)).min(1).max(20).optional(),
     materials: z.array(programMaterialSchema).max(80).optional(),
+    sessions: z.array(programSessionSchema).min(1).max(CONTINUOUS_PROGRAM_MAX_SESSIONS).optional(),
     metrics: metricsSchema.optional(),
   })
   .refine((value) => Object.keys(value).length > 0, {
@@ -69,7 +83,7 @@ const updateProgramSchema = z
 
 const PROGRAM_BASE_SELECT = "program_id,title,description,target_risk_topic,trigger_threshold";
 const PROGRAM_DETAILS_SELECT =
-  "program_id,title,description,target_risk_topic,trigger_threshold,schedule_frequency,schedule_anchor_date,evaluation_questions,materials,metrics";
+  "program_id,title,description,target_risk_topic,trigger_threshold,schedule_frequency,schedule_anchor_date,evaluation_questions,materials,sessions,metrics";
 
 function todayIsoDate(): string {
   return new Date().toISOString().slice(0, 10);
@@ -94,12 +108,11 @@ function parseEvaluationQuestions(value: unknown): string[] {
   return parsed.data;
 }
 
-function parseMaterials(value: unknown): ContinuousProgramMaterial[] {
-  const parsed = z.array(programMaterialSchema).max(80).safeParse(value);
-  if (!parsed.success) {
-    return [];
-  }
-  return parsed.data;
+function parseSessions(row: Pick<PeriodicProgramRow, "sessions" | "materials">): ContinuousProgramSession[] {
+  return parseContinuousProgramSessions(row.sessions, {
+    fallbackMaterials: row.materials,
+    minCount: 1,
+  });
 }
 
 function parseMetrics(value: unknown): ContinuousProgramMetrics {
@@ -129,6 +142,7 @@ function summarizeAssignments(rows: ClientProgramStatusRow[] | null | undefined)
 }
 
 function mapProgram(row: PeriodicProgramRow, assignments: ReturnType<typeof summarizeAssignments>) {
+  const sessions = parseSessions(row);
   return {
     id: row.program_id,
     title: row.title,
@@ -141,7 +155,8 @@ function mapProgram(row: PeriodicProgramRow, assignments: ReturnType<typeof summ
         ? row.schedule_anchor_date
         : todayIsoDate(),
     evaluationQuestions: parseEvaluationQuestions(row.evaluation_questions),
-    materials: parseMaterials(row.materials),
+    materials: flattenContinuousProgramSessionMaterials(sessions),
+    sessions,
     metrics: parseMetrics(row.metrics),
     assignments,
   };
@@ -224,6 +239,13 @@ export async function PATCH(
     return NextResponse.json({ error: "Invalid payload." }, { status: 400 });
   }
 
+  const normalizedSessions =
+    parsed.sessions !== undefined
+      ? parseContinuousProgramSessions(parsed.sessions, {
+          fallbackMaterials: parsed.materials,
+          minCount: 1,
+        })
+      : undefined;
   const payload = {
     ...(parsed.title !== undefined ? { title: parsed.title } : {}),
     ...(parsed.description !== undefined
@@ -243,6 +265,12 @@ export async function PATCH(
       ? { evaluation_questions: parsed.evaluationQuestions }
       : {}),
     ...(parsed.materials !== undefined ? { materials: parsed.materials } : {}),
+    ...(normalizedSessions !== undefined
+      ? {
+          sessions: normalizedSessions,
+          materials: flattenContinuousProgramSessionMaterials(normalizedSessions),
+        }
+      : {}),
     ...(parsed.metrics !== undefined ? { metrics: parsed.metrics } : {}),
   };
 
@@ -265,15 +293,23 @@ export async function PATCH(
     .select(PROGRAM_DETAILS_SELECT)
     .maybeSingle<PeriodicProgramRow>();
 
+  const usesDetailFields =
+    parsed.scheduleFrequency !== undefined ||
+    parsed.scheduleAnchorDate !== undefined ||
+    parsed.evaluationQuestions !== undefined ||
+    parsed.materials !== undefined ||
+    parsed.sessions !== undefined ||
+    parsed.metrics !== undefined;
+
   if (
     detailedUpdateResult.error &&
     isMissingColumnError(detailedUpdateResult.error) &&
-    Object.keys(basePayload).length === 0
+    usesDetailFields
   ) {
     return NextResponse.json(
       {
         error:
-          "This database schema does not support materials, frequency, questionnaire, or metrics yet.",
+          "This database schema does not support sessions/materials, frequency, questionnaire, or metrics yet. Apply migrations 20260302190000_continuous_program_details.sql and 20260307090000_continuous_program_sessions.sql.",
       },
       { status: 409 },
     );

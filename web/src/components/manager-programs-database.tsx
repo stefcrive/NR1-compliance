@@ -6,6 +6,7 @@ import { useManagerLocale } from "@/components/manager-locale";
 import {
   CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCIES,
   DEFAULT_CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCY,
+  type ContinuousProgramMaterial,
   type ContinuousProgramScheduleFrequency,
 } from "@/lib/continuous-programs";
 
@@ -27,12 +28,21 @@ type ContinuousProgram = {
   description: string | null;
   targetRiskTopic: number;
   triggerThreshold: number;
+  sessionCount: number;
+  sessions: Array<{
+    id: string;
+    title: string;
+  }>;
   assignments: {
     total: number;
     recommended: number;
     active: number;
     completed: number;
   };
+  assignedCompanies: Array<{
+    id: string;
+    companyName: string;
+  }>;
   evaluation: {
     submissions: number;
     overallAverage: number | null;
@@ -74,6 +84,37 @@ type ClientOption = {
   companyName: string;
 };
 
+type SessionCatalogItem = {
+  catalogId: string;
+  sourceType: "program" | "library";
+  sourceProgramId: string | null;
+  sourceProgramTitle: string;
+  sourceTargetRiskTopic: number | null;
+  sourceTriggerThreshold: number | null;
+  sessionId: string;
+  sessionIndex: number | null;
+  sessionTitle: string;
+  notes: string | null;
+  preparationRequired: string | null;
+  materials: ContinuousProgramMaterial[];
+  materialCount: number;
+  moduleOrder?: number | null;
+  moduleTitle?: string | null;
+  topicOrder?: number | null;
+  topicTitle?: string | null;
+  assignedProgramCount?: number;
+  assignedPrograms?: Array<{ programId: string; programTitle: string }>;
+};
+
+type ContinuousProgramGroup = {
+  key: string;
+  label: string;
+  programs: ContinuousProgram[];
+  isSpecialCategory: boolean;
+};
+
+const LEADERSHIP_COACHING_CATEGORY_TAG = "[category:leadership-coaching-rh]";
+
 const COPY = {
   en: {
     title: "Programs Database",
@@ -108,14 +149,15 @@ const COPY = {
     diagWindow: "Window",
     diagSource: "Source",
     openDetails: "Open details",
-    openTable: "Open table",
-    closeTable: "Close table",
+    expandSection: "Expand section",
+    collapseSection: "Collapse section",
     diagNone: "No DRPS templates available.",
     sourceSurvey: "Survey base",
     sourceLegacy: "Legacy DRPS",
     continuousTitle: "Continuous Programs (Campaigns)",
     continuousSubtitle:
       "Preventive and interventive programs activated according to DRPS risk thresholds.",
+    leadershipCategoryTitle: "Treinamento/coaching de lideres, gestao, e RH.",
     programModalTitle: "Create continuous program",
     programModalSubtitle: "Create a new preventive or interventive program template.",
     programFieldTitle: "Title",
@@ -133,6 +175,7 @@ const COPY = {
     prgName: "Program",
     prgTopic: "Target topic",
     prgThreshold: "Trigger",
+    prgSessions: "Sessions",
     prgActive: "Active",
     prgTotal: "Total assignments",
     prgRiskGroup: "Psychosocial risk",
@@ -142,6 +185,10 @@ const COPY = {
     prgViewAverages: "View averages",
     prgCloseAverages: "Close averages",
     prgModalTitle: "Questionnaire average by question",
+    prgSessionsModalTitle: "Program Sessions",
+    prgSessionsModalEmpty: "No sessions configured for this program.",
+    prgAssignmentsModalTitle: "Assigned Companies",
+    prgAssignmentsModalEmpty: "No companies assigned to this program.",
     prgNoEvaluation: "No questionnaire submissions yet.",
     prgEvaluationUnavailable:
       "Evaluation data unavailable (apply migration 20260306013000_client_program_evaluations_and_online_activity_seed.sql).",
@@ -151,12 +198,53 @@ const COPY = {
     assignSelectAll: "Select all",
     assignClear: "Clear",
     assignSelected: "Assign selected",
+    assignModalTitle: "Select company",
+    assignModalSubtitle: "Choose the company that will receive the selected programs.",
+    assignNoCompanies: "No companies available.",
     assignSelectingHint: "Select one or more programs below and assign them to a company.",
     assignValidationCompany: "Select a company before assigning programs.",
     assignValidationPrograms: "Select at least one program to assign.",
     assignPartialError: "Some assignments failed:",
     assigning: "Assigning...",
     prgNone: "No continuous programs available.",
+    sessionsLibraryTitle: "Campaign Sessions Library",
+    sessionsLibrarySubtitle:
+      "Topic-based session library grouped by modules. Search, filter, and assign to a program.",
+    sessionsLibrarySearch: "Search sessions",
+    sessionsLibraryFilterProgram: "Filter by module",
+    sessionsLibraryFilterAllPrograms: "All modules",
+    sessionsLibraryTargetProgram: "Target program",
+    sessionsLibrarySelectAll: "Select all filtered",
+    sessionsLibraryClear: "Clear",
+    sessionsLibraryAssignSelected: "Assign selected sessions",
+    sessionsLibraryAssigning: "Assigning sessions...",
+    sessionsLibraryValidationProgram: "Select a target program for session assignment.",
+    sessionsLibraryValidationSessions: "Select at least one session to assign.",
+    sessionsLibraryAssignedNotice: "Sessions assigned to the selected program.",
+    sessionsLibraryNone: "No sessions found.",
+    sessionsLibraryProgramCol: "Module",
+    sessionsLibrarySessionCol: "Topic",
+    sessionsLibraryNotesCol: "Notes",
+    sessionsLibraryFilesCol: "Files",
+    sessionsLibraryAssignedProgramsCol: "Assigned programs",
+    sessionsLibraryAssignedProgramsView: "View",
+    sessionsLibraryAssignedProgramsNone: "No assigned programs for this topic.",
+    sessionsLibraryAssignedProgramsModalTitle: "Assigned Programs",
+    sessionsLibrarySourceFilterLibrary: "Uncategorized",
+    sessionsLibraryNewSession: "New session",
+    sessionsLibraryCreateTitle: "Create New Session",
+    sessionsLibraryCreateSubtitle: "Add a reusable session to the sessions database.",
+    sessionsLibraryCreateFieldTitle: "Session title",
+    sessionsLibraryCreateFieldModule: "Module",
+    sessionsLibraryCreateFieldModuleNew: "New module name",
+    sessionsLibraryCreateModuleNewOption: "Create new module",
+    sessionsLibraryCreateFieldNotes: "Session notes",
+    sessionsLibraryCreateFieldPreparation: "Preparation guidance",
+    sessionsLibraryCreateValidationTitle: "Session title must have at least 3 characters.",
+    sessionsLibraryCreateValidationModule: "Select an existing module or create a new one.",
+    sessionsLibraryCreateError: "Could not create session.",
+    sessionsLibraryCreateSuccess: "Session created in sessions library.",
+    sessionsLibraryCreating: "Creating session...",
     frequencies: {
       weekly: "Weekly",
       biweekly: "Biweekly",
@@ -204,14 +292,15 @@ const COPY = {
     diagWindow: "Janela",
     diagSource: "Origem",
     openDetails: "Abrir detalhes",
-    openTable: "Abrir tabela",
-    closeTable: "Fechar tabela",
+    expandSection: "Expandir secao",
+    collapseSection: "Recolher secao",
     diagNone: "Nenhum template DRPS disponivel.",
     sourceSurvey: "Base surveys",
     sourceLegacy: "DRPS legado",
     continuousTitle: "Programas Continuos (Campanhas)",
     continuousSubtitle:
       "Programas preventivos e interventivos ativados por gatilhos de risco DRPS.",
+    leadershipCategoryTitle: "Treinamento/coaching de lideres, gestao, e RH.",
     programModalTitle: "Criar programa continuo",
     programModalSubtitle: "Crie um novo template preventivo ou interventivo.",
     programFieldTitle: "Titulo",
@@ -229,6 +318,7 @@ const COPY = {
     prgName: "Programa",
     prgTopic: "Topico alvo",
     prgThreshold: "Gatilho",
+    prgSessions: "Sessoes",
     prgActive: "Ativos",
     prgTotal: "Total atribuicoes",
     prgRiskGroup: "Risco psicossocial",
@@ -238,6 +328,10 @@ const COPY = {
     prgViewAverages: "Ver medias",
     prgCloseAverages: "Fechar medias",
     prgModalTitle: "Media do questionario por pergunta",
+    prgSessionsModalTitle: "Sessoes do Programa",
+    prgSessionsModalEmpty: "Nenhuma sessao configurada para este programa.",
+    prgAssignmentsModalTitle: "Empresas Atribuidas",
+    prgAssignmentsModalEmpty: "Nenhuma empresa atribuida para este programa.",
     prgNoEvaluation: "Sem submissoes do questionario ate o momento.",
     prgEvaluationUnavailable:
       "Dados de avaliacao indisponiveis (aplique a migration 20260306013000_client_program_evaluations_and_online_activity_seed.sql).",
@@ -247,12 +341,54 @@ const COPY = {
     assignSelectAll: "Selecionar todos",
     assignClear: "Limpar",
     assignSelected: "Atribuir selecionados",
+    assignModalTitle: "Selecionar empresa",
+    assignModalSubtitle: "Escolha a empresa que recebera os programas selecionados.",
+    assignNoCompanies: "Nenhuma empresa disponivel.",
     assignSelectingHint: "Selecione um ou mais programas abaixo e atribua para uma empresa.",
     assignValidationCompany: "Selecione uma empresa antes de atribuir programas.",
     assignValidationPrograms: "Selecione ao menos um programa para atribuir.",
     assignPartialError: "Algumas atribuicoes falharam:",
     assigning: "Atribuindo...",
     prgNone: "Nenhum programa continuo disponivel.",
+    sessionsLibraryTitle: "Biblioteca de Sessoes de Campanha",
+    sessionsLibrarySubtitle:
+      "Biblioteca de sessoes por topico, agrupada em modulos. Pesquise, filtre e atribua para um programa.",
+    sessionsLibrarySearch: "Buscar sessoes",
+    sessionsLibraryFilterProgram: "Filtrar por modulo",
+    sessionsLibraryFilterAllPrograms: "Todos os modulos",
+    sessionsLibraryTargetProgram: "Programa de destino",
+    sessionsLibrarySelectAll: "Selecionar filtrados",
+    sessionsLibraryClear: "Limpar",
+    sessionsLibraryAssignSelected: "Atribuir sessoes selecionadas",
+    sessionsLibraryAssigning: "Atribuindo sessoes...",
+    sessionsLibraryValidationProgram: "Selecione um programa de destino para atribuir sessoes.",
+    sessionsLibraryValidationSessions: "Selecione ao menos uma sessao para atribuir.",
+    sessionsLibraryAssignedNotice: "Sessoes atribuidas ao programa selecionado.",
+    sessionsLibraryNone: "Nenhuma sessao encontrada.",
+    sessionsLibraryProgramCol: "Modulo",
+    sessionsLibrarySessionCol: "Topico",
+    sessionsLibraryNotesCol: "Notas",
+    sessionsLibraryFilesCol: "Arquivos",
+    sessionsLibraryAssignedProgramsCol: "Programas atribuidos",
+    sessionsLibraryAssignedProgramsView: "Ver",
+    sessionsLibraryAssignedProgramsNone: "Nenhum programa atribuido para este topico.",
+    sessionsLibraryAssignedProgramsModalTitle: "Programas Atribuidos",
+    sessionsLibrarySourceFilterLibrary: "Sem modulo",
+    sessionsLibraryNewSession: "Nova sessao",
+    sessionsLibraryCreateTitle: "Criar Nova Sessao",
+    sessionsLibraryCreateSubtitle: "Adicione uma sessao reutilizavel ao banco de sessoes.",
+    sessionsLibraryCreateFieldTitle: "Titulo da sessao",
+    sessionsLibraryCreateFieldModule: "Modulo",
+    sessionsLibraryCreateFieldModuleNew: "Nome do novo modulo",
+    sessionsLibraryCreateModuleNewOption: "Criar novo modulo",
+    sessionsLibraryCreateFieldNotes: "Notas da sessao",
+    sessionsLibraryCreateFieldPreparation: "Orientacao de preparacao",
+    sessionsLibraryCreateValidationTitle: "Titulo da sessao deve ter pelo menos 3 caracteres.",
+    sessionsLibraryCreateValidationModule:
+      "Selecione um modulo existente ou crie um novo.",
+    sessionsLibraryCreateError: "Nao foi possivel criar sessao.",
+    sessionsLibraryCreateSuccess: "Sessao criada na biblioteca de sessoes.",
+    sessionsLibraryCreating: "Criando sessao...",
     frequencies: {
       weekly: "Semanal",
       biweekly: "Quinzenal",
@@ -293,6 +429,46 @@ function formatRiskTopic(topicId: number, locale: "pt" | "en", fallback: string)
   return `${topic.code} - ${locale === "pt" ? topic.labelPt : topic.labelEn}`;
 }
 
+function hasLeadershipCoachingCategory(program: ContinuousProgram) {
+  const description = program.description ?? "";
+  return description.includes(LEADERSHIP_COACHING_CATEGORY_TAG);
+}
+
+function renderProgramDescription(description: string | null) {
+  if (!description) return "-";
+  const normalized = description.replace(LEADERSHIP_COACHING_CATEGORY_TAG, "").trim();
+  return normalized.length > 0 ? normalized : "-";
+}
+
+function ChevronToggleButton({
+  isOpen,
+  onToggle,
+  label,
+  expandLabel,
+  collapseLabel,
+  className = "",
+}: {
+  isOpen: boolean;
+  onToggle: () => void;
+  label: string;
+  expandLabel: string;
+  collapseLabel: string;
+  className?: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-expanded={isOpen}
+      aria-label={`${isOpen ? collapseLabel : expandLabel}: ${label}`}
+      title={`${isOpen ? collapseLabel : expandLabel}: ${label}`}
+      className={className}
+    >
+      <span aria-hidden="true">{isOpen ? "\u25B2" : "\u25BC"}</span>
+    </button>
+  );
+}
+
 function fmtDate(value: string | null) {
   if (!value) return "-";
   return new Intl.DateTimeFormat("pt-BR", { dateStyle: "short" }).format(new Date(value));
@@ -301,6 +477,15 @@ function fmtDate(value: string | null) {
 function fmtWindow(startsAt: string | null, closesAt: string | null) {
   return `${fmtDate(startsAt)} - ${fmtDate(closesAt)}`;
 }
+
+function sourceFilterKey(item: SessionCatalogItem) {
+  const moduleOrder = Number(item.moduleOrder);
+  const safeOrder = Number.isFinite(moduleOrder) ? moduleOrder : 999;
+  const moduleTitle = (item.moduleTitle ?? "").trim();
+  return moduleTitle ? `module:${safeOrder}:${moduleTitle}` : "__uncategorized__";
+}
+
+const CREATE_SESSION_NEW_MODULE_OPTION = "__new_module__";
 
 export function ManagerProgramsDatabase() {
   const { locale } = useManagerLocale();
@@ -334,11 +519,52 @@ export function ManagerProgramsDatabase() {
   const [createdDrpsId, setCreatedDrpsId] = useState<string | null>(null);
   const [createdProgramId, setCreatedProgramId] = useState<string | null>(null);
   const [selectedEvaluationProgramId, setSelectedEvaluationProgramId] = useState<string | null>(null);
+  const [isSessionsLibraryOpen, setIsSessionsLibraryOpen] = useState(true);
+  const [sessionsCatalog, setSessionsCatalog] = useState<SessionCatalogItem[]>([]);
+  const [sessionSearchTerm, setSessionSearchTerm] = useState("");
+  const [sessionSourceProgramFilterId, setSessionSourceProgramFilterId] = useState("all");
+  const [selectedSessionCatalogIds, setSelectedSessionCatalogIds] = useState<string[]>([]);
+  const [targetSessionProgramId, setTargetSessionProgramId] = useState("");
+  const [isAssigningCatalogSessions, setIsAssigningCatalogSessions] = useState(false);
+  const [isCreateSessionOpen, setIsCreateSessionOpen] = useState(false);
+  const [createSessionTitle, setCreateSessionTitle] = useState("");
+  const [createSessionModule, setCreateSessionModule] = useState("");
+  const [createSessionNewModule, setCreateSessionNewModule] = useState("");
+  const [createSessionNotes, setCreateSessionNotes] = useState("");
+  const [createSessionPreparation, setCreateSessionPreparation] = useState("");
+  const [createSessionError, setCreateSessionError] = useState("");
+  const [isCreatingSession, setIsCreatingSession] = useState(false);
+  const [selectedSessionAssignmentItem, setSelectedSessionAssignmentItem] =
+    useState<SessionCatalogItem | null>(null);
   const [clients, setClients] = useState<ClientOption[]>([]);
   const [selectedClientId, setSelectedClientId] = useState("");
   const [selectedProgramIds, setSelectedProgramIds] = useState<string[]>([]);
   const [assignStatus, setAssignStatus] = useState<"Recommended" | "Active" | "Completed">("Active");
   const [isAssigningSelected, setIsAssigningSelected] = useState(false);
+  const [isAssignProgramsModalOpen, setIsAssignProgramsModalOpen] = useState(false);
+  const [selectedProgramSessionsProgramId, setSelectedProgramSessionsProgramId] = useState<string | null>(
+    null,
+  );
+  const [selectedAssignedCompaniesProgramId, setSelectedAssignedCompaniesProgramId] = useState<string | null>(
+    null,
+  );
+  const sessionReturnTo = "/manager/programs";
+  function withSessionReturnTo(href: string) {
+    const separator = href.includes("?") ? "&" : "?";
+    return `${href}${separator}returnTo=${encodeURIComponent(sessionReturnTo)}`;
+  }
+  function getSessionLibraryHref(sessionId: string) {
+    return withSessionReturnTo(
+      `/manager/programs/sessions/library/${encodeURIComponent(sessionId)}`,
+    );
+  }
+  function getProgramSessionHref(programId: string, sessionId: string) {
+    return withSessionReturnTo(
+      `/manager/programs/sessions/program/${encodeURIComponent(programId)}/${encodeURIComponent(
+        sessionId,
+      )}`,
+    );
+  }
 
   const sortedDiagnostics = useMemo(
     () =>
@@ -351,20 +577,46 @@ export function ManagerProgramsDatabase() {
     () => sortedDiagnostics.filter((item) => item.source === "surveys"),
     [sortedDiagnostics],
   );
-  const groupedContinuousPrograms = useMemo(() => {
-    const groups = new Map<number, { topicId: number; label: string; programs: ContinuousProgram[] }>();
+  const continuousProgramGroups = useMemo(() => {
+    const riskGroups = new Map<number, { topicId: number; label: string; programs: ContinuousProgram[] }>();
+    const specialCategoryPrograms: ContinuousProgram[] = [];
     const sorted = [...continuousPrograms].sort((left, right) => left.title.localeCompare(right.title));
 
     for (const program of sorted) {
+      if (hasLeadershipCoachingCategory(program)) {
+        specialCategoryPrograms.push(program);
+        continue;
+      }
       const topicId = Number.isInteger(program.targetRiskTopic) ? program.targetRiskTopic : 999;
       const label = formatRiskTopic(topicId, locale, t.prgTopicUnknown);
-      const current = groups.get(topicId) ?? { topicId, label, programs: [] as ContinuousProgram[] };
+      const current = riskGroups.get(topicId) ?? { topicId, label, programs: [] as ContinuousProgram[] };
       current.programs.push(program);
-      groups.set(topicId, current);
+      riskGroups.set(topicId, current);
     }
 
-    return Array.from(groups.values()).sort((left, right) => left.topicId - right.topicId);
-  }, [continuousPrograms, locale, t.prgTopicUnknown]);
+    const nextGroups: ContinuousProgramGroup[] = [];
+
+    if (specialCategoryPrograms.length > 0) {
+      nextGroups.push({
+        key: "category:leadership-coaching-rh",
+        label: t.leadershipCategoryTitle,
+        programs: specialCategoryPrograms,
+        isSpecialCategory: true,
+      });
+    }
+
+    for (const group of Array.from(riskGroups.values()).sort((left, right) => left.topicId - right.topicId)) {
+      nextGroups.push({
+        key: `topic:${group.topicId}`,
+        label: group.label,
+        programs: group.programs,
+        isSpecialCategory: false,
+      });
+    }
+
+    return nextGroups;
+  }, [continuousPrograms, locale, t.leadershipCategoryTitle, t.prgTopicUnknown]);
+  const [openContinuousGroupByKey, setOpenContinuousGroupByKey] = useState<Record<string, boolean>>({});
   const selectedEvaluationProgram = useMemo(
     () =>
       selectedEvaluationProgramId
@@ -372,15 +624,136 @@ export function ManagerProgramsDatabase() {
         : null,
     [continuousPrograms, selectedEvaluationProgramId],
   );
+  const selectedAssignedCompaniesProgram = useMemo(
+    () =>
+      selectedAssignedCompaniesProgramId
+        ? continuousPrograms.find((item) => item.id === selectedAssignedCompaniesProgramId) ?? null
+        : null,
+    [continuousPrograms, selectedAssignedCompaniesProgramId],
+  );
+  const selectedProgramSessionsProgram = useMemo(
+    () =>
+      selectedProgramSessionsProgramId
+        ? continuousPrograms.find((item) => item.id === selectedProgramSessionsProgramId) ?? null
+        : null,
+    [continuousPrograms, selectedProgramSessionsProgramId],
+  );
   const selectedProgramIdSet = useMemo(() => new Set(selectedProgramIds), [selectedProgramIds]);
+  const selectedSessionCatalogIdSet = useMemo(
+    () => new Set(selectedSessionCatalogIds),
+    [selectedSessionCatalogIds],
+  );
+  useEffect(() => {
+    setOpenContinuousGroupByKey((previous) => {
+      const next: Record<string, boolean> = {};
+      for (const group of continuousProgramGroups) {
+        next[group.key] = previous[group.key] ?? true;
+      }
+      return next;
+    });
+  }, [continuousProgramGroups]);
+  const sessionSourceFilterOptions = useMemo(() => {
+    const options = new Map<string, string>();
+    for (const item of sessionsCatalog) {
+      const moduleLabel = (item.moduleTitle ?? "").trim() || t.sessionsLibrarySourceFilterLibrary;
+      options.set(sourceFilterKey(item), moduleLabel);
+    }
+    return Array.from(options.entries()).sort((left, right) => left[1].localeCompare(right[1]));
+  }, [sessionsCatalog, t.sessionsLibrarySourceFilterLibrary]);
+  const filteredSessionsCatalog = useMemo(() => {
+    const normalizedSearch = sessionSearchTerm.trim().toLowerCase();
+    return sessionsCatalog.filter((item) => {
+      if (sessionSourceProgramFilterId !== "all" && sourceFilterKey(item) !== sessionSourceProgramFilterId) {
+        return false;
+      }
+      if (!normalizedSearch) return true;
+      const searchable = [
+        item.moduleTitle ?? "",
+        item.topicTitle ?? "",
+        item.sessionTitle,
+        item.notes ?? "",
+        item.preparationRequired ?? "",
+      ]
+        .join(" ")
+        .toLowerCase();
+      return searchable.includes(normalizedSearch);
+    });
+  }, [sessionSearchTerm, sessionSourceProgramFilterId, sessionsCatalog]);
+  const sessionModuleOptions = useMemo(() => {
+    const options = new Map<string, number>();
+    for (const item of sessionsCatalog) {
+      const moduleTitle = (item.moduleTitle ?? "").trim();
+      if (!moduleTitle) continue;
+      const moduleOrder = Number(item.moduleOrder);
+      const safeOrder = Number.isFinite(moduleOrder) ? moduleOrder : 999;
+      const currentOrder = options.get(moduleTitle);
+      if (currentOrder === undefined || safeOrder < currentOrder) {
+        options.set(moduleTitle, safeOrder);
+      }
+    }
+    return Array.from(options.entries())
+      .sort((left, right) => (left[1] === right[1] ? left[0].localeCompare(right[0]) : left[1] - right[1]))
+      .map(([moduleTitle]) => moduleTitle);
+  }, [sessionsCatalog]);
+  const groupedFilteredSessionsCatalog = useMemo(() => {
+    const grouped = new Map<
+      string,
+      { groupKey: string; moduleLabel: string; moduleOrder: number; sessions: SessionCatalogItem[] }
+    >();
+
+    for (const item of filteredSessionsCatalog) {
+      const moduleOrder = Number(item.moduleOrder);
+      const safeOrder = Number.isFinite(moduleOrder) ? moduleOrder : 999;
+      const moduleLabel = (item.moduleTitle ?? "").trim() || t.sessionsLibrarySourceFilterLibrary;
+      const groupKey = `${safeOrder}:${moduleLabel}`;
+      const key = groupKey;
+      const current = grouped.get(key) ?? {
+        groupKey,
+        moduleLabel,
+        moduleOrder: safeOrder,
+        sessions: [] as SessionCatalogItem[],
+      };
+      current.sessions.push(item);
+      grouped.set(key, current);
+    }
+
+    return Array.from(grouped.values())
+      .sort((left, right) =>
+        left.moduleOrder === right.moduleOrder
+          ? left.moduleLabel.localeCompare(right.moduleLabel)
+          : left.moduleOrder - right.moduleOrder,
+      )
+      .map((group) => ({
+        ...group,
+        sessions: [...group.sessions].sort((left, right) => {
+          const leftTopicOrder = Number(left.topicOrder);
+          const rightTopicOrder = Number(right.topicOrder);
+          const safeLeft = Number.isFinite(leftTopicOrder) ? leftTopicOrder : 999;
+          const safeRight = Number.isFinite(rightTopicOrder) ? rightTopicOrder : 999;
+          if (safeLeft !== safeRight) return safeLeft - safeRight;
+          return left.sessionTitle.localeCompare(right.sessionTitle);
+        }),
+      }));
+  }, [filteredSessionsCatalog, t.sessionsLibrarySourceFilterLibrary]);
+  const [openSessionModuleByKey, setOpenSessionModuleByKey] = useState<Record<string, boolean>>({});
+  useEffect(() => {
+    setOpenSessionModuleByKey((previous) => {
+      const next: Record<string, boolean> = {};
+      for (const group of groupedFilteredSessionsCatalog) {
+        next[group.groupKey] = previous[group.groupKey] ?? true;
+      }
+      return next;
+    });
+  }, [groupedFilteredSessionsCatalog]);
 
   async function loadDatabase() {
     setIsLoading(true);
     setError("");
     try {
-      const [databaseResponse, clientsResponse] = await Promise.all([
+      const [databaseResponse, clientsResponse, sessionsCatalogResponse] = await Promise.all([
         fetch("/api/admin/programs-database", { cache: "no-store" }),
         fetch("/api/admin/clients", { cache: "no-store" }),
+        fetch("/api/admin/programs-database/continuous/sessions", { cache: "no-store" }),
       ]);
 
       if (!databaseResponse.ok) {
@@ -392,10 +765,18 @@ export function ManagerProgramsDatabase() {
         const payload = (await clientsResponse.json().catch(() => ({}))) as { error?: string };
         throw new Error(payload.error ?? "Could not load clients.");
       }
-
       const payload = (await databaseResponse.json()) as {
         drpsDiagnostics: DrpsDiagnostic[];
         continuousPrograms: ContinuousProgram[];
+      };
+      if (!sessionsCatalogResponse.ok) {
+        const sessionsErrorPayload = (await sessionsCatalogResponse.json().catch(() => ({}))) as {
+          error?: string;
+        };
+        throw new Error(sessionsErrorPayload?.error ?? "Could not load sessions catalog.");
+      }
+      const sessionsPayload = (await sessionsCatalogResponse.json().catch(() => ({}))) as {
+        sessions?: SessionCatalogItem[];
       };
       const clientsPayload = (await clientsResponse.json()) as {
         clients: Array<{ id: string; companyName: string }>;
@@ -408,6 +789,7 @@ export function ManagerProgramsDatabase() {
 
       setDiagnostics(payload.drpsDiagnostics ?? []);
       setContinuousPrograms(nextPrograms);
+      setSessionsCatalog(sessionsPayload.sessions ?? []);
       setClients(nextClients);
       setSelectedClientId((current) => {
         if (current && nextClients.some((item) => item.id === current)) return current;
@@ -416,13 +798,26 @@ export function ManagerProgramsDatabase() {
       setSelectedProgramIds((current) =>
         current.filter((programId) => nextPrograms.some((program) => program.id === programId)),
       );
+      setTargetSessionProgramId((current) =>
+        current && nextPrograms.some((program) => program.id === current)
+          ? current
+          : (nextPrograms[0]?.id ?? ""),
+      );
+      setSelectedSessionCatalogIds((current) =>
+        current.filter((catalogId) =>
+          (sessionsPayload.sessions ?? []).some((item) => item.catalogId === catalogId),
+        ),
+      );
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "Could not load programs database.");
       setDiagnostics([]);
       setContinuousPrograms([]);
+      setSessionsCatalog([]);
       setClients([]);
       setSelectedClientId("");
       setSelectedProgramIds([]);
+      setTargetSessionProgramId("");
+      setSelectedSessionCatalogIds([]);
     } finally {
       setIsLoading(false);
     }
@@ -451,6 +846,16 @@ export function ManagerProgramsDatabase() {
     setCreateProgramFrequency(DEFAULT_CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCY);
     setCreateProgramDurationMonths(6);
     setIsCreateProgramOpen(true);
+  }
+
+  function openCreateSessionModal() {
+    setCreateSessionError("");
+    setCreateSessionTitle("");
+    setCreateSessionModule(sessionModuleOptions[0] ?? CREATE_SESSION_NEW_MODULE_OPTION);
+    setCreateSessionNewModule("");
+    setCreateSessionNotes("");
+    setCreateSessionPreparation("");
+    setIsCreateSessionOpen(true);
   }
 
   async function handleCreateDrps() {
@@ -559,6 +964,53 @@ export function ManagerProgramsDatabase() {
     }
   }
 
+  async function handleCreateSession() {
+    setCreateSessionError("");
+    setNotice("");
+    if (createSessionTitle.trim().length < 3) {
+      setCreateSessionError(t.sessionsLibraryCreateValidationTitle);
+      return;
+    }
+    const resolvedModuleTitle =
+      createSessionModule === CREATE_SESSION_NEW_MODULE_OPTION
+        ? createSessionNewModule.trim()
+        : createSessionModule.trim();
+    if (!resolvedModuleTitle) {
+      setCreateSessionError(t.sessionsLibraryCreateValidationModule);
+      return;
+    }
+
+    setIsCreatingSession(true);
+    try {
+      const response = await fetch("/api/admin/programs-database/continuous/sessions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "create",
+          title: createSessionTitle.trim(),
+          moduleTitle: resolvedModuleTitle,
+          notes: createSessionNotes.trim() || null,
+          preparationRequired: createSessionPreparation.trim() || null,
+        }),
+      });
+
+      const payload = (await response.json().catch(() => ({}))) as { error?: string };
+      if (!response.ok) {
+        throw new Error(payload.error ?? t.sessionsLibraryCreateError);
+      }
+
+      setIsCreateSessionOpen(false);
+      setNotice(t.sessionsLibraryCreateSuccess);
+      await loadDatabase();
+    } catch (createError) {
+      setCreateSessionError(
+        createError instanceof Error ? createError.message : t.sessionsLibraryCreateError,
+      );
+    } finally {
+      setIsCreatingSession(false);
+    }
+  }
+
   function toggleProgramSelection(programId: string) {
     setSelectedProgramIds((current) =>
       current.includes(programId)
@@ -567,11 +1019,29 @@ export function ManagerProgramsDatabase() {
     );
   }
 
-  async function handleAssignSelectedPrograms() {
+  function openAssignSelectedProgramsModal() {
+    setNotice("");
+    setError("");
+    if (selectedProgramIds.length === 0) {
+      setError(t.assignValidationPrograms);
+      return;
+    }
+    if (clients.length === 0) {
+      setError(t.assignNoCompanies);
+      return;
+    }
+    setSelectedClientId((current) => {
+      if (current && clients.some((item) => item.id === current)) return current;
+      return clients[0]?.id ?? "";
+    });
+    setIsAssignProgramsModalOpen(true);
+  }
+
+  async function handleAssignSelectedPrograms(clientId: string) {
     setNotice("");
     setError("");
 
-    if (!selectedClientId) {
+    if (!clientId) {
       setError(t.assignValidationCompany);
       return;
     }
@@ -585,8 +1055,9 @@ export function ManagerProgramsDatabase() {
     const successfulProgramIds: string[] = [];
     const failureMessages: string[] = [];
     try {
+      setIsAssignProgramsModalOpen(false);
       for (const programId of selectedProgramIds) {
-        const response = await fetch(`/api/admin/clients/${selectedClientId}/programs`, {
+        const response = await fetch(`/api/admin/clients/${clientId}/programs`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -622,6 +1093,78 @@ export function ManagerProgramsDatabase() {
     }
   }
 
+  function toggleSessionCatalogSelection(catalogId: string) {
+    setSelectedSessionCatalogIds((current) =>
+      current.includes(catalogId)
+        ? current.filter((item) => item !== catalogId)
+        : [...current, catalogId],
+    );
+  }
+
+  function toggleContinuousGroup(groupKey: string) {
+    setOpenContinuousGroupByKey((current) => ({
+      ...current,
+      [groupKey]: !(current[groupKey] ?? true),
+    }));
+  }
+
+  function toggleSessionModuleGroup(groupKey: string) {
+    setOpenSessionModuleByKey((current) => ({
+      ...current,
+      [groupKey]: !(current[groupKey] ?? true),
+    }));
+  }
+
+  async function handleAssignSelectedSessionsToProgram() {
+    setNotice("");
+    setError("");
+
+    if (!targetSessionProgramId) {
+      setError(t.sessionsLibraryValidationProgram);
+      return;
+    }
+    if (selectedSessionCatalogIds.length === 0) {
+      setError(t.sessionsLibraryValidationSessions);
+      return;
+    }
+
+    const selectedSessions = selectedSessionCatalogIds
+      .map((catalogId) => sessionsCatalog.find((item) => item.catalogId === catalogId))
+      .filter((item): item is SessionCatalogItem => Boolean(item))
+      .map((item) => ({ catalogId: item.catalogId }));
+
+    if (selectedSessions.length === 0) {
+      setError(t.sessionsLibraryValidationSessions);
+      return;
+    }
+
+    setIsAssigningCatalogSessions(true);
+    try {
+      const response = await fetch("/api/admin/programs-database/continuous/sessions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "assign",
+          targetProgramId: targetSessionProgramId,
+          sessions: selectedSessions,
+        }),
+      });
+
+      const payload = (await response.json().catch(() => ({}))) as { error?: string };
+      if (!response.ok) {
+        throw new Error(payload.error ?? "Could not assign sessions.");
+      }
+
+      setSelectedSessionCatalogIds([]);
+      setNotice(t.sessionsLibraryAssignedNotice);
+      await loadDatabase();
+    } catch (assignError) {
+      setError(assignError instanceof Error ? assignError.message : "Could not assign sessions.");
+    } finally {
+      setIsAssigningCatalogSessions(false);
+    }
+  }
+
   return (
     <div className="space-y-6">
       <section className="rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
@@ -649,6 +1192,21 @@ export function ManagerProgramsDatabase() {
           >
             {t.createProgram}
           </button>
+          <button
+            type="button"
+            onClick={openCreateSessionModal}
+            className="rounded-full border border-[#0f5b73] px-4 py-2 text-xs font-semibold text-[#0f5b73]"
+          >
+            {t.sessionsLibraryNewSession}
+          </button>
+          <ChevronToggleButton
+            isOpen={isSessionsLibraryOpen}
+            onToggle={() => setIsSessionsLibraryOpen((current) => !current)}
+            label={t.sessionsLibraryTitle}
+            expandLabel={t.expandSection}
+            collapseLabel={t.collapseSection}
+            className="rounded-full border border-[#9ec8db] px-4 py-2 text-xs font-semibold text-[#0f5b73]"
+          />
         </div>
         {notice ? <p className="mt-2 text-sm text-[#1f6b3d]">{notice}</p> : null}
         {createdDrpsId || createdProgramId ? (
@@ -687,14 +1245,14 @@ export function ManagerProgramsDatabase() {
             >
               {t.createDrps}
             </button>
-            <button
-              type="button"
-              onClick={() => setIsDiagnosticsOpen((current) => !current)}
-              aria-expanded={isDiagnosticsOpen}
+            <ChevronToggleButton
+              isOpen={isDiagnosticsOpen}
+              onToggle={() => setIsDiagnosticsOpen((current) => !current)}
+              label={t.diagnosticsTitle}
+              expandLabel={t.expandSection}
+              collapseLabel={t.collapseSection}
               className="rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
-            >
-              {isDiagnosticsOpen ? t.closeTable : t.openTable}
-            </button>
+            />
           </div>
         </div>
         {isLoading ? <p className="mt-3 text-sm text-[#49697a]">{t.loading}</p> : null}
@@ -776,164 +1334,657 @@ export function ManagerProgramsDatabase() {
             >
               {t.createProgram}
             </button>
-            <button
-              type="button"
-              onClick={() => setIsContinuousOpen((current) => !current)}
-              aria-expanded={isContinuousOpen}
+            <ChevronToggleButton
+              isOpen={isContinuousOpen}
+              onToggle={() => setIsContinuousOpen((current) => !current)}
+              label={t.continuousTitle}
+              expandLabel={t.expandSection}
+              collapseLabel={t.collapseSection}
               className="rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
-            >
-              {isContinuousOpen ? t.closeTable : t.openTable}
-            </button>
+            />
           </div>
         </div>
-        <div className="mt-3 rounded-xl border border-[#d8e4ee] bg-[#f8fbfd] p-3">
-          <p className="text-xs text-[#35515f]">{t.assignSelectingHint}</p>
-          <div className="mt-2 flex flex-wrap items-end gap-2">
-            <label className="text-xs text-[#4f6977]">
+        {isContinuousOpen ? (
+          <div className="mt-3 rounded-xl border border-[#d8e4ee] bg-[#f8fbfd] p-3">
+            <div className="flex flex-wrap items-end gap-2">
+              <label className="text-xs text-[#4f6977]">
+                {t.assignStatus}
+                <select
+                  value={assignStatus}
+                  onChange={(event) =>
+                    setAssignStatus(event.target.value as "Recommended" | "Active" | "Completed")
+                  }
+                  className="mt-1 rounded border border-[#c9dce8] px-3 py-2 text-sm"
+                >
+                  <option value="Recommended">Recommended</option>
+                  <option value="Active">Active</option>
+                  <option value="Completed">Completed</option>
+                </select>
+              </label>
+              <button
+                type="button"
+                onClick={() => setSelectedProgramIds(continuousPrograms.map((program) => program.id))}
+                className="rounded-full border border-[#9ec8db] px-3 py-2 text-xs font-semibold text-[#0f5b73]"
+              >
+                {t.assignSelectAll}
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedProgramIds([])}
+                className="rounded-full border border-[#c9dce8] px-3 py-2 text-xs font-semibold text-[#35515f]"
+              >
+                {t.assignClear}
+              </button>
+              <button
+                type="button"
+                onClick={openAssignSelectedProgramsModal}
+                disabled={isAssigningSelected || selectedProgramIds.length === 0}
+                className="rounded-full bg-[#0f5b73] px-4 py-2 text-xs font-semibold text-white disabled:opacity-50"
+              >
+                {isAssigningSelected
+                  ? t.assigning
+                  : `${t.assignSelected} (${selectedProgramIds.length})`}
+              </button>
+            </div>
+          </div>
+        ) : null}
+        {isContinuousOpen && !isLoading && !error ? (
+          <div className="mt-3 space-y-4">
+            {continuousProgramGroups.length === 0 ? (
+              <p className="text-xs text-[#5a7383]">{t.prgNone}</p>
+            ) : (
+              continuousProgramGroups.map((group) => {
+                const isGroupOpen = openContinuousGroupByKey[group.key] ?? true;
+                return (
+                  <div key={group.key} className="overflow-hidden rounded-xl border border-[#d8e4ee]">
+                    <div className="border-b border-[#d8e4ee] bg-gradient-to-r from-[#eaf4fb] to-[#f4f9fc] px-4 py-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <div>
+                          {!group.isSpecialCategory ? (
+                            <p className="text-[11px] font-semibold uppercase tracking-wide text-[#2d5569]">
+                              {t.prgRiskGroup}
+                            </p>
+                          ) : null}
+                          <p className="mt-1 text-base font-bold text-[#123447]">{group.label}</p>
+                        </div>
+                        <ChevronToggleButton
+                          isOpen={isGroupOpen}
+                          onToggle={() => toggleContinuousGroup(group.key)}
+                          label={group.label}
+                          expandLabel={t.expandSection}
+                          collapseLabel={t.collapseSection}
+                          className="rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
+                        />
+                      </div>
+                    </div>
+                    {isGroupOpen ? (
+                      <div className="overflow-x-auto">
+                        <table className="nr-table min-w-full text-sm">
+                          <thead>
+                            <tr className="border-b">
+                              <th className="px-2 py-2 text-left">#</th>
+                              <th className="px-2 py-2 text-left">{t.prgName}</th>
+                              <th className="px-2 py-2 text-left">{t.prgThreshold}</th>
+                              <th className="px-2 py-2 text-left">{t.prgSessions}</th>
+                              <th className="px-2 py-2 text-left">{t.prgTotal}</th>
+                              <th className="px-2 py-2 text-left">{t.prgEvaluation}</th>
+                              <th className="px-2 py-2 text-left">{t.openDetails}</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {group.programs.map((program) => (
+                              <tr key={program.id} className="border-b">
+                                <td className="px-2 py-2">
+                                  <input
+                                    type="checkbox"
+                                    checked={selectedProgramIdSet.has(program.id)}
+                                    onChange={() => toggleProgramSelection(program.id)}
+                                    className="h-4 w-4 rounded border-[#9ec8db] text-[#0f5b73]"
+                                  />
+                                </td>
+                                <td className="px-2 py-2">
+                                  <Link
+                                    href={`/manager/programs/continuous/${program.id}`}
+                                    className="font-semibold text-[#123447] hover:text-[#0f5b73] hover:underline"
+                                  >
+                                    {program.title}
+                                  </Link>
+                                  <p className="text-xs text-[#55707f]">
+                                    {renderProgramDescription(program.description)}
+                                  </p>
+                                </td>
+                                <td className="px-2 py-2">{program.triggerThreshold.toFixed(2)}</td>
+                                <td className="px-2 py-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => setSelectedProgramSessionsProgramId(program.id)}
+                                    className="font-semibold text-[#0f5b73] hover:underline"
+                                  >
+                                    {program.sessionCount}
+                                  </button>
+                                </td>
+                                <td className="px-2 py-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => setSelectedAssignedCompaniesProgramId(program.id)}
+                                    className="font-semibold text-[#0f5b73] hover:underline"
+                                  >
+                                    {program.assignments.total}
+                                  </button>
+                                </td>
+                                <td className="px-2 py-2">
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setSelectedEvaluationProgramId((current) =>
+                                        current === program.id ? null : program.id,
+                                      )
+                                    }
+                                    className="rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
+                                  >
+                                    {selectedEvaluationProgramId === program.id
+                                      ? t.prgCloseAverages
+                                      : t.prgViewAverages}
+                                  </button>
+                                </td>
+                                <td className="px-2 py-2">
+                                  <Link
+                                    href={`/manager/programs/continuous/${program.id}`}
+                                    className="rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
+                                  >
+                                    {t.openDetails}
+                                  </Link>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })
+            )}
+          </div>
+        ) : null}
+      </section>
+
+      <section className="rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h3 className="text-lg font-semibold text-[#123447]">{t.sessionsLibraryTitle}</h3>
+            <p className="mt-1 text-sm text-[#35515f]">{t.sessionsLibrarySubtitle}</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={openCreateSessionModal}
+              className="rounded-full border border-[#0f5b73] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
+            >
+              {t.sessionsLibraryNewSession}
+            </button>
+            <ChevronToggleButton
+              isOpen={isSessionsLibraryOpen}
+              onToggle={() => setIsSessionsLibraryOpen((current) => !current)}
+              label={t.sessionsLibraryTitle}
+              expandLabel={t.expandSection}
+              collapseLabel={t.collapseSection}
+              className="rounded-full border border-[#9ec8db] px-3 py-2 text-xs font-semibold text-[#0f5b73]"
+            />
+          </div>
+        </div>
+
+        {isSessionsLibraryOpen ? (
+          <>
+            <div className="mt-3 rounded-xl border border-[#d8e4ee] bg-[#f8fbfd] p-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <label className="flex min-w-[18rem] flex-1 items-center gap-2 text-sm text-[#35515f]">
+                  <span className="shrink-0 font-medium text-[#2f5163]">{t.sessionsLibraryTargetProgram}</span>
+                  <select
+                    value={targetSessionProgramId}
+                    onChange={(event) => setTargetSessionProgramId(event.target.value)}
+                    className="h-12 min-w-56 flex-1 rounded-lg border border-[#b8cfde] bg-white px-4 text-sm text-[#234457]"
+                  >
+                    {continuousPrograms.length === 0 ? <option value="">-</option> : null}
+                    {continuousPrograms.map((program) => (
+                      <option key={`session-target-program-${program.id}`} value={program.id}>
+                        {program.title}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setSelectedSessionCatalogIds(filteredSessionsCatalog.map((item) => item.catalogId))
+                  }
+                  className="h-12 rounded-full border border-[#97c3d9] bg-white px-5 text-sm font-semibold text-[#0f5b73]"
+                >
+                  {t.sessionsLibrarySelectAll}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedSessionCatalogIds([])}
+                  className="h-12 rounded-full border border-[#b8cfde] bg-white px-5 text-sm font-semibold text-[#35515f]"
+                >
+                  {t.sessionsLibraryClear}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleAssignSelectedSessionsToProgram()}
+                  disabled={
+                    isAssigningCatalogSessions ||
+                    selectedSessionCatalogIds.length === 0 ||
+                    !targetSessionProgramId
+                  }
+                  className="h-12 rounded-full bg-[#8eafbe] px-6 text-sm font-semibold text-white disabled:opacity-50"
+                >
+                  {isAssigningCatalogSessions
+                    ? t.sessionsLibraryAssigning
+                    : `${t.sessionsLibraryAssignSelected} (${selectedSessionCatalogIds.length})`}
+                </button>
+              </div>
+
+              <div className="mt-3 grid gap-2 md:grid-cols-2">
+                <label className="text-sm text-[#35515f]">
+                  {t.sessionsLibrarySearch}
+                  <input
+                    value={sessionSearchTerm}
+                    onChange={(event) => setSessionSearchTerm(event.target.value)}
+                    className="mt-1 h-12 w-full rounded-md border border-[#b8cfde] bg-white px-4 text-sm text-[#234457] placeholder:text-[#8aa0ae]"
+                    placeholder={t.sessionsLibrarySearch}
+                  />
+                </label>
+                <label className="text-sm text-[#35515f]">
+                  {t.sessionsLibraryFilterProgram}
+                  <select
+                    value={sessionSourceProgramFilterId}
+                    onChange={(event) => setSessionSourceProgramFilterId(event.target.value)}
+                    className="mt-1 h-12 w-full rounded-md border border-[#b8cfde] bg-white px-4 text-sm text-[#234457]"
+                  >
+                    <option value="all">{t.sessionsLibraryFilterAllPrograms}</option>
+                    {sessionSourceFilterOptions.map(([filterKey, label]) => (
+                      <option key={`session-source-filter-${filterKey}`} value={filterKey}>
+                        {label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+            </div>
+
+            {isLoading ? <p className="mt-3 text-sm text-[#49697a]">{t.loading}</p> : null}
+            {!isLoading ? (
+              <div className="mt-3 space-y-3">
+                {groupedFilteredSessionsCatalog.length === 0 ? (
+                  <p className="text-xs text-[#5a7383]">{t.sessionsLibraryNone}</p>
+                ) : null}
+                {groupedFilteredSessionsCatalog.map((group) => {
+                  const isModuleOpen = openSessionModuleByKey[group.groupKey] ?? true;
+                  return (
+                    <div key={`session-module-group-${group.groupKey}`} className="space-y-1">
+                      <div className="rounded-lg border border-[#d8e4ee] bg-gradient-to-r from-[#edf6fb] to-[#f8fbfd] px-3 py-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-sm font-bold text-[#123447]">{group.moduleLabel}</p>
+                          <ChevronToggleButton
+                            isOpen={isModuleOpen}
+                            onToggle={() => toggleSessionModuleGroup(group.groupKey)}
+                            label={group.moduleLabel}
+                            expandLabel={t.expandSection}
+                            collapseLabel={t.collapseSection}
+                            className="rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
+                          />
+                        </div>
+                      </div>
+                      {isModuleOpen ? (
+                        <div className="overflow-x-auto rounded-lg border border-[#d8e4ee]">
+                          <table className="nr-table min-w-full text-sm">
+                            <thead>
+                              <tr className="border-b">
+                                <th className="px-2 py-2 text-left">#</th>
+                                <th className="px-2 py-2 text-left">{t.sessionsLibrarySessionCol}</th>
+                                <th className="px-2 py-2 text-left">{t.sessionsLibraryNotesCol}</th>
+                                <th className="px-2 py-2 text-left">{t.sessionsLibraryFilesCol}</th>
+                                <th className="px-2 py-2 text-left">{t.sessionsLibraryAssignedProgramsCol}</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {group.sessions.map((item) => (
+                                <tr key={item.catalogId} className="border-b">
+                                  <td className="px-2 py-2">
+                                    <input
+                                      type="checkbox"
+                                      checked={selectedSessionCatalogIdSet.has(item.catalogId)}
+                                      onChange={() => toggleSessionCatalogSelection(item.catalogId)}
+                                      className="h-4 w-4 rounded border-[#9ec8db] text-[#0f5b73]"
+                                    />
+                                  </td>
+                                  <td className="px-2 py-2">
+                                    <Link
+                                      href={getSessionLibraryHref(item.sessionId)}
+                                      className="font-medium text-[#123447] hover:text-[#0f5b73] hover:underline"
+                                    >
+                                      {item.topicTitle ?? item.sessionTitle}
+                                    </Link>
+                                    <p className="text-xs text-[#55707f]">
+                                      {Number.isFinite(Number(item.topicOrder))
+                                        ? `${t.sessionsLibrarySessionCol} #${Number(item.topicOrder)}`
+                                        : t.sessionsLibrarySessionCol}
+                                    </p>
+                                  </td>
+                                  <td className="px-2 py-2 text-xs text-[#35515f]">
+                                    {(item.notes ?? item.preparationRequired ?? "-").slice(0, 140)}
+                                  </td>
+                                  <td className="px-2 py-2">{item.materialCount}</td>
+                                  <td className="px-2 py-2">
+                                    <button
+                                      type="button"
+                                      onClick={() => setSelectedSessionAssignmentItem(item)}
+                                      className="rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
+                                    >
+                                      {t.sessionsLibraryAssignedProgramsView} (
+                                      {item.assignedProgramCount ?? item.assignedPrograms?.length ?? 0})
+                                    </button>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : null}
+          </>
+        ) : null}
+      </section>
+
+      {isAssignProgramsModalOpen ? (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/35 p-4">
+          <div className="w-full max-w-lg rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-xl">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h4 className="text-lg font-semibold text-[#123447]">{t.assignModalTitle}</h4>
+                <p className="text-sm text-[#4f6977]">{t.assignModalSubtitle}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsAssignProgramsModalOpen(false)}
+                className="rounded-full border border-[#c9dce8] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
+              >
+                {t.modalClose}
+              </button>
+            </div>
+
+            <label className="mt-4 block text-xs text-[#4f6977]">
               {t.assignCompany}
               <select
                 value={selectedClientId}
                 onChange={(event) => setSelectedClientId(event.target.value)}
-                className="mt-1 min-w-56 rounded border border-[#c9dce8] px-3 py-2 text-sm"
+                className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
               >
                 {clients.length === 0 ? <option value="">-</option> : null}
                 {clients.map((clientOption) => (
-                  <option key={`assign-client-${clientOption.id}`} value={clientOption.id}>
+                  <option key={`assign-client-modal-${clientOption.id}`} value={clientOption.id}>
                     {clientOption.companyName}
                   </option>
                 ))}
               </select>
             </label>
-            <label className="text-xs text-[#4f6977]">
-              {t.assignStatus}
-              <select
-                value={assignStatus}
-                onChange={(event) =>
-                  setAssignStatus(event.target.value as "Recommended" | "Active" | "Completed")
-                }
-                className="mt-1 rounded border border-[#c9dce8] px-3 py-2 text-sm"
+
+            {clients.length === 0 ? <p className="mt-3 text-sm text-[#5a7383]">{t.assignNoCompanies}</p> : null}
+
+            <div className="mt-4 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => void handleAssignSelectedPrograms(selectedClientId)}
+                disabled={isAssigningSelected || selectedProgramIds.length === 0 || !selectedClientId}
+                className="rounded-full bg-[#0f5b73] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
               >
-                <option value="Recommended">Recommended</option>
-                <option value="Active">Active</option>
-                <option value="Completed">Completed</option>
-              </select>
-            </label>
-            <button
-              type="button"
-              onClick={() => setSelectedProgramIds(continuousPrograms.map((program) => program.id))}
-              className="rounded-full border border-[#9ec8db] px-3 py-2 text-xs font-semibold text-[#0f5b73]"
-            >
-              {t.assignSelectAll}
-            </button>
-            <button
-              type="button"
-              onClick={() => setSelectedProgramIds([])}
-              className="rounded-full border border-[#c9dce8] px-3 py-2 text-xs font-semibold text-[#35515f]"
-            >
-              {t.assignClear}
-            </button>
-            <button
-              type="button"
-              onClick={() => void handleAssignSelectedPrograms()}
-              disabled={isAssigningSelected || selectedProgramIds.length === 0 || !selectedClientId}
-              className="rounded-full bg-[#0f5b73] px-4 py-2 text-xs font-semibold text-white disabled:opacity-50"
-            >
-              {isAssigningSelected
-                ? t.assigning
-                : `${t.assignSelected} (${selectedProgramIds.length})`}
-            </button>
+                {isAssigningSelected ? t.assigning : `${t.assignSelected} (${selectedProgramIds.length})`}
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsAssignProgramsModalOpen(false)}
+                className="rounded-full border border-[#9ec8db] px-4 py-2 text-sm font-semibold text-[#0f5b73]"
+              >
+                {t.modalCancel}
+              </button>
+            </div>
           </div>
         </div>
-        {isContinuousOpen && !isLoading && !error ? (
-          <div className="mt-3 space-y-4">
-            {groupedContinuousPrograms.length === 0 ? (
-              <p className="text-xs text-[#5a7383]">{t.prgNone}</p>
-            ) : (
-              groupedContinuousPrograms.map((group) => (
-                <div key={`risk-group-${group.topicId}`} className="overflow-hidden rounded-xl border border-[#d8e4ee]">
-                  <div className="border-b border-[#d8e4ee] bg-[#f4f9fc] px-3 py-2">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-[#2d5569]">
-                      {t.prgRiskGroup}: {group.label}
-                    </p>
-                  </div>
-                  <div className="overflow-x-auto">
-                    <table className="nr-table min-w-full text-sm">
-                      <thead>
-                        <tr className="border-b">
-                          <th className="px-2 py-2 text-left">#</th>
-                          <th className="px-2 py-2 text-left">{t.prgName}</th>
-                          <th className="px-2 py-2 text-left">{t.prgThreshold}</th>
-                          <th className="px-2 py-2 text-left">{t.prgActive}</th>
-                          <th className="px-2 py-2 text-left">{t.prgTotal}</th>
-                          <th className="px-2 py-2 text-left">{t.prgSubmissions}</th>
-                          <th className="px-2 py-2 text-left">{t.prgOverall}</th>
-                          <th className="px-2 py-2 text-left">{t.prgEvaluation}</th>
-                          <th className="px-2 py-2 text-left">{t.openDetails}</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {group.programs.map((program) => (
-                          <tr key={program.id} className="border-b">
-                            <td className="px-2 py-2">
-                              <input
-                                type="checkbox"
-                                checked={selectedProgramIdSet.has(program.id)}
-                                onChange={() => toggleProgramSelection(program.id)}
-                                className="h-4 w-4 rounded border-[#9ec8db] text-[#0f5b73]"
-                              />
-                            </td>
-                            <td className="px-2 py-2">
-                              <Link
-                                href={`/manager/programs/continuous/${program.id}`}
-                                className="font-semibold text-[#123447] hover:text-[#0f5b73] hover:underline"
-                              >
-                                {program.title}
-                              </Link>
-                              <p className="text-xs text-[#55707f]">{program.description ?? "-"}</p>
-                            </td>
-                            <td className="px-2 py-2">{program.triggerThreshold.toFixed(2)}</td>
-                            <td className="px-2 py-2">{program.assignments.active}</td>
-                            <td className="px-2 py-2">{program.assignments.total}</td>
-                            <td className="px-2 py-2">{program.evaluation.submissions}</td>
-                            <td className="px-2 py-2">
-                              {program.evaluation.overallAverage !== null
-                                ? `${program.evaluation.overallAverage.toFixed(2)} / 5`
-                                : "-"}
-                            </td>
-                            <td className="px-2 py-2">
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setSelectedEvaluationProgramId((current) =>
-                                    current === program.id ? null : program.id,
-                                  )
-                                }
-                                className="rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
-                              >
-                                {selectedEvaluationProgramId === program.id
-                                  ? t.prgCloseAverages
-                                  : t.prgViewAverages}
-                              </button>
-                            </td>
-                            <td className="px-2 py-2">
-                              <Link
-                                href={`/manager/programs/continuous/${program.id}`}
-                                className="rounded-full border border-[#9ec8db] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
-                              >
-                                {t.openDetails}
-                              </Link>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              ))
-            )}
+      ) : null}
+
+      {isCreateSessionOpen ? (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/35 p-4">
+          <div className="w-full max-w-2xl rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-xl">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h4 className="text-lg font-semibold text-[#123447]">{t.sessionsLibraryCreateTitle}</h4>
+                <p className="text-sm text-[#4f6977]">{t.sessionsLibraryCreateSubtitle}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsCreateSessionOpen(false)}
+                className="rounded-full border border-[#c9dce8] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
+              >
+                {t.modalClose}
+              </button>
+            </div>
+
+            <div className="mt-4 grid gap-3">
+              <label className="text-xs text-[#4f6977]">
+                {t.sessionsLibraryCreateFieldTitle}
+                <input
+                  value={createSessionTitle}
+                  onChange={(event) => setCreateSessionTitle(event.target.value)}
+                  className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
+                />
+              </label>
+              <label className="text-xs text-[#4f6977]">
+                {t.sessionsLibraryCreateFieldModule}
+                <select
+                  value={createSessionModule}
+                  onChange={(event) => setCreateSessionModule(event.target.value)}
+                  className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
+                >
+                  {sessionModuleOptions.map((moduleTitle) => (
+                    <option key={`create-session-module-${moduleTitle}`} value={moduleTitle}>
+                      {moduleTitle}
+                    </option>
+                  ))}
+                  <option value={CREATE_SESSION_NEW_MODULE_OPTION}>
+                    {t.sessionsLibraryCreateModuleNewOption}
+                  </option>
+                </select>
+              </label>
+              {createSessionModule === CREATE_SESSION_NEW_MODULE_OPTION ? (
+                <label className="text-xs text-[#4f6977]">
+                  {t.sessionsLibraryCreateFieldModuleNew}
+                  <input
+                    value={createSessionNewModule}
+                    onChange={(event) => setCreateSessionNewModule(event.target.value)}
+                    className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
+                  />
+                </label>
+              ) : null}
+              <label className="text-xs text-[#4f6977]">
+                {t.sessionsLibraryCreateFieldNotes}
+                <textarea
+                  value={createSessionNotes}
+                  onChange={(event) => setCreateSessionNotes(event.target.value)}
+                  className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
+                  rows={3}
+                />
+              </label>
+              <label className="text-xs text-[#4f6977]">
+                {t.sessionsLibraryCreateFieldPreparation}
+                <textarea
+                  value={createSessionPreparation}
+                  onChange={(event) => setCreateSessionPreparation(event.target.value)}
+                  className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
+                  rows={3}
+                />
+              </label>
+            </div>
+
+            {createSessionError ? <p className="mt-3 text-sm text-red-600">{createSessionError}</p> : null}
+
+            <div className="mt-4 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => void handleCreateSession()}
+                disabled={isCreatingSession}
+                className="rounded-full bg-[#0f5b73] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+              >
+                {isCreatingSession ? t.sessionsLibraryCreating : t.sessionsLibraryNewSession}
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsCreateSessionOpen(false)}
+                className="rounded-full border border-[#9ec8db] px-4 py-2 text-sm font-semibold text-[#0f5b73]"
+              >
+                {t.modalCancel}
+              </button>
+            </div>
           </div>
-        ) : null}
-      </section>
+        </div>
+      ) : null}
+
+      {selectedSessionAssignmentItem ? (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/35 p-4">
+          <div className="w-full max-w-2xl rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-xl">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h4 className="text-lg font-semibold text-[#123447]">
+                  {t.sessionsLibraryAssignedProgramsModalTitle}
+                </h4>
+                <p className="text-sm text-[#4f6977]">
+                  {selectedSessionAssignmentItem.topicTitle ?? selectedSessionAssignmentItem.sessionTitle}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedSessionAssignmentItem(null)}
+                className="rounded-full border border-[#c9dce8] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
+              >
+                {t.modalClose}
+              </button>
+            </div>
+
+            <div className="mt-4 max-h-[50vh] overflow-auto rounded-lg border border-[#d8e4ee]">
+              {(selectedSessionAssignmentItem.assignedPrograms ?? []).length === 0 ? (
+                <p className="px-3 py-3 text-sm text-[#5a7383]">{t.sessionsLibraryAssignedProgramsNone}</p>
+              ) : (
+                <ul className="divide-y divide-[#d8e4ee]">
+                  {(selectedSessionAssignmentItem.assignedPrograms ?? [])
+                    .slice()
+                    .sort((left, right) => left.programTitle.localeCompare(right.programTitle))
+                    .map((program) => (
+                      <li key={`${selectedSessionAssignmentItem.catalogId}-${program.programId}`} className="px-3 py-2">
+                        <Link
+                          href={`/manager/programs/continuous/${program.programId}`}
+                          className="font-semibold text-[#123447] hover:text-[#0f5b73] hover:underline"
+                        >
+                          {program.programTitle}
+                        </Link>
+                      </li>
+                    ))}
+                </ul>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {selectedProgramSessionsProgram ? (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/35 p-4">
+          <div className="w-full max-w-2xl rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-xl">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h4 className="text-lg font-semibold text-[#123447]">{t.prgSessionsModalTitle}</h4>
+                <p className="text-sm text-[#4f6977]">{selectedProgramSessionsProgram.title}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedProgramSessionsProgramId(null)}
+                className="rounded-full border border-[#c9dce8] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
+              >
+                {t.modalClose}
+              </button>
+            </div>
+
+            <div className="mt-4 max-h-[50vh] overflow-auto rounded-lg border border-[#d8e4ee]">
+              {selectedProgramSessionsProgram.sessions.length === 0 ? (
+                <p className="px-3 py-3 text-sm text-[#5a7383]">{t.prgSessionsModalEmpty}</p>
+              ) : (
+                <ul className="divide-y divide-[#d8e4ee]">
+                  {selectedProgramSessionsProgram.sessions.map((session, index) => (
+                    <li key={`${selectedProgramSessionsProgram.id}-${session.id}`} className="px-3 py-2">
+                      <Link
+                        href={
+                          session.id.startsWith("library-")
+                            ? getSessionLibraryHref(
+                                session.id.slice("library-".length),
+                              )
+                            : getProgramSessionHref(selectedProgramSessionsProgram.id, session.id)
+                        }
+                        className="font-semibold text-[#123447] hover:text-[#0f5b73] hover:underline"
+                      >
+                        {session.title}
+                      </Link>
+                      <p className="text-xs text-[#55707f]">
+                        {t.sessionsLibrarySessionCol} #{index + 1}
+                      </p>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {selectedAssignedCompaniesProgram ? (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/35 p-4">
+          <div className="w-full max-w-2xl rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-xl">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h4 className="text-lg font-semibold text-[#123447]">{t.prgAssignmentsModalTitle}</h4>
+                <p className="text-sm text-[#4f6977]">{selectedAssignedCompaniesProgram.title}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedAssignedCompaniesProgramId(null)}
+                className="rounded-full border border-[#c9dce8] px-3 py-1 text-xs font-semibold text-[#0f5b73]"
+              >
+                {t.modalClose}
+              </button>
+            </div>
+
+            <div className="mt-4 max-h-[50vh] overflow-auto rounded-lg border border-[#d8e4ee]">
+              {selectedAssignedCompaniesProgram.assignedCompanies.length === 0 ? (
+                <p className="px-3 py-3 text-sm text-[#5a7383]">{t.prgAssignmentsModalEmpty}</p>
+              ) : (
+                <ul className="divide-y divide-[#d8e4ee]">
+                  {selectedAssignedCompaniesProgram.assignedCompanies.map((company) => (
+                    <li key={`${selectedAssignedCompaniesProgram.id}-${company.id}`} className="px-3 py-2">
+                      <Link
+                        href={`/manager/clients/${company.id}`}
+                        className="font-semibold text-[#123447] hover:text-[#0f5b73] hover:underline"
+                      >
+                        {company.companyName}
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {selectedEvaluationProgram ? (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/35 p-4">

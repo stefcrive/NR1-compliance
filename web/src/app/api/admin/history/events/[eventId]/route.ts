@@ -5,6 +5,11 @@ import { z } from "zod";
 
 import { isAdminApiAuthorized } from "@/lib/admin-auth";
 import {
+  parseContinuousProgramMaterials,
+  parseContinuousProgramSessions,
+  type ContinuousProgramMaterial,
+} from "@/lib/continuous-programs";
+import {
   deriveAttachmentTitle,
   EVENT_RECORD_ALLOWED_MIME_TYPES,
   EVENT_RECORD_MAX_FILE_SIZE_BYTES,
@@ -56,6 +61,28 @@ type ProgramRow = {
   title: string;
 };
 
+type ProgramSessionsRow = {
+  program_id: string;
+  sessions?: unknown;
+  materials?: unknown;
+};
+
+type SessionLibraryRow = {
+  session_library_id: string;
+  title: string;
+  notes: string | null;
+  preparation_required: string | null;
+  materials: unknown;
+};
+
+type InheritedSessionRecord = {
+  id: string;
+  title: string;
+  notes: string | null;
+  preparationRequired: string | null;
+  materials: ContinuousProgramMaterial[];
+};
+
 type ModernCampaignRow = {
   id: string;
   client_id: string | null;
@@ -101,7 +128,6 @@ type EventJournalRow = {
 
 const JOURNAL_NOTES_MAX_LENGTH = 8000;
 const HISTORY_EVENT_RECORDS_MIGRATION = "20260304210000_history_event_records.sql";
-const EVENT_DETAIL_TEXT_MAX_LENGTH = 1500;
 
 const updateEventFieldsSchema = z
   .object({
@@ -111,13 +137,6 @@ const updateEventFieldsSchema = z
     endsAt: z.string().datetime().optional(),
     eventLifecycle: z.enum(["provisory", "committed"]).optional(),
     proposalKind: z.enum(["assignment", "reschedule"]).nullable().optional(),
-    content: z.string().trim().max(EVENT_DETAIL_TEXT_MAX_LENGTH).nullable().optional(),
-    preparationRequired: z
-      .string()
-      .trim()
-      .max(EVENT_DETAIL_TEXT_MAX_LENGTH)
-      .nullable()
-      .optional(),
   })
   .refine((value) => Object.keys(value).length > 0, {
     message: "At least one editable event field must be provided.",
@@ -530,6 +549,106 @@ async function loadLatestDrps(surveyId: string): Promise<{
   };
 }
 
+async function loadLibrarySessionRecord(
+  sessionLibraryId: string,
+): Promise<InheritedSessionRecord | null> {
+  const supabase = getSupabaseAdminClient();
+  const result = await supabase
+    .from("continuous_program_session_library")
+    .select("session_library_id,title,notes,preparation_required,materials")
+    .eq("session_library_id", sessionLibraryId)
+    .maybeSingle<SessionLibraryRow>();
+
+  if (result.error) {
+    if (isMissingTableError(result.error, "continuous_program_session_library")) {
+      return null;
+    }
+    throw new Error("Could not load inherited session record.");
+  }
+  if (!result.data) return null;
+
+  return {
+    id: `library-${result.data.session_library_id}`,
+    title: result.data.title?.trim() || "Sessao",
+    notes: normalizeNotes(result.data.notes),
+    preparationRequired: normalizeNotes(result.data.preparation_required),
+    materials: parseContinuousProgramMaterials(result.data.materials),
+  };
+}
+
+async function loadInheritedSessionRecord(params: {
+  sessionId: string | null | undefined;
+  programId: string | null | undefined;
+}): Promise<InheritedSessionRecord | null> {
+  const sessionId = params.sessionId?.trim() ?? "";
+  if (!sessionId) return null;
+
+  if (sessionId.startsWith("library-")) {
+    const libraryId = sessionId.slice("library-".length).trim();
+    if (!libraryId) return null;
+    return loadLibrarySessionRecord(libraryId);
+  }
+
+  const programId = params.programId?.trim() ?? "";
+  if (programId) {
+    const supabase = getSupabaseAdminClient();
+    const programResult = await supabase
+      .from("periodic_programs")
+      .select("program_id,sessions,materials")
+      .eq("program_id", programId)
+      .maybeSingle<ProgramSessionsRow>();
+
+    if (programResult.error) {
+      if (
+        isMissingTableError(programResult.error, "periodic_programs") ||
+        isMissingColumnError(programResult.error, "sessions") ||
+        isMissingColumnError(programResult.error, "materials")
+      ) {
+        return null;
+      }
+      throw new Error("Could not load inherited session record.");
+    }
+
+    if (programResult.data) {
+      const sessions = parseContinuousProgramSessions(programResult.data.sessions, {
+        fallbackMaterials: programResult.data.materials,
+      });
+      const matched = sessions.find((session) => session.id === sessionId);
+      if (matched) {
+        return {
+          id: matched.id,
+          title: matched.title,
+          notes: matched.notes,
+          preparationRequired: matched.preparationRequired,
+          materials: matched.materials,
+        };
+      }
+    }
+  }
+
+  const libraryFallback = await loadLibrarySessionRecord(sessionId);
+  if (!libraryFallback) return null;
+  return {
+    ...libraryFallback,
+    id: sessionId,
+  };
+}
+
+function mergeInheritedSessionDetails(
+  details: ReturnType<typeof extractCalendarEventDetails>,
+  inheritedSession: InheritedSessionRecord | null,
+) {
+  if (!inheritedSession) return details;
+  return {
+    ...details,
+    sessionId: inheritedSession.id,
+    sessionTitle: inheritedSession.title,
+    content: inheritedSession.notes,
+    preparationRequired: inheritedSession.preparationRequired,
+    sessionMaterials: inheritedSession.materials,
+  };
+}
+
 export async function GET(
   request: NextRequest,
   context: { params: Promise<{ eventId: string }> },
@@ -643,10 +762,15 @@ export async function GET(
     const assignment = programAssignmentLoaded.assignment;
 
     const clientId = eventResult.data.client_id ?? assignment?.client_id ?? null;
-    const [client, journal] = await Promise.all([
+    const [client, journal, inheritedSession] = await Promise.all([
       loadClientById(clientId),
       loadEventJournal(eventId),
+      loadInheritedSessionRecord({
+        sessionId: details.sessionId ?? null,
+        programId: assignment?.program_id ?? null,
+      }),
     ]);
+    const mergedDetails = mergeInheritedSessionDetails(details, inheritedSession);
 
     return NextResponse.json({
       record: {
@@ -662,7 +786,7 @@ export async function GET(
         clientPortalSlug: client.portalSlug,
         sourceClientProgramId: eventResult.data.source_client_program_id,
         sourceCampaignId: null,
-        details,
+        details: mergedDetails,
         journal,
         related: {
           campaign: null,
@@ -809,15 +933,6 @@ export async function PATCH(
 
       const mergedMetadata = normalizeMetadata(currentEvent.metadata);
       let shouldUpdateMetadata = false;
-      if (parsed.event.content !== undefined) {
-        mergedMetadata.content = parsed.event.content?.trim() || null;
-        shouldUpdateMetadata = true;
-      }
-      if (parsed.event.preparationRequired !== undefined) {
-        mergedMetadata.preparationRequired = parsed.event.preparationRequired?.trim() || null;
-        delete mergedMetadata.preparation_required;
-        shouldUpdateMetadata = true;
-      }
       if (parsed.event.eventLifecycle !== undefined) {
         mergedMetadata.eventLifecycle = parsed.event.eventLifecycle;
         shouldUpdateMetadata = true;

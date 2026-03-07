@@ -26,6 +26,9 @@ type AssignmentCalendarEvent = {
   status: "scheduled" | "completed" | "cancelled";
   lifecycle: "provisory" | "committed";
   proposalKind: "assignment" | "reschedule" | null;
+  sessionId?: string | null;
+  sessionIndex?: number | null;
+  sessionTitle?: string | null;
 };
 
 type AssignmentStatus = "Recommended" | "Active" | "Completed";
@@ -173,6 +176,19 @@ function formatFileSize(sizeBytes: number) {
   return `${(sizeBytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function getAssignedSessionHref(programId: string, sessionId: string, returnTo: string): string {
+  const normalized = sessionId.trim();
+  const returnToParam = `returnTo=${encodeURIComponent(returnTo)}`;
+  if (normalized.startsWith("library-")) {
+    return `/manager/programs/sessions/library/${encodeURIComponent(
+      normalized.slice("library-".length),
+    )}?${returnToParam}`;
+  }
+  return `/manager/programs/sessions/program/${encodeURIComponent(programId)}/${encodeURIComponent(
+    normalized,
+  )}?${returnToParam}`;
+}
+
 function normalizeSlots(slots: AvailabilitySlot[]) {
   const unique = new Map<string, AvailabilitySlot>();
   for (const slot of slots) {
@@ -290,6 +306,7 @@ export function ManagerAssignedContinuousProgram({
   const [updatingLifecycleEventId, setUpdatingLifecycleEventId] = useState<string | null>(null);
   const [updatingTimingEventId, setUpdatingTimingEventId] = useState<string | null>(null);
   const [updatingStatusEventId, setUpdatingStatusEventId] = useState<string | null>(null);
+  const [editingTimingEventId, setEditingTimingEventId] = useState<string | null>(null);
   const [eventTimingDraftById, setEventTimingDraftById] = useState<
     Record<string, { startsAt: string; durationMinutes: string }>
   >({});
@@ -409,6 +426,12 @@ export function ManagerAssignedContinuousProgram({
     if (chronogramListEvents.some((event) => event.id === openChronogramActionsFor)) return;
     setOpenChronogramActionsFor(null);
   }, [chronogramListEvents, openChronogramActionsFor]);
+
+  useEffect(() => {
+    if (!editingTimingEventId) return;
+    if (chronogramListEvents.some((event) => event.id === editingTimingEventId)) return;
+    setEditingTimingEventId(null);
+  }, [chronogramListEvents, editingTimingEventId]);
 
   useEffect(() => {
     setEventTimingDraftById(() => {
@@ -809,6 +832,9 @@ export function ManagerAssignedContinuousProgram({
           details: {
             eventLifecycle: "provisory" | "committed";
             proposalKind: "assignment" | "reschedule" | null;
+            sessionId?: string | null;
+            sessionIndex?: number | null;
+            sessionTitle?: string | null;
           };
         };
       };
@@ -827,6 +853,9 @@ export function ManagerAssignedContinuousProgram({
                 status: updatedEvent.status,
                 lifecycle: updatedEvent.details.eventLifecycle,
                 proposalKind: updatedEvent.details.proposalKind,
+                sessionId: updatedEvent.details.sessionId ?? item.sessionId ?? null,
+                sessionIndex: updatedEvent.details.sessionIndex ?? item.sessionIndex ?? null,
+                sessionTitle: updatedEvent.details.sessionTitle ?? item.sessionTitle ?? null,
               }
             : item,
         ),
@@ -909,6 +938,9 @@ export function ManagerAssignedContinuousProgram({
           details: {
             eventLifecycle: "provisory" | "committed";
             proposalKind: "assignment" | "reschedule" | null;
+            sessionId?: string | null;
+            sessionIndex?: number | null;
+            sessionTitle?: string | null;
           };
         };
       };
@@ -926,6 +958,9 @@ export function ManagerAssignedContinuousProgram({
                 status: updatedEvent.status,
                 lifecycle: updatedEvent.details.eventLifecycle,
                 proposalKind: updatedEvent.details.proposalKind,
+                sessionId: updatedEvent.details.sessionId ?? item.sessionId ?? null,
+                sessionIndex: updatedEvent.details.sessionIndex ?? item.sessionIndex ?? null,
+                sessionTitle: updatedEvent.details.sessionTitle ?? item.sessionTitle ?? null,
               }
             : item,
         ),
@@ -963,16 +998,16 @@ export function ManagerAssignedContinuousProgram({
     }
   }
 
-  async function updateEventTiming(event: AssignmentCalendarEvent) {
-    if (!assignment) return;
+  async function updateEventTiming(event: AssignmentCalendarEvent): Promise<boolean> {
+    if (!assignment) return false;
     const draft = eventTimingDraftById[event.id];
-    if (!draft) return;
+    if (!draft) return false;
 
     const markedAt = new Date(draft.startsAt);
     const durationMinutes = Number.parseInt(draft.durationMinutes, 10);
     if (Number.isNaN(markedAt.getTime()) || !Number.isFinite(durationMinutes) || durationMinutes < 15) {
       setError("Data/hora ou duracao invalida para o evento.");
-      return;
+      return false;
     }
 
     setUpdatingTimingEventId(event.id);
@@ -998,6 +1033,9 @@ export function ManagerAssignedContinuousProgram({
           details: {
             eventLifecycle: "provisory" | "committed";
             proposalKind: "assignment" | "reschedule" | null;
+            sessionId?: string | null;
+            sessionIndex?: number | null;
+            sessionTitle?: string | null;
           };
         };
       };
@@ -1016,6 +1054,9 @@ export function ManagerAssignedContinuousProgram({
                 status: updatedEvent.status,
                 lifecycle: updatedEvent.details.eventLifecycle,
                 proposalKind: updatedEvent.details.proposalKind,
+                sessionId: updatedEvent.details.sessionId ?? item.sessionId ?? null,
+                sessionIndex: updatedEvent.details.sessionIndex ?? item.sessionIndex ?? null,
+                sessionTitle: updatedEvent.details.sessionTitle ?? item.sessionTitle ?? null,
               }
             : item,
         ),
@@ -1042,12 +1083,14 @@ export function ManagerAssignedContinuousProgram({
         },
       }));
       setNotice("Horario do evento atualizado.");
+      return true;
     } catch (updateError) {
       setError(
         updateError instanceof Error
           ? updateError.message
           : "Nao foi possivel atualizar horario do evento.",
       );
+      return false;
     } finally {
       setUpdatingTimingEventId(null);
     }
@@ -1060,12 +1103,29 @@ export function ManagerAssignedContinuousProgram({
   if (!assignment || !template) {
     return <p className="text-sm text-red-600">{error || "Processo continuo nao encontrado."}</p>;
   }
+  const assignmentReturnTo = (() => {
+    const base = `/manager/clients/${encodeURIComponent(clientId)}/assigned-continuous/${encodeURIComponent(assignmentId)}`;
+    const query = new URLSearchParams();
+    if (fromHistory) {
+      query.set("from", "history");
+    } else if (fromHome) {
+      query.set("from", "home");
+    }
+    if (clientName) {
+      query.set("clientName", clientName);
+    }
+    if (assignment.programTitle) {
+      query.set("assignmentTitle", assignment.programTitle);
+    }
+    const encoded = query.toString();
+    return encoded.length > 0 ? `${base}?${encoded}` : base;
+  })();
   const eventRecordFrom = fromHistory ? "history" : fromHome ? "home" : "client-area";
 
   return (
     <div className="space-y-6">
-      <section className="rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
-        <nav className="mb-3 text-xs text-[#4f6977]">
+      <div className="space-y-3">
+        <nav className="text-xs text-[#4f6977]">
           {fromHome ? (
             <>
               <Link href="/manager" className="text-[#0f5b73]">
@@ -1116,11 +1176,21 @@ export function ManagerAssignedContinuousProgram({
             </>
           )}
         </nav>
-        <h2 className="text-2xl font-semibold text-[#123447]">{template.title}</h2>
-        <p className="mt-1 text-sm text-[#4f6977]">
-          {template.description ?? assignment.programDescription ?? assignment.programId}
-        </p>
-      </section>
+        <section className="rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
+          <div className="flex flex-wrap items-center gap-3">
+            <h2 className="text-2xl font-semibold text-[#123447]">{template.title}</h2>
+            <Link
+              href={`/manager/programs/continuous/${assignment.programId}`}
+              className="text-sm font-semibold text-[#0f5b73] hover:underline"
+            >
+              Abrir no banco de programas
+            </Link>
+          </div>
+          <p className="mt-1 text-sm text-[#4f6977]">
+            {template.description ?? assignment.programDescription ?? assignment.programId}
+          </p>
+        </section>
+      </div>
 
       <section className="space-y-4 rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-sm">
         <h3 className="text-lg font-semibold text-[#123447]">Detalhes da atribuicao</h3>
@@ -1249,6 +1319,7 @@ export function ManagerAssignedContinuousProgram({
                       <th className="px-3 py-2 text-left font-semibold text-[#244354]">Data/hora</th>
                       <th className="px-3 py-2 text-left font-semibold text-[#244354]">Duracao</th>
                       <th className="px-3 py-2 text-left font-semibold text-[#244354]">Status</th>
+                      <th className="px-3 py-2 text-left font-semibold text-[#244354]">Sessao atribuida</th>
                       <th className="px-3 py-2 text-left font-semibold text-[#244354]">Acoes</th>
                     </tr>
                   </thead>
@@ -1258,49 +1329,86 @@ export function ManagerAssignedContinuousProgram({
                         startsAt: toDatetimeLocal(event.startsAt),
                         durationMinutes: String(durationMinutesFromRange(event.startsAt, event.endsAt, 60)),
                       };
+                      const eventRecordHref = `/manager/history/events/${event.id}?from=${eventRecordFrom}`;
                       const statusOption = chronogramStatusOptionFromEvent(event);
                       const isUpdatingStatus = updatingStatusEventId === event.id;
                       const isUpdatingTiming = updatingTimingEventId === event.id;
                       const isUpdatingLifecycle = updatingLifecycleEventId === event.id;
+                      const isEditingTiming = editingTimingEventId === event.id;
                       const anyUpdatePending = isUpdatingStatus || isUpdatingTiming || isUpdatingLifecycle;
+                      const normalizedSessionId =
+                        typeof event.sessionId === "string" ? event.sessionId.trim() : "";
+                      const sessionHref =
+                        normalizedSessionId.length > 0
+                          ? getAssignedSessionHref(
+                              assignment.programId,
+                              normalizedSessionId,
+                              assignmentReturnTo,
+                            )
+                          : null;
+                      const sessionLabel =
+                        typeof event.sessionIndex === "number" && Number.isFinite(event.sessionIndex)
+                          ? `Sessao ${event.sessionIndex}`
+                          : "Sessao";
                       return (
                         <tr key={event.id} className={`border-b border-[#e2edf3] ${chronogramRowClassName(event)}`}>
                           <td className="px-3 py-2 text-[#123447]">
-                            <input
-                              type="datetime-local"
-                              value={timingDraft.startsAt}
-                              onChange={(inputEvent) =>
-                                setEventTimingDraftById((previous) => ({
-                                  ...previous,
-                                  [event.id]: {
-                                    ...timingDraft,
-                                    startsAt: inputEvent.target.value,
-                                  },
-                                }))
-                              }
-                              disabled={event.status === "cancelled" || isUpdatingStatus}
-                              className="w-full rounded border border-[#c9dce8] bg-white px-2 py-1 text-xs disabled:opacity-50"
-                            />
+                            {isEditingTiming ? (
+                              <input
+                                type="datetime-local"
+                                value={timingDraft.startsAt}
+                                onChange={(inputEvent) =>
+                                  setEventTimingDraftById((previous) => ({
+                                    ...previous,
+                                    [event.id]: {
+                                      ...timingDraft,
+                                      startsAt: inputEvent.target.value,
+                                    },
+                                  }))
+                                }
+                                disabled={event.status === "cancelled" || isUpdatingStatus || isUpdatingTiming}
+                                className="w-full rounded border border-[#c9dce8] bg-white px-2 py-1 text-xs disabled:opacity-50"
+                              />
+                            ) : (
+                              <Link
+                                href={eventRecordHref}
+                                className="text-xs font-semibold text-[#0f5b73] hover:underline"
+                              >
+                                {new Intl.DateTimeFormat("pt-BR", {
+                                  dateStyle: "short",
+                                  timeStyle: "short",
+                                }).format(new Date(event.startsAt))}
+                              </Link>
+                            )}
                           </td>
                           <td className="px-3 py-2 text-[#123447]">
-                            <input
-                              type="number"
-                              min={15}
-                              max={24 * 60}
-                              step={5}
-                              value={timingDraft.durationMinutes}
-                              onChange={(inputEvent) =>
-                                setEventTimingDraftById((previous) => ({
-                                  ...previous,
-                                  [event.id]: {
-                                    ...timingDraft,
-                                    durationMinutes: inputEvent.target.value,
-                                  },
-                                }))
-                              }
-                              disabled={event.status === "cancelled" || isUpdatingStatus}
-                              className="w-24 rounded border border-[#c9dce8] bg-white px-2 py-1 text-xs disabled:opacity-50"
-                            />
+                            {isEditingTiming ? (
+                              <input
+                                type="number"
+                                min={15}
+                                max={24 * 60}
+                                step={5}
+                                value={timingDraft.durationMinutes}
+                                onChange={(inputEvent) =>
+                                  setEventTimingDraftById((previous) => ({
+                                    ...previous,
+                                    [event.id]: {
+                                      ...timingDraft,
+                                      durationMinutes: inputEvent.target.value,
+                                    },
+                                  }))
+                                }
+                                disabled={event.status === "cancelled" || isUpdatingStatus || isUpdatingTiming}
+                                className="w-24 rounded border border-[#c9dce8] bg-white px-2 py-1 text-xs disabled:opacity-50"
+                              />
+                            ) : (
+                              <Link
+                                href={eventRecordHref}
+                                className="text-xs font-semibold text-[#0f5b73] hover:underline"
+                              >
+                                {durationMinutesFromRange(event.startsAt, event.endsAt, 60)} min
+                              </Link>
+                            )}
                           </td>
                           <td className="px-3 py-2">
                             <select
@@ -1321,55 +1429,169 @@ export function ManagerAssignedContinuousProgram({
                             </select>
                           </td>
                           <td className="px-3 py-2">
-                            <div className="relative inline-flex">
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setOpenChronogramActionsFor((previous) =>
-                                    previous === event.id ? null : event.id,
-                                  )
-                                }
-                                className="rounded-full border border-[#c9dce8] px-3 py-1 text-xs font-semibold text-[#123447]"
+                            {sessionHref ? (
+                              <Link
+                                href={sessionHref}
+                                className="text-xs font-semibold text-[#0f5b73] hover:underline"
+                                title={event.sessionTitle ?? undefined}
                               >
-                                ...
-                              </button>
-                              {openChronogramActionsFor === event.id ? (
-                                <div className="absolute right-0 top-full z-20 mt-2 w-52 overflow-hidden rounded-xl border border-[#d8e4ee] bg-white shadow-lg">
+                                {event.sessionTitle
+                                  ? `${sessionLabel}: ${event.sessionTitle}`
+                                  : sessionLabel}
+                              </Link>
+                            ) : (
+                              <span className="text-xs text-[#6a818f]">-</span>
+                            )}
+                          </td>
+                          <td className="px-3 py-2">
+                            <div className="flex items-center gap-2">
+                              {isEditingTiming ? (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={async () => {
+                                      const updated = await updateEventTiming(event);
+                                      if (updated) {
+                                        setEditingTimingEventId((current) =>
+                                          current === event.id ? null : current,
+                                        );
+                                      }
+                                    }}
+                                    disabled={event.status === "cancelled" || anyUpdatePending}
+                                    className="rounded-full border border-[#9ec8db] px-2 py-1 text-xs font-semibold text-[#0f5b73] disabled:opacity-50"
+                                    title="Salvar horario"
+                                    aria-label="Salvar horario"
+                                  >
+                                    <svg
+                                      viewBox="0 0 20 20"
+                                      width="14"
+                                      height="14"
+                                      fill="none"
+                                      xmlns="http://www.w3.org/2000/svg"
+                                    >
+                                      <path
+                                        d="M4 10.5L8 14.5L16 6.5"
+                                        stroke="currentColor"
+                                        strokeWidth="2"
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                      />
+                                    </svg>
+                                  </button>
                                   <button
                                     type="button"
                                     onClick={() => {
-                                      setOpenChronogramActionsFor(null);
-                                      void updateEventTiming(event);
+                                      setEditingTimingEventId((current) =>
+                                        current === event.id ? null : current,
+                                      );
+                                      setEventTimingDraftById((previous) => ({
+                                        ...previous,
+                                        [event.id]: {
+                                          startsAt: toDatetimeLocal(event.startsAt),
+                                          durationMinutes: String(
+                                            durationMinutesFromRange(event.startsAt, event.endsAt, 60),
+                                          ),
+                                        },
+                                      }));
                                     }}
-                                    disabled={event.status === "cancelled" || anyUpdatePending}
-                                    className="block w-full px-3 py-2 text-left text-xs font-semibold text-[#123447] hover:bg-[#f4f9fc] disabled:opacity-50"
+                                    disabled={anyUpdatePending}
+                                    className="rounded-full border border-[#d9c6c6] px-2 py-1 text-xs font-semibold text-[#6a3f3f] disabled:opacity-50"
+                                    title="Cancelar edicao de horario"
+                                    aria-label="Cancelar edicao de horario"
                                   >
-                                    {isUpdatingTiming ? "Atualizando..." : "Atualizar horario"}
+                                    <svg
+                                      viewBox="0 0 20 20"
+                                      width="14"
+                                      height="14"
+                                      fill="none"
+                                      xmlns="http://www.w3.org/2000/svg"
+                                    >
+                                      <path
+                                        d="M5 5L15 15M15 5L5 15"
+                                        stroke="currentColor"
+                                        strokeWidth="2"
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                      />
+                                    </svg>
                                   </button>
-                                  <Link
-                                    href={`/manager/history/events/${event.id}?from=${eventRecordFrom}`}
-                                    onClick={() => setOpenChronogramActionsFor(null)}
-                                    className="block w-full px-3 py-2 text-left text-xs font-semibold text-[#0f5b73] hover:bg-[#f4f9fc]"
+                                </>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setEditingTimingEventId(event.id);
+                                    setEventTimingDraftById((previous) => ({
+                                      ...previous,
+                                      [event.id]: {
+                                        startsAt: toDatetimeLocal(event.startsAt),
+                                        durationMinutes: String(
+                                          durationMinutesFromRange(event.startsAt, event.endsAt, 60),
+                                        ),
+                                      },
+                                    }));
+                                  }}
+                                  disabled={event.status === "cancelled" || anyUpdatePending}
+                                  className="rounded-full border border-[#9ec8db] px-2 py-1 text-xs font-semibold text-[#0f5b73] disabled:opacity-50"
+                                  title="Editar horario"
+                                  aria-label="Editar horario"
+                                >
+                                  <svg
+                                    viewBox="0 0 20 20"
+                                    width="14"
+                                    height="14"
+                                    fill="none"
+                                    xmlns="http://www.w3.org/2000/svg"
                                   >
-                                    Event record
-                                  </Link>
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setOpenChronogramActionsFor(null);
-                                      void toggleEventLifecycle(event);
-                                    }}
-                                    disabled={event.status === "cancelled" || anyUpdatePending}
-                                    className="block w-full px-3 py-2 text-left text-xs font-semibold text-[#123447] hover:bg-[#f4f9fc] disabled:opacity-50"
-                                  >
-                                    {isUpdatingLifecycle
-                                      ? "Atualizando..."
-                                      : event.lifecycle === "committed"
-                                        ? "Set provisory"
-                                        : "Commit"}
-                                  </button>
-                                </div>
-                              ) : null}
+                                    <path
+                                      d="M12.8 4.2L15.8 7.2M6 14L4 16L6 16L13.9 8.1C14.3 7.7 14.3 7.1 13.9 6.7L13.3 6.1C12.9 5.7 12.3 5.7 11.9 6.1L4 14Z"
+                                      stroke="currentColor"
+                                      strokeWidth="1.5"
+                                      strokeLinecap="round"
+                                      strokeLinejoin="round"
+                                    />
+                                  </svg>
+                                </button>
+                              )}
+                              <div className="relative inline-flex">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setOpenChronogramActionsFor((previous) =>
+                                      previous === event.id ? null : event.id,
+                                    )
+                                  }
+                                  className="rounded-full border border-[#c9dce8] px-3 py-1 text-xs font-semibold text-[#123447]"
+                                >
+                                  ...
+                                </button>
+                                {openChronogramActionsFor === event.id ? (
+                                  <div className="absolute right-0 bottom-full z-20 mb-2 w-52 overflow-hidden rounded-xl border border-[#d8e4ee] bg-white shadow-lg">
+                                    <Link
+                                      href={eventRecordHref}
+                                      onClick={() => setOpenChronogramActionsFor(null)}
+                                      className="block w-full px-3 py-2 text-left text-xs font-semibold text-[#0f5b73] hover:bg-[#f4f9fc]"
+                                    >
+                                      Event record
+                                    </Link>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setOpenChronogramActionsFor(null);
+                                        void toggleEventLifecycle(event);
+                                      }}
+                                      disabled={event.status === "cancelled" || anyUpdatePending}
+                                      className="block w-full px-3 py-2 text-left text-xs font-semibold text-[#123447] hover:bg-[#f4f9fc] disabled:opacity-50"
+                                    >
+                                      {isUpdatingLifecycle
+                                        ? "Atualizando..."
+                                        : event.lifecycle === "committed"
+                                          ? "Set provisory"
+                                          : "Commit"}
+                                    </button>
+                                  </div>
+                                ) : null}
+                              </div>
                             </div>
                           </td>
                         </tr>
