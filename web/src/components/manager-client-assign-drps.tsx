@@ -432,7 +432,16 @@ export function ManagerClientAssignDrps({ clientId }: { clientId: string }) {
         }
       }
 
-      const campaignName = `${template.name} - ${client.companyName}`.trim().slice(0, 120);
+      const assignmentDateTag = new Intl.DateTimeFormat("pt-BR", {
+        year: "numeric",
+        month: "2-digit",
+        timeZone: "America/Sao_Paulo",
+      })
+        .format(new Date())
+        .replace("/", "-");
+      const campaignName = `${template.name} - ${client.companyName} - ${assignmentDateTag}`
+        .trim()
+        .slice(0, 120);
       if (campaignName.length < 3) {
         throw new Error("Nome da campanha umbrella invalido.");
       }

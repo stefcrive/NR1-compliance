@@ -105,7 +105,8 @@ const COPY = {
     workspaceTitle: "Compliance Workspace",
     mainNav: "Main",
     pinned: "Pinned",
-    backToGateway: "Back to gateway",
+    logout: "Logout",
+    loggingOut: "Logging out...",
     home: "Home",
     clientArea: "Client area",
     calendar: "Calendar",
@@ -128,7 +129,8 @@ const COPY = {
     workspaceTitle: "Workspace de Compliance",
     mainNav: "Principal",
     pinned: "Fixados",
-    backToGateway: "Voltar ao acesso",
+    logout: "Sair",
+    loggingOut: "Saindo...",
     home: "Inicio",
     clientArea: "Area de clientes",
     calendar: "Calendario",
@@ -167,6 +169,7 @@ function ManagerShellInner({ children }: { children: React.ReactNode }) {
   const [notifications, setNotifications] = useState<ManagerNotification[]>([]);
   const [markingNotificationId, setMarkingNotificationId] = useState<string | null>(null);
   const [recentClients, setRecentClients] = useState<ManagerClientNavItem[]>([]);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
 
   const loadNotifications = useCallback(async () => {
     setLoadingNotifications(true);
@@ -263,6 +266,21 @@ function ManagerShellInner({ children }: { children: React.ReactNode }) {
     }
     return href === "/manager" ? pathname === href : pathname === href || pathname.startsWith(`${href}/`);
   };
+
+  const handleLogout = useCallback(async () => {
+    if (isLoggingOut) return;
+    setIsLoggingOut(true);
+    const fallbackRedirect = "/access/manager";
+    try {
+      const response = await fetch("/api/auth/manager/logout", { method: "POST" });
+      const payload = (await response.json().catch(() => ({}))) as { redirectTo?: string };
+      window.location.href = payload.redirectTo ?? fallbackRedirect;
+    } catch {
+      window.location.href = fallbackRedirect;
+    } finally {
+      setIsLoggingOut(false);
+    }
+  }, [isLoggingOut]);
 
   return (
     <div className="min-h-screen bg-[#f6f6f6]">
@@ -450,12 +468,14 @@ function ManagerShellInner({ children }: { children: React.ReactNode }) {
             </div>
 
             <div className="border-t border-[#d7d7d7] p-3">
-              <Link
-                href="/access"
+              <button
+                type="button"
+                disabled={isLoggingOut}
+                onClick={() => void handleLogout()}
                 className="flex items-center justify-center rounded-xl border border-[#c4ccd1] bg-white px-3 py-2 text-sm font-medium text-[#23353f] hover:bg-[#f7f8f9]"
               >
-                {t.backToGateway}
-              </Link>
+                {isLoggingOut ? t.loggingOut : t.logout}
+              </button>
             </div>
           </div>
         </aside>

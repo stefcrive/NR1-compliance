@@ -43,4 +43,3 @@ test drps result and company pforfile risk timeseries
 
 apply new calendar component
 
-add page state persistance, when navigating the platform

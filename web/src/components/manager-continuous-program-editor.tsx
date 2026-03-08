@@ -70,6 +70,38 @@ type SessionCatalogItem = {
   topicTitle?: string | null;
 };
 
+type ProgramChronogramUpdateMode = "prompt" | "overwrite" | "preserve";
+
+type ProgramSavePayload = {
+  title: string;
+  description: string | null;
+  targetRiskTopic: number;
+  triggerThreshold: number;
+  scheduleFrequency: ContinuousProgramScheduleFrequency;
+  evaluationQuestions: string[];
+  sessions: ContinuousProgramSession[];
+  materials: ContinuousProgramMaterial[];
+  metrics: ContinuousProgramMetrics;
+};
+
+type ProgramSaveResponse = {
+  program?: ContinuousProgram;
+  error?: string;
+  errorCode?: string;
+  requiresChronogramDecision?: boolean;
+  conflict?: {
+    assignmentsAffected?: number;
+    markedEventsAtRisk?: number;
+  };
+};
+
+type ChronogramDecisionState = {
+  payload: ProgramSavePayload;
+  message: string;
+  assignmentsAffected: number;
+  markedEventsAtRisk: number;
+};
+
 const COPY = {
   en: {
     breadcrumbBase: "Programs database",
@@ -185,6 +217,13 @@ const COPY = {
     saveError: "Could not save program.",
     uploadError: "Could not upload material.",
     removeError: "Could not remove material.",
+    chronogramDecisionTitle: "Marked events can be overwritten",
+    chronogramDecisionSummary:
+      "This session sequence change requires rebuilding chronograms for active assignments.",
+    chronogramDecisionAssignments: "Assignments affected",
+    chronogramDecisionMarkedEvents: "Marked events at risk",
+    chronogramDecisionPreserve: "Create around marked",
+    chronogramDecisionOverwrite: "Overwrite marked events",
     validationTitle: "Title must have at least 3 characters.",
     validationTopic: "Target topic must be between 1 and 13.",
     validationThreshold: "Trigger threshold must be between 1.00 and 3.00.",
@@ -317,6 +356,13 @@ const COPY = {
     saveError: "Nao foi possivel salvar o programa.",
     uploadError: "Nao foi possivel enviar o material.",
     removeError: "Nao foi possivel remover o material.",
+    chronogramDecisionTitle: "Eventos marcados podem ser sobrescritos",
+    chronogramDecisionSummary:
+      "Esta mudanca na sequencia de sessoes exige reconstruir cronogramas de atribuicoes ativas.",
+    chronogramDecisionAssignments: "Atribuicoes afetadas",
+    chronogramDecisionMarkedEvents: "Eventos marcados em risco",
+    chronogramDecisionPreserve: "Criar ao redor dos marcados",
+    chronogramDecisionOverwrite: "Sobrescrever eventos marcados",
     validationTitle: "Titulo deve ter pelo menos 3 caracteres.",
     validationTopic: "Topico alvo deve estar entre 1 e 13.",
     validationThreshold: "Gatilho deve estar entre 1.00 e 3.00.",
@@ -432,6 +478,7 @@ export function ManagerContinuousProgramEditor({ programId }: { programId: strin
   const [createSessionNotes, setCreateSessionNotes] = useState("");
   const [createSessionPreparation, setCreateSessionPreparation] = useState("");
   const [isCreatingSession, setIsCreatingSession] = useState(false);
+  const [chronogramDecision, setChronogramDecision] = useState<ChronogramDecisionState | null>(null);
 
   const sessionReturnTo = `/manager/programs/continuous/${encodeURIComponent(programId)}`;
   function withSessionReturnTo(href: string) {
@@ -467,6 +514,7 @@ export function ManagerContinuousProgramEditor({ programId }: { programId: strin
     setIsLoading(true);
     setError("");
     setNotice("");
+    setChronogramDecision(null);
     try {
       const response = await fetch(`/api/admin/programs-database/continuous/${programId}`, {
         cache: "no-store",
@@ -965,6 +1013,87 @@ export function ManagerContinuousProgramEditor({ programId }: { programId: strin
     );
   }
 
+  function applySavedProgram(nextProgram: ContinuousProgram) {
+    setProgram(nextProgram);
+    setTitle(nextProgram.title);
+    setDescription(nextProgram.description ?? "");
+    setTargetRiskTopic(nextProgram.targetRiskTopic);
+    setTriggerThreshold(nextProgram.triggerThreshold);
+    setScheduleFrequency(nextProgram.scheduleFrequency);
+    setEvaluationQuestions(nextProgram.evaluationQuestions);
+    setSessions(
+      parseContinuousProgramSessions(nextProgram.sessions, {
+        fallbackMaterials: nextProgram.materials,
+        minCount: 1,
+      }),
+    );
+    setMetrics(nextProgram.metrics);
+  }
+
+  async function submitProgramSave(
+    payload: ProgramSavePayload,
+    mode: ProgramChronogramUpdateMode,
+  ): Promise<"saved" | "decision-required"> {
+    const response = await fetch(`/api/admin/programs-database/continuous/${programId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...payload,
+        chronogramUpdateMode: mode,
+      }),
+    });
+
+    const result = (await response.json().catch(() => ({}))) as ProgramSaveResponse;
+    if (!response.ok) {
+      if (
+        response.status === 409 &&
+        mode === "prompt" &&
+        result.errorCode === "scheduled_event_overwrite_confirmation_required" &&
+        result.requiresChronogramDecision
+      ) {
+        const assignmentsAffected = Number(result.conflict?.assignmentsAffected ?? 0);
+        const markedEventsAtRisk = Number(result.conflict?.markedEventsAtRisk ?? 0);
+        setChronogramDecision({
+          payload,
+          message: t.chronogramDecisionSummary,
+          assignmentsAffected:
+            Number.isFinite(assignmentsAffected) && assignmentsAffected > 0
+              ? Math.round(assignmentsAffected)
+              : 0,
+          markedEventsAtRisk:
+            Number.isFinite(markedEventsAtRisk) && markedEventsAtRisk > 0
+              ? Math.round(markedEventsAtRisk)
+              : 0,
+        });
+        return "decision-required";
+      }
+      throw new Error(result.error ?? t.saveError);
+    }
+
+    if (result.program) {
+      applySavedProgram(result.program);
+    }
+    setChronogramDecision(null);
+    return "saved";
+  }
+
+  async function applyChronogramDecision(mode: Exclude<ProgramChronogramUpdateMode, "prompt">) {
+    if (!chronogramDecision) return;
+    setIsSaving(true);
+    setError("");
+    setNotice("");
+    try {
+      const outcome = await submitProgramSave(chronogramDecision.payload, mode);
+      if (outcome === "saved") {
+        setNotice(t.saved);
+      }
+    } catch (decisionError) {
+      setError(decisionError instanceof Error ? decisionError.message : t.saveError);
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
   async function saveProgram() {
     if (title.trim().length < 3) {
       setError(t.validationTitle);
@@ -1038,47 +1167,27 @@ export function ManagerContinuousProgramEditor({ programId }: { programId: strin
 
     const normalizedMaterials = flattenContinuousProgramSessionMaterials(normalizedSessions);
 
+    const savePayload: ProgramSavePayload = {
+      title: title.trim(),
+      description: description.trim() || null,
+      targetRiskTopic,
+      triggerThreshold: clampToTwoDecimals(triggerThreshold),
+      scheduleFrequency,
+      evaluationQuestions: normalizedQuestions,
+      sessions: normalizedSessions,
+      materials: normalizedMaterials,
+      metrics: normalizedMetrics,
+    };
+
     setIsSaving(true);
     setError("");
     setNotice("");
+    setChronogramDecision(null);
     try {
-      const response = await fetch(`/api/admin/programs-database/continuous/${programId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          title: title.trim(),
-          description: description.trim() || null,
-          targetRiskTopic,
-          triggerThreshold: clampToTwoDecimals(triggerThreshold),
-          scheduleFrequency,
-          evaluationQuestions: normalizedQuestions,
-          sessions: normalizedSessions,
-          materials: normalizedMaterials,
-          metrics: normalizedMetrics,
-        }),
-      });
-      if (!response.ok) {
-        const payload = (await response.json().catch(() => ({}))) as { error?: string };
-        throw new Error(payload.error ?? t.saveError);
+      const outcome = await submitProgramSave(savePayload, "prompt");
+      if (outcome === "saved") {
+        setNotice(t.saved);
       }
-      const payload = (await response.json()) as { program: ContinuousProgram };
-      if (payload.program) {
-        setProgram(payload.program);
-        setTitle(payload.program.title);
-        setDescription(payload.program.description ?? "");
-        setTargetRiskTopic(payload.program.targetRiskTopic);
-        setTriggerThreshold(payload.program.triggerThreshold);
-        setScheduleFrequency(payload.program.scheduleFrequency);
-        setEvaluationQuestions(payload.program.evaluationQuestions);
-        setSessions(
-          parseContinuousProgramSessions(payload.program.sessions, {
-            fallbackMaterials: payload.program.materials,
-            minCount: 1,
-          }),
-        );
-        setMetrics(payload.program.metrics);
-      }
-      setNotice(t.saved);
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : t.saveError);
     } finally {
@@ -1803,6 +1912,53 @@ export function ManagerContinuousProgramEditor({ programId }: { programId: strin
                 type="button"
                 onClick={() => setIsSessionsLibraryOpen(false)}
                 className="rounded-full border border-[#9ec8db] px-4 py-2 text-sm font-semibold text-[#0f5b73]"
+              >
+                {t.cancel}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {chronogramDecision ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4">
+          <div className="w-full max-w-2xl rounded-2xl border border-[#d8e4ee] bg-white p-5 shadow-xl">
+            <div className="space-y-2">
+              <h4 className="text-lg font-semibold text-[#123447]">{t.chronogramDecisionTitle}</h4>
+              <p className="text-sm text-[#4f6977]">{chronogramDecision.message}</p>
+            </div>
+            <div className="mt-4 grid gap-2 rounded-xl border border-[#d8e4ee] bg-[#f8fbfd] p-3 text-sm text-[#35515f]">
+              <p>
+                {t.chronogramDecisionAssignments}:{" "}
+                <strong>{chronogramDecision.assignmentsAffected}</strong>
+              </p>
+              <p>
+                {t.chronogramDecisionMarkedEvents}:{" "}
+                <strong>{chronogramDecision.markedEventsAtRisk}</strong>
+              </p>
+            </div>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => void applyChronogramDecision("preserve")}
+                disabled={isSaving}
+                className="rounded-full border border-[#9ec8db] px-4 py-2 text-sm font-semibold text-[#0f5b73] disabled:opacity-50"
+              >
+                {isSaving ? t.saving : t.chronogramDecisionPreserve}
+              </button>
+              <button
+                type="button"
+                onClick={() => void applyChronogramDecision("overwrite")}
+                disabled={isSaving}
+                className="rounded-full bg-[#0f5b73] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+              >
+                {isSaving ? t.saving : t.chronogramDecisionOverwrite}
+              </button>
+              <button
+                type="button"
+                onClick={() => setChronogramDecision(null)}
+                disabled={isSaving}
+                className="rounded-full border border-[#c9dce8] px-4 py-2 text-sm font-semibold text-[#35515f] disabled:opacity-50"
               >
                 {t.cancel}
               </button>

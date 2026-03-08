@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { usePersistedState } from "@/lib/page-state-persistence";
 
 type Campaign = {
   id: string;
@@ -316,11 +317,27 @@ function extractCampaignIdFromCalendarEvent(event: { id: string; eventType: Mast
 const WEEK = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sab"] as const;
 const MAX_CALENDAR_EVENTS_PER_DAY = 5;
 
+function parseMonthDate(value: unknown): Date | null {
+  if (typeof value !== "string") return null;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return new Date(parsed.getFullYear(), parsed.getMonth(), 1);
+}
+
+function parseActiveChartInfo(value: unknown): "matrix" | "radar" | null {
+  if (value === "matrix" || value === "radar") return value;
+  if (value === null) return null;
+  return null;
+}
+
 export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [payload, setPayload] = useState<Payload | null>(null);
-  const [selectedCampaignId, setSelectedCampaignId] = useState("");
+  const [selectedCampaignId, setSelectedCampaignId] = usePersistedState(
+    `client-workspace:${clientSlug}:selected-campaign-id`,
+    "",
+  );
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [linksPayload, setLinksPayload] = useState<SectorPayload | null>(null);
@@ -336,10 +353,17 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
   const [openCampaignSectorActionsFor, setOpenCampaignSectorActionsFor] = useState<string | null>(null);
   const [drpsActionError, setDrpsActionError] = useState("");
   const [drpsActionNotice, setDrpsActionNotice] = useState("");
-  const [calendarMonth, setCalendarMonth] = useState(() => {
-    const now = new Date();
-    return new Date(now.getFullYear(), now.getMonth(), 1);
-  });
+  const [calendarMonth, setCalendarMonth] = usePersistedState<Date>(
+    `client-workspace:${clientSlug}:calendar-month`,
+    (() => {
+      const now = new Date();
+      return new Date(now.getFullYear(), now.getMonth(), 1);
+    })(),
+    {
+      serialize: (value) => value.toISOString(),
+      deserialize: parseMonthDate,
+    },
+  );
   const [downloadingReportId, setDownloadingReportId] = useState<string | null>(null);
   const [reportFeedback, setReportFeedback] = useState("");
   const [selectedCalendarEventId, setSelectedCalendarEventId] = useState<string | null>(null);
@@ -347,8 +371,20 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
   const [riskProfileSummary, setRiskProfileSummary] = useState<CompanyRiskProfileSummary | null>(null);
   const [isLoadingRiskProfile, setIsLoadingRiskProfile] = useState(true);
   const [riskProfileError, setRiskProfileError] = useState("");
-  const [isolatedRadarSector, setIsolatedRadarSector] = useState<string | null>(null);
-  const [activeChartInfo, setActiveChartInfo] = useState<"matrix" | "radar" | null>(null);
+  const [isolatedRadarSector, setIsolatedRadarSector] = usePersistedState<string | null>(
+    `client-workspace:${clientSlug}:isolated-radar-sector`,
+    null,
+    {
+      deserialize: (value) => (typeof value === "string" || value === null ? value : null),
+    },
+  );
+  const [activeChartInfo, setActiveChartInfo] = usePersistedState<"matrix" | "radar" | null>(
+    `client-workspace:${clientSlug}:active-chart-info`,
+    null,
+    {
+      deserialize: parseActiveChartInfo,
+    },
+  );
 
   const loadData = useCallback(
     async (campaignId?: string) => {
@@ -363,7 +399,12 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
         }
         const data = (await response.json()) as Payload;
         setPayload(data);
-        setSelectedCampaignId(data.selectedCampaign?.id ?? "");
+        setSelectedCampaignId((previous) => {
+          if (previous && data.campaigns.some((campaign) => campaign.id === previous)) {
+            return previous;
+          }
+          return data.selectedCampaign?.id ?? "";
+        });
       } catch (e) {
         setError(e instanceof Error ? e.message : "Erro ao carregar portal.");
         setPayload(null);
@@ -371,7 +412,7 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
         setIsLoading(false);
       }
     },
-    [clientSlug],
+    [clientSlug, setSelectedCampaignId],
   );
 
   useEffect(() => {
@@ -678,7 +719,7 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
     if (payload.selectedCampaign?.id === resultsCampaign.id) return;
     setSelectedCampaignId(resultsCampaign.id);
     void loadData(resultsCampaign.id);
-  }, [loadData, payload, resultsCampaign]);
+  }, [loadData, payload, resultsCampaign, setSelectedCampaignId]);
 
   useEffect(() => {
     if (!expandedCampaignId) return;
@@ -1010,7 +1051,7 @@ export function ClientWorkspace({ clientSlug }: { clientSlug: string }) {
     }
     setSelectedCalendarEventId(targetEvent.id);
     setAppliedCalendarDeepLinkId(calendarEventIdParam);
-  }, [appliedCalendarDeepLinkId, calendarEventIdParam, calendarEvents]);
+  }, [appliedCalendarDeepLinkId, calendarEventIdParam, calendarEvents, setCalendarMonth]);
 
   const selectedCalendarEvent = useMemo(
     () =>

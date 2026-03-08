@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
+import { usePersistedState } from "@/lib/page-state-persistence";
 import { findProgramById } from "@/lib/programs-catalog";
 
 type Diagnostic = {
@@ -99,6 +100,20 @@ type PlotInfoKey =
   | "distribution"
   | "ranking"
   | "trend";
+
+function parseDatasetSortKey(value: unknown): DatasetSortKey | null {
+  if (value === "employee_id") return value;
+  if (value === "sector") return value;
+  if (value === "risk_factor") return value;
+  if (value === "score") return value;
+  if (value === "timestamp") return value;
+  return null;
+}
+
+function parseSortDirection(value: unknown): "asc" | "desc" | null {
+  if (value === "asc" || value === "desc") return value;
+  return null;
+}
 
 type ClientPortalPayload = {
   client: {
@@ -1244,11 +1259,28 @@ export function ClientDiagnosticAggregateResultsSection({
       .map((sector) => sector.sector);
   }, [aggregateData?.dashboard?.sectors]);
   const requestedPerSector = (sectorFilter ?? "").trim();
-  const [selectedPerSector, setSelectedPerSector] = useState(() => requestedPerSector);
-  const [activeResultsTab, setActiveResultsTab] = useState<"aggregate" | "per-sector">(() =>
+  const aggregateStateKeyPrefix = `client-diagnostic-aggregate:${clientSlug}:${campaignId}`;
+  const [selectedPerSector, setSelectedPerSector] = usePersistedState(
+    `${aggregateStateKeyPrefix}:selected-per-sector`,
+    requestedPerSector,
+    {
+      deserialize: (value) => (typeof value === "string" ? value : null),
+    },
+  );
+  const [activeResultsTab, setActiveResultsTab] = usePersistedState<"aggregate" | "per-sector">(
+    `${aggregateStateKeyPrefix}:active-tab`,
     requestedPerSector.length > 0 ? "per-sector" : "aggregate",
+    {
+      deserialize: (value) => (value === "aggregate" || value === "per-sector" ? value : null),
+    },
   );
   const pendingScrollRestoreY = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (requestedPerSector.length === 0) return;
+    setSelectedPerSector(requestedPerSector);
+    setActiveResultsTab("per-sector");
+  }, [requestedPerSector, setActiveResultsTab, setSelectedPerSector]);
 
   function resolveSectorName(candidate: string): string | null {
     const normalizedCandidate = candidate.trim();
@@ -1559,15 +1591,44 @@ export function ClientDiagnosticResultsSection({
     },
     [isPerSectorResults, normalizedSectorFilter, rawTrends],
   );
-  const [datasetSectorFilter, setDatasetSectorFilter] = useState(() =>
+  const diagnosticResultsStateKeyPrefix = `client-diagnostic-results:${clientSlug}:${campaignId}`;
+  const [datasetSectorFilter, setDatasetSectorFilter] = usePersistedState(
+    `${diagnosticResultsStateKeyPrefix}:dataset-sector-filter`,
     isPerSectorResults ? normalizedSectorFilter : "all",
+    {
+      deserialize: (value) => (typeof value === "string" ? value : null),
+    },
   );
-  const [datasetSortKey, setDatasetSortKey] = useState<DatasetSortKey>("timestamp");
-  const [datasetSortDirection, setDatasetSortDirection] = useState<"asc" | "desc">("desc");
+  const [datasetSortKey, setDatasetSortKey] = usePersistedState<DatasetSortKey>(
+    `${diagnosticResultsStateKeyPrefix}:dataset-sort-key`,
+    "timestamp",
+    {
+      deserialize: parseDatasetSortKey,
+    },
+  );
+  const [datasetSortDirection, setDatasetSortDirection] = usePersistedState<"asc" | "desc">(
+    `${diagnosticResultsStateKeyPrefix}:dataset-sort-direction`,
+    "desc",
+    {
+      deserialize: parseSortDirection,
+    },
+  );
   const [activePlotInfo, setActivePlotInfo] = useState<PlotInfoKey | null>(null);
   const [trendDetailsModal, setTrendDetailsModal] = useState<TrendDetailsModalState | null>(null);
-  const [isolatedRadarSector, setIsolatedRadarSector] = useState<string | null>(null);
-  const [selectedAggregateTrendTopicId, setSelectedAggregateTrendTopicId] = useState<number | null>(null);
+  const [isolatedRadarSector, setIsolatedRadarSector] = usePersistedState<string | null>(
+    `${diagnosticResultsStateKeyPrefix}:isolated-radar-sector`,
+    null,
+    {
+      deserialize: (value) => (typeof value === "string" || value === null ? value : null),
+    },
+  );
+  const [selectedAggregateTrendTopicId, setSelectedAggregateTrendTopicId] = usePersistedState<number | null>(
+    `${diagnosticResultsStateKeyPrefix}:selected-aggregate-trend-topic-id`,
+    null,
+    {
+      deserialize: (value) => (typeof value === "number" || value === null ? value : null),
+    },
+  );
   const isPerSectorRefreshing = isPerSectorResults && isLoading && Boolean(data);
 
   const datasetSampleRows = useMemo(() => metrics?.dataset.sample ?? [], [metrics?.dataset.sample]);
@@ -1583,6 +1644,18 @@ export function ClientDiagnosticResultsSection({
       normalizedSectorFilter
     );
   }, [datasetSectorOptions, isPerSectorResults, normalizedSectorFilter]);
+
+  useEffect(() => {
+    if (!isPerSectorResults || normalizedSectorFilter.length === 0) return;
+    setDatasetSectorFilter(normalizedSectorFilter);
+  }, [isPerSectorResults, normalizedSectorFilter, setDatasetSectorFilter]);
+
+  useEffect(() => {
+    if (isPerSectorResults) return;
+    if (datasetSectorFilter === "all") return;
+    if (datasetSectorOptions.includes(datasetSectorFilter)) return;
+    setDatasetSectorFilter("all");
+  }, [datasetSectorFilter, datasetSectorOptions, isPerSectorResults, setDatasetSectorFilter]);
 
   const activeDatasetSectorFilter = isPerSectorResults ? resolvedPerSectorDatasetFilter : datasetSectorFilter;
   const distributionScopeLabel = isPerSectorResults ? activeDatasetSectorFilter : "all sectors";

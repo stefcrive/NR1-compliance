@@ -1237,13 +1237,17 @@ export async function GET(
       employeeFormLink: `${request.nextUrl.origin}/s/${campaign.public_slug}`,
     };
   });
+  const explicitlyRequestedCampaign = selectedCampaignId
+    ? campaignsWithLinks.find((item) => item.id === selectedCampaignId) ?? null
+    : null;
   const selectedCampaign =
-    campaignsWithLinks.find((item) => item.id === selectedCampaignId) ??
+    explicitlyRequestedCampaign ??
     campaignsWithLinks.find((item) => item.status === "live") ??
     campaignsWithLinks[0] ??
     null;
-  const dashboardCampaigns =
-    campaignsWithLinks.filter((item) => item.status === "live").length > 0
+  const dashboardCampaigns = explicitlyRequestedCampaign
+    ? [explicitlyRequestedCampaign]
+    : campaignsWithLinks.filter((item) => item.status === "live").length > 0
       ? campaignsWithLinks.filter((item) => item.status === "live")
       : [
           campaignsWithLinks.find((item) => item.status === "closed") ??

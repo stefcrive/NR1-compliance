@@ -6,7 +6,6 @@ import { useCallback, useEffect, useMemo, useState, type ChangeEvent } from "rea
 import {
   CONTINUOUS_PROGRAM_MATERIAL_ACCEPT_ATTR,
   CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCIES,
-  DEFAULT_CONTINUOUS_PROGRAM_METRICS,
   DEFAULT_CONTINUOUS_PROGRAM_QUESTIONS,
   DEFAULT_CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCY,
   type ContinuousProgramMaterial,
@@ -94,14 +93,6 @@ type AssignmentPatchPayload = {
   };
   error?: string;
   provisorySlots?: AvailabilitySlot[];
-};
-
-type TemplateClonePayload = {
-  program?: {
-    id: string;
-    title: string;
-  };
-  error?: string;
 };
 
 type Snapshot = {
@@ -658,38 +649,6 @@ export function ManagerAssignedContinuousProgram({
     }
   }
 
-  async function cloneTemplate(
-    sourceTemplate: ContinuousProgramTemplate,
-    sourceAssignment: AssignedContinuousProgram,
-    sourceQuestions: string[],
-    sourceMaterials: ContinuousProgramMaterial[],
-  ) {
-    const cloneDate = new Intl.DateTimeFormat("pt-BR", { dateStyle: "short" })
-      .format(new Date())
-      .replaceAll("/", "-");
-    const titleBase = sourceTemplate.title.trim() || sourceAssignment.programTitle;
-    const cloneTitle = `${titleBase} (copia ${cloneDate})`.slice(0, 255);
-    const response = await fetch("/api/admin/programs-database/continuous", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        title: cloneTitle,
-        description: sourceTemplate.description ?? null,
-        targetRiskTopic: sourceTemplate.targetRiskTopic,
-        triggerThreshold: sourceTemplate.triggerThreshold,
-        scheduleFrequency,
-        evaluationQuestions: sourceQuestions,
-        materials: sourceMaterials,
-        metrics: sourceTemplate.metrics ?? DEFAULT_CONTINUOUS_PROGRAM_METRICS,
-      }),
-    });
-    const payload = (await response.json().catch(() => ({}))) as TemplateClonePayload;
-    if (!response.ok || !payload.program) {
-      throw new Error(payload.error ?? "Alteracoes salvas, mas nao foi possivel criar novo template.");
-    }
-    setNotice(`Alteracoes salvas. Novo template criado: ${payload.program.title}.`);
-  }
-
   async function saveChanges() {
     if (!assignment || !template) return;
     if (!changeState.hasChanges) {
@@ -787,19 +746,6 @@ export function ManagerAssignedContinuousProgram({
 
       applyLoadedData(nextAssignment, nextTemplate);
       setNotice("Alteracoes salvas.");
-
-      if (
-        window.confirm(
-          "Deseja salvar estas alteracoes como novo template na Base de programas?",
-        )
-      ) {
-        await cloneTemplate(
-          nextTemplate,
-          nextAssignment,
-          normalizeQuestions(nextTemplate.evaluationQuestions),
-          normalizeMaterials(nextTemplate.materials),
-        );
-      }
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "Nao foi possivel salvar alteracoes.");
     } finally {

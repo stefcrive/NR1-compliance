@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { type ManagerLocale, useManagerLocale } from "@/components/manager-locale";
+import { usePersistedState } from "@/lib/page-state-persistence";
 
 type BillingStatus = "up_to_date" | "pending" | "overdue" | "blocked";
 type ClientStatus = "Active" | "Pending" | "Inactive";
@@ -75,6 +76,44 @@ const WEEK_LABELS = {
 } as const;
 const MAX_EVENTS_PER_DAY = 5;
 const UNLINKED_CLIENT_FILTER = "__unlinked__";
+const MANAGER_WORKSPACE_STATE_KEY = "manager-workspace";
+
+function parseCalendarCursorDate(value: unknown): Date | null {
+  if (typeof value !== "string") return null;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return startOfDay(parsed);
+}
+
+function parseCalendarIsolationFilter(value: unknown): CalendarIsolationFilter | null {
+  if (!value || typeof value !== "object") return null;
+  const parsed = value as {
+    kind?: unknown;
+    campaignId?: unknown;
+    assignmentId?: unknown;
+    label?: unknown;
+  };
+  if (parsed.kind === "none") {
+    return { kind: "none" };
+  }
+  if (
+    parsed.kind === "drps" &&
+    typeof parsed.campaignId === "string" &&
+    parsed.campaignId.length > 0 &&
+    typeof parsed.label === "string"
+  ) {
+    return { kind: "drps", campaignId: parsed.campaignId, label: parsed.label };
+  }
+  if (
+    parsed.kind === "continuous" &&
+    typeof parsed.assignmentId === "string" &&
+    parsed.assignmentId.length > 0 &&
+    typeof parsed.label === "string"
+  ) {
+    return { kind: "continuous", assignmentId: parsed.assignmentId, label: parsed.label };
+  }
+  return null;
+}
 
 const COPY = {
   en: {
@@ -478,21 +517,55 @@ export function ManagerWorkspace({
   const { locale } = useManagerLocale();
   const t = COPY[locale];
   const [tab, setTab] = useState<Tab>(initialTab);
-  const [calendarView, setCalendarView] = useState<CalendarView>("month");
-  const [calendarCursorDate, setCalendarCursorDate] = useState(() => startOfDay(new Date()));
+  const [calendarView, setCalendarView] = usePersistedState<CalendarView>(
+    `${MANAGER_WORKSPACE_STATE_KEY}:calendar-view`,
+    "month",
+  );
+  const [calendarCursorDate, setCalendarCursorDate] = usePersistedState<Date>(
+    `${MANAGER_WORKSPACE_STATE_KEY}:calendar-cursor-date`,
+    startOfDay(new Date()),
+    {
+      serialize: (value) => value.toISOString(),
+      deserialize: parseCalendarCursorDate,
+    },
+  );
   const [clients, setClients] = useState<Client[]>([]);
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [calendarEvents, setCalendarEvents] = useState<MasterCalendarEvent[]>([]);
   const [activeContinuousPrograms, setActiveContinuousPrograms] = useState<ActiveContinuousProgram[]>([]);
-  const [calendarIsolation, setCalendarIsolation] = useState<CalendarIsolationFilter>({ kind: "none" });
+  const [calendarIsolation, setCalendarIsolation] = usePersistedState<CalendarIsolationFilter>(
+    `${MANAGER_WORKSPACE_STATE_KEY}:calendar-isolation`,
+    { kind: "none" },
+    {
+      deserialize: parseCalendarIsolationFilter,
+    },
+  );
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [searchQuery, setSearchQuery] = useState("");
-  const [clientStatusFilter, setClientStatusFilter] = useState<ClientStatusFilter>("all");
-  const [billingFilter, setBillingFilter] = useState<BillingFilter>("all");
-  const [clientListView, setClientListView] = useState<ClientListView>("cards");
-  const [calendarClientFilter, setCalendarClientFilter] = useState("all");
-  const [calendarSearchQuery, setCalendarSearchQuery] = useState("");
+  const [searchQuery, setSearchQuery] = usePersistedState(
+    `${MANAGER_WORKSPACE_STATE_KEY}:client-search`,
+    "",
+  );
+  const [clientStatusFilter, setClientStatusFilter] = usePersistedState<ClientStatusFilter>(
+    `${MANAGER_WORKSPACE_STATE_KEY}:client-status-filter`,
+    "all",
+  );
+  const [billingFilter, setBillingFilter] = usePersistedState<BillingFilter>(
+    `${MANAGER_WORKSPACE_STATE_KEY}:billing-filter`,
+    "all",
+  );
+  const [clientListView, setClientListView] = usePersistedState<ClientListView>(
+    `${MANAGER_WORKSPACE_STATE_KEY}:client-list-view`,
+    "cards",
+  );
+  const [calendarClientFilter, setCalendarClientFilter] = usePersistedState(
+    `${MANAGER_WORKSPACE_STATE_KEY}:calendar-client-filter`,
+    "all",
+  );
+  const [calendarSearchQuery, setCalendarSearchQuery] = usePersistedState(
+    `${MANAGER_WORKSPACE_STATE_KEY}:calendar-search`,
+    "",
+  );
   const [blockClientId, setBlockClientId] = useState("");
   const [blockTitle, setBlockTitle] = useState("Bloqueio operacional");
   const [blockStartsAt, setBlockStartsAt] = useState(() => toDatetimeLocal(new Date(Date.now() + 24 * 60 * 60 * 1000)));
@@ -644,7 +717,7 @@ export function ManagerWorkspace({
     ) {
       setCalendarIsolation({ kind: "none" });
     }
-  }, [calendarIsolation, liveCampaigns, liveContinuousPrograms]);
+  }, [calendarIsolation, liveCampaigns, liveContinuousPrograms, setCalendarIsolation]);
 
   const isolatedCalendarEvents = useMemo(() => {
     if (calendarIsolation.kind === "none") return calendarEvents;
@@ -1201,7 +1274,7 @@ export function ManagerWorkspace({
         return startOfDay(nextDay);
       });
     },
-    [calendarView],
+    [calendarView, setCalendarCursorDate],
   );
 
   const filteredClients = useMemo(

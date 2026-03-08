@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useManagerLocale } from "@/components/manager-locale";
 import {
   CONTINUOUS_PROGRAM_SCHEDULE_FREQUENCIES,
@@ -9,6 +9,7 @@ import {
   type ContinuousProgramMaterial,
   type ContinuousProgramScheduleFrequency,
 } from "@/lib/continuous-programs";
+import { usePersistedState } from "@/lib/page-state-persistence";
 
 type DrpsDiagnostic = {
   id: string;
@@ -112,6 +113,8 @@ type ContinuousProgramGroup = {
   programs: ContinuousProgram[];
   isSpecialCategory: boolean;
 };
+
+type SessionAssignmentTargetMode = "database" | "assigned";
 
 const LEADERSHIP_COACHING_CATEGORY_TAG = "[category:leadership-coaching-rh]";
 
@@ -219,6 +222,14 @@ const COPY = {
     sessionsLibraryAssignModalTitle: "Select programs",
     sessionsLibraryAssignModalSubtitle:
       "Choose one or more programs to receive the selected sessions.",
+    sessionsLibraryAssignModalTabDatabase: "Database programs",
+    sessionsLibraryAssignModalTabAssigned: "Assigned programs",
+    sessionsLibraryAssignModalAssignedCompany: "Company",
+    sessionsLibraryAssignModalNoCompanies: "No companies available.",
+    sessionsLibraryAssignModalNoAssignedProgramsForCompany:
+      "No assigned programs for this company.",
+    sessionsLibraryAssignModalValidationAssignedCompany:
+      "Select a company to list assigned programs.",
     sessionsLibraryAssignModalConfirm: "Assign to selected programs",
     sessionsLibraryAssignModalNoPrograms: "No programs available.",
     sessionsLibraryAssigning: "Assigning sessions...",
@@ -367,6 +378,14 @@ const COPY = {
     sessionsLibraryAssignModalTitle: "Selecionar programas",
     sessionsLibraryAssignModalSubtitle:
       "Escolha um ou mais programas para receber as sessoes selecionadas.",
+    sessionsLibraryAssignModalTabDatabase: "Programas da base",
+    sessionsLibraryAssignModalTabAssigned: "Programas atribuidos",
+    sessionsLibraryAssignModalAssignedCompany: "Empresa",
+    sessionsLibraryAssignModalNoCompanies: "Nenhuma empresa disponivel.",
+    sessionsLibraryAssignModalNoAssignedProgramsForCompany:
+      "Nenhum programa atribuido para esta empresa.",
+    sessionsLibraryAssignModalValidationAssignedCompany:
+      "Selecione uma empresa para listar programas atribuidos.",
     sessionsLibraryAssignModalConfirm: "Atribuir aos programas selecionados",
     sessionsLibraryAssignModalNoPrograms: "Nenhum programa disponivel.",
     sessionsLibraryAssigning: "Atribuindo sessoes...",
@@ -496,6 +515,18 @@ function sourceFilterKey(item: SessionCatalogItem) {
 }
 
 const CREATE_SESSION_NEW_MODULE_OPTION = "__new_module__";
+const MANAGER_PROGRAMS_DB_STATE_KEY = "manager-programs-database";
+
+function parseBooleanMap(value: unknown): Record<string, boolean> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const result: Record<string, boolean> = {};
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof entry === "boolean") {
+      result[key] = entry;
+    }
+  }
+  return result;
+}
 
 export function ManagerProgramsDatabase() {
   const { locale } = useManagerLocale();
@@ -505,8 +536,14 @@ export function ManagerProgramsDatabase() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState(true);
-  const [isContinuousOpen, setIsContinuousOpen] = useState(true);
+  const [isDiagnosticsOpen, setIsDiagnosticsOpen] = usePersistedState(
+    `${MANAGER_PROGRAMS_DB_STATE_KEY}:diagnostics-open`,
+    true,
+  );
+  const [isContinuousOpen, setIsContinuousOpen] = usePersistedState(
+    `${MANAGER_PROGRAMS_DB_STATE_KEY}:continuous-open`,
+    true,
+  );
   const [isCreateDrpsOpen, setIsCreateDrpsOpen] = useState(false);
   const [isCreateProgramOpen, setIsCreateProgramOpen] = useState(false);
   const [isCreatingDrps, setIsCreatingDrps] = useState(false);
@@ -529,13 +566,28 @@ export function ManagerProgramsDatabase() {
   const [createdDrpsId, setCreatedDrpsId] = useState<string | null>(null);
   const [createdProgramId, setCreatedProgramId] = useState<string | null>(null);
   const [selectedEvaluationProgramId, setSelectedEvaluationProgramId] = useState<string | null>(null);
-  const [isSessionsLibraryOpen, setIsSessionsLibraryOpen] = useState(true);
+  const [isSessionsLibraryOpen, setIsSessionsLibraryOpen] = usePersistedState(
+    `${MANAGER_PROGRAMS_DB_STATE_KEY}:sessions-library-open`,
+    true,
+  );
   const [sessionsCatalog, setSessionsCatalog] = useState<SessionCatalogItem[]>([]);
-  const [sessionSearchTerm, setSessionSearchTerm] = useState("");
-  const [sessionSourceProgramFilterId, setSessionSourceProgramFilterId] = useState("all");
+  const [sessionSearchTerm, setSessionSearchTerm] = usePersistedState(
+    `${MANAGER_PROGRAMS_DB_STATE_KEY}:session-search`,
+    "",
+  );
+  const [sessionSourceProgramFilterId, setSessionSourceProgramFilterId] = usePersistedState(
+    `${MANAGER_PROGRAMS_DB_STATE_KEY}:session-source-filter`,
+    "all",
+  );
   const [selectedSessionCatalogIds, setSelectedSessionCatalogIds] = useState<string[]>([]);
   const [selectedSessionTargetProgramIds, setSelectedSessionTargetProgramIds] = useState<string[]>(
     [],
+  );
+  const [sessionAssignmentTargetMode, setSessionAssignmentTargetMode] =
+    useState<SessionAssignmentTargetMode>("database");
+  const [selectedSessionAssignmentClientId, setSelectedSessionAssignmentClientId] = usePersistedState(
+    `${MANAGER_PROGRAMS_DB_STATE_KEY}:session-assignment-client-id`,
+    "",
   );
   const [isAssigningCatalogSessions, setIsAssigningCatalogSessions] = useState(false);
   const [isAssignSessionsProgramsModalOpen, setIsAssignSessionsProgramsModalOpen] = useState(false);
@@ -550,7 +602,10 @@ export function ManagerProgramsDatabase() {
   const [selectedSessionAssignmentItem, setSelectedSessionAssignmentItem] =
     useState<SessionCatalogItem | null>(null);
   const [clients, setClients] = useState<ClientOption[]>([]);
-  const [selectedClientId, setSelectedClientId] = useState("");
+  const [selectedClientId, setSelectedClientId] = usePersistedState(
+    `${MANAGER_PROGRAMS_DB_STATE_KEY}:selected-client-id`,
+    "",
+  );
   const [selectedProgramIds, setSelectedProgramIds] = useState<string[]>([]);
   const [assignStatus, setAssignStatus] = useState<"Recommended" | "Active" | "Completed">("Active");
   const [isAssigningSelected, setIsAssigningSelected] = useState(false);
@@ -629,7 +684,11 @@ export function ManagerProgramsDatabase() {
 
     return nextGroups;
   }, [continuousPrograms, locale, t.leadershipCategoryTitle, t.prgTopicUnknown]);
-  const [openContinuousGroupByKey, setOpenContinuousGroupByKey] = useState<Record<string, boolean>>({});
+  const [openContinuousGroupByKey, setOpenContinuousGroupByKey] = usePersistedState<Record<string, boolean>>(
+    `${MANAGER_PROGRAMS_DB_STATE_KEY}:open-continuous-groups`,
+    {},
+    { deserialize: parseBooleanMap },
+  );
   const selectedEvaluationProgram = useMemo(
     () =>
       selectedEvaluationProgramId
@@ -660,6 +719,30 @@ export function ManagerProgramsDatabase() {
     () => new Set(selectedSessionTargetProgramIds),
     [selectedSessionTargetProgramIds],
   );
+  const sessionAssignmentProgramGroups = useMemo(() => {
+    if (sessionAssignmentTargetMode === "database") {
+      return continuousProgramGroups;
+    }
+    if (!selectedSessionAssignmentClientId) {
+      return [] as ContinuousProgramGroup[];
+    }
+    return continuousProgramGroups
+      .map((group) => ({
+        ...group,
+        programs: group.programs.filter((program) =>
+          program.assignedCompanies.some((company) => company.id === selectedSessionAssignmentClientId),
+        ),
+      }))
+      .filter((group) => group.programs.length > 0);
+  }, [continuousProgramGroups, selectedSessionAssignmentClientId, sessionAssignmentTargetMode]);
+  const sessionAssignmentNoProgramsMessage =
+    sessionAssignmentTargetMode === "assigned"
+      ? clients.length === 0
+        ? t.sessionsLibraryAssignModalNoCompanies
+        : selectedSessionAssignmentClientId
+          ? t.sessionsLibraryAssignModalNoAssignedProgramsForCompany
+          : t.sessionsLibraryAssignModalValidationAssignedCompany
+      : t.sessionsLibraryAssignModalNoPrograms;
   useEffect(() => {
     setOpenContinuousGroupByKey((previous) => {
       const next: Record<string, boolean> = {};
@@ -668,7 +751,7 @@ export function ManagerProgramsDatabase() {
       }
       return next;
     });
-  }, [continuousProgramGroups]);
+  }, [continuousProgramGroups, setOpenContinuousGroupByKey]);
   const sessionSourceFilterOptions = useMemo(() => {
     const options = new Map<string, string>();
     for (const item of sessionsCatalog) {
@@ -752,7 +835,11 @@ export function ManagerProgramsDatabase() {
         }),
       }));
   }, [filteredSessionsCatalog, t.sessionsLibrarySourceFilterLibrary]);
-  const [openSessionModuleByKey, setOpenSessionModuleByKey] = useState<Record<string, boolean>>({});
+  const [openSessionModuleByKey, setOpenSessionModuleByKey] = usePersistedState<Record<string, boolean>>(
+    `${MANAGER_PROGRAMS_DB_STATE_KEY}:open-session-modules`,
+    {},
+    { deserialize: parseBooleanMap },
+  );
   useEffect(() => {
     setOpenSessionModuleByKey((previous) => {
       const next: Record<string, boolean> = {};
@@ -761,9 +848,9 @@ export function ManagerProgramsDatabase() {
       }
       return next;
     });
-  }, [groupedFilteredSessionsCatalog]);
+  }, [groupedFilteredSessionsCatalog, setOpenSessionModuleByKey]);
 
-  async function loadDatabase() {
+  const loadDatabase = useCallback(async () => {
     setIsLoading(true);
     setError("");
     try {
@@ -812,6 +899,10 @@ export function ManagerProgramsDatabase() {
         if (current && nextClients.some((item) => item.id === current)) return current;
         return nextClients[0]?.id ?? "";
       });
+      setSelectedSessionAssignmentClientId((current) => {
+        if (current && nextClients.some((item) => item.id === current)) return current;
+        return nextClients[0]?.id ?? "";
+      });
       setSelectedProgramIds((current) =>
         current.filter((programId) => nextPrograms.some((program) => program.id === programId)),
       );
@@ -830,17 +921,24 @@ export function ManagerProgramsDatabase() {
       setSessionsCatalog([]);
       setClients([]);
       setSelectedClientId("");
+      setSelectedSessionAssignmentClientId("");
       setSelectedProgramIds([]);
       setSelectedSessionTargetProgramIds([]);
       setSelectedSessionCatalogIds([]);
     } finally {
       setIsLoading(false);
     }
-  }
+  }, [
+    setSelectedClientId,
+    setSelectedProgramIds,
+    setSelectedSessionCatalogIds,
+    setSelectedSessionAssignmentClientId,
+    setSelectedSessionTargetProgramIds,
+  ]);
 
   useEffect(() => {
     void loadDatabase();
-  }, []);
+  }, [loadDatabase]);
 
   function openCreateDrpsModal() {
     setCreateDrpsError("");
@@ -1138,6 +1236,11 @@ export function ManagerProgramsDatabase() {
     }
 
     setSelectedSessionTargetProgramIds([]);
+    setSessionAssignmentTargetMode("database");
+    setSelectedSessionAssignmentClientId((current) => {
+      if (current && clients.some((item) => item.id === current)) return current;
+      return clients[0]?.id ?? "";
+    });
     setIsAssignSessionsProgramsModalOpen(true);
   }
 
@@ -1159,6 +1262,10 @@ export function ManagerProgramsDatabase() {
     setNotice("");
     setError("");
 
+    if (sessionAssignmentTargetMode === "assigned" && !selectedSessionAssignmentClientId) {
+      setError(t.sessionsLibraryAssignModalValidationAssignedCompany);
+      return;
+    }
     if (selectedSessionTargetProgramIds.length === 0) {
       setError(t.sessionsLibraryValidationProgram);
       return;
@@ -1792,12 +1899,65 @@ export function ManagerProgramsDatabase() {
               </div>
             </div>
 
+            <div className="mt-4 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedSessionTargetProgramIds([]);
+                  setSessionAssignmentTargetMode("database");
+                }}
+                className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
+                  sessionAssignmentTargetMode === "database"
+                    ? "bg-[#0f5b73] text-white"
+                    : "border border-[#9ec8db] text-[#0f5b73]"
+                }`}
+              >
+                {t.sessionsLibraryAssignModalTabDatabase}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedSessionTargetProgramIds([]);
+                  setSessionAssignmentTargetMode("assigned");
+                }}
+                className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
+                  sessionAssignmentTargetMode === "assigned"
+                    ? "bg-[#0f5b73] text-white"
+                    : "border border-[#9ec8db] text-[#0f5b73]"
+                }`}
+              >
+                {t.sessionsLibraryAssignModalTabAssigned}
+              </button>
+            </div>
+
+            {sessionAssignmentTargetMode === "assigned" ? (
+              <label className="mt-3 block text-xs text-[#4f6977]">
+                {t.sessionsLibraryAssignModalAssignedCompany}
+                <select
+                  value={selectedSessionAssignmentClientId}
+                  onChange={(event) => {
+                    const nextClientId = event.target.value;
+                    setSelectedSessionAssignmentClientId(nextClientId);
+                    setSelectedSessionTargetProgramIds([]);
+                  }}
+                  className="mt-1 w-full rounded border border-[#c9dce8] px-3 py-2 text-sm"
+                >
+                  {clients.length === 0 ? <option value="">-</option> : null}
+                  {clients.map((clientOption) => (
+                    <option key={`assign-session-client-modal-${clientOption.id}`} value={clientOption.id}>
+                      {clientOption.companyName}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
+
             <div className="mt-4 max-h-[50vh] overflow-auto rounded-lg border border-[#d8e4ee]">
-              {continuousProgramGroups.length === 0 ? (
-                <p className="px-3 py-3 text-sm text-[#5a7383]">{t.sessionsLibraryAssignModalNoPrograms}</p>
+              {sessionAssignmentProgramGroups.length === 0 ? (
+                <p className="px-3 py-3 text-sm text-[#5a7383]">{sessionAssignmentNoProgramsMessage}</p>
               ) : (
                 <div className="divide-y divide-[#d8e4ee]">
-                  {continuousProgramGroups.map((group) => (
+                  {sessionAssignmentProgramGroups.map((group) => (
                     <div key={`session-assign-group-${group.key}`} className="p-3">
                       <div className="mb-2">
                         {!group.isSpecialCategory ? (
@@ -1837,7 +1997,11 @@ export function ManagerProgramsDatabase() {
               <button
                 type="button"
                 onClick={() => void handleAssignSelectedSessionsToProgram()}
-                disabled={isAssigningCatalogSessions || selectedSessionTargetProgramIds.length === 0}
+                disabled={
+                  isAssigningCatalogSessions ||
+                  selectedSessionTargetProgramIds.length === 0 ||
+                  (sessionAssignmentTargetMode === "assigned" && !selectedSessionAssignmentClientId)
+                }
                 className="rounded-full bg-[#0f5b73] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
               >
                 {isAssigningCatalogSessions

@@ -78,16 +78,6 @@ function ContractIcon({ className = "h-4 w-4" }: IconProps) {
   );
 }
 
-function LinkIcon({ className = "h-4 w-4" }: IconProps) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={className}>
-      <path d="M10 14 7 17a4 4 0 1 1-6-6l3-3a4 4 0 0 1 6 0" />
-      <path d="m14 10 3-3a4 4 0 0 1 6 6l-3 3a4 4 0 0 1-6 0" />
-      <path d="m8 16 8-8" />
-    </svg>
-  );
-}
-
 function BellIcon({ className = "h-4 w-4" }: IconProps) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={className}>
@@ -127,8 +117,8 @@ export function ClientShell({
   const [notificationsUnavailable, setNotificationsUnavailable] = useState(false);
   const [notifications, setNotifications] = useState<ClientNotification[]>([]);
   const [markingNotificationId, setMarkingNotificationId] = useState<string | null>(null);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
   const companyHref = `/client/${clientSlug}/company`;
-  const surveyEntryHref = `/s/demo-nr1-2026`;
   const viewingFromHistorySection =
     searchParams.get("from") === "history" &&
     (pathname.startsWith(`/client/${clientSlug}/diagnostic/`) ||
@@ -202,6 +192,25 @@ export function ClientShell({
     },
     [clientSlug],
   );
+
+  const handleLogout = useCallback(async () => {
+    if (isLoggingOut) return;
+    setIsLoggingOut(true);
+    const fallbackRedirect = `/access/client?clientSlug=${encodeURIComponent(clientSlug)}`;
+    try {
+      const response = await fetch("/api/auth/client/logout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clientSlug }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as { redirectTo?: string };
+      window.location.href = payload.redirectTo ?? fallbackRedirect;
+    } catch {
+      window.location.href = fallbackRedirect;
+    } finally {
+      setIsLoggingOut(false);
+    }
+  }, [clientSlug, isLoggingOut]);
 
   return (
     <div className="min-h-screen bg-[#f6f6f6]">
@@ -329,27 +338,17 @@ export function ClientShell({
                 </nav>
               </section>
 
-              <section className="border-t border-[#d7d7d7] px-2 py-3">
-                <p className="px-2 pb-2 text-xs font-semibold text-[#697983]">Utility</p>
-                <nav className="space-y-1">
-                  <Link
-                    href={surveyEntryHref}
-                    className="flex items-center gap-2 rounded-xl px-3 py-2 text-sm text-[#202f38] hover:bg-white/70"
-                  >
-                    <LinkIcon />
-                    <span>Employee survey entry</span>
-                  </Link>
-                </nav>
-              </section>
             </div>
 
             <div className="border-t border-[#d7d7d7] p-3">
-              <Link
-                href="/access"
+              <button
+                type="button"
+                disabled={isLoggingOut}
+                onClick={() => void handleLogout()}
                 className="flex items-center justify-center rounded-xl border border-[#c4ccd1] bg-white px-3 py-2 text-sm font-medium text-[#23353f] hover:bg-[#f7f8f9]"
               >
-                Back to gateway
-              </Link>
+                {isLoggingOut ? "Logging out..." : "Logout"}
+              </button>
             </div>
           </div>
         </aside>

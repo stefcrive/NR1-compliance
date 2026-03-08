@@ -83,6 +83,16 @@ function fmt(value: string | null) {
   return new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short" }).format(new Date(value));
 }
 
+function drpsCycleLabel(
+  campaign: Pick<HistoryPayload["concludedCampaigns"][number], "name" | "startsAt" | "closesAt" | "createdAt">,
+) {
+  const referenceDate = campaign.closesAt || campaign.startsAt || campaign.createdAt;
+  const parsed = new Date(referenceDate);
+  if (Number.isNaN(parsed.getTime())) return campaign.name;
+  const cycle = new Intl.DateTimeFormat("pt-BR", { month: "2-digit", year: "numeric" }).format(parsed);
+  return `${campaign.name} (${cycle})`;
+}
+
 function eventTypeLabel(value: "drps_start" | "drps_close" | "continuous_meeting" | "blocked") {
   if (value === "drps_start") return "Inicio DRPS";
   if (value === "drps_close") return "Fechamento DRPS";
@@ -251,7 +261,7 @@ export function ClientHistory({ clientSlug }: { clientSlug: string }) {
               ) : (
                 payload.concludedCampaigns.map((campaign) => (
                   <tr key={campaign.id} className="border-b">
-                    <td className="px-2 py-2">{campaign.name}</td>
+                    <td className="px-2 py-2">{drpsCycleLabel(campaign)}</td>
                     <td className="px-2 py-2">
                       {fmt(campaign.startsAt)} - {fmt(campaign.closesAt)}
                     </td>

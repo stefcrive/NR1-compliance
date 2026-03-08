@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 
 import { ManagerHistory } from "@/components/manager-history";
+import { usePersistedState } from "@/lib/page-state-persistence";
 
 type Diagnostic = {
   id: string;
@@ -136,6 +137,24 @@ type ClientTab =
   | "assigned-continuous"
   | "contracts-invoicing"
   | "history";
+
+const MANAGER_CLIENT_FICHA_STATE_KEY = "manager-client-ficha";
+const LEADERSHIP_COACHING_CATEGORY_TAG = "[category:leadership-coaching-rh]";
+
+function parseClientTab(value: unknown): ClientTab | null {
+  if (value === "overview") return value;
+  if (value === "company-data") return value;
+  if (value === "assigned-drps") return value;
+  if (value === "assigned-continuous") return value;
+  if (value === "contracts-invoicing") return value;
+  if (value === "history") return value;
+  return null;
+}
+
+function isLeadershipCoachingProgram(program: ContinuousProgramOption) {
+  const description = program.description ?? "";
+  return description.includes(LEADERSHIP_COACHING_CATEGORY_TAG);
+}
 
 type ClientProfileForm = {
   companyName: string;
@@ -423,14 +442,19 @@ function EditIcon() {
 export function ManagerClientFicha({
   clientId,
   initialTab = "overview",
+  hasExplicitTab = false,
 }: {
   clientId: string;
   initialTab?: ClientTab;
+  hasExplicitTab?: boolean;
 }) {
   const router = useRouter();
   const [client, setClient] = useState<ClientDetail | null>(null);
   const [reports, setReports] = useState<Report[]>([]);
-  const [selectedCampaignId, setSelectedCampaignId] = useState("");
+  const [selectedCampaignId, setSelectedCampaignId] = usePersistedState(
+    `${MANAGER_CLIENT_FICHA_STATE_KEY}:${clientId}:selected-campaign-id`,
+    "",
+  );
   const [snapshot, setSnapshot] = useState<PortalSnapshot | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
@@ -450,7 +474,13 @@ export function ManagerClientFicha({
     null,
   );
   const [drpsActionNotice, setDrpsActionNotice] = useState("");
-  const [activeTab, setActiveTab] = useState<ClientTab>(initialTab);
+  const [activeTab, setActiveTab] = usePersistedState<ClientTab>(
+    `${MANAGER_CLIENT_FICHA_STATE_KEY}:${clientId}:active-tab`,
+    initialTab,
+    {
+      deserialize: parseClientTab,
+    },
+  );
   const [isEditingCompanyProfile, setIsEditingCompanyProfile] = useState(false);
   const [isSavingCompanyProfile, setIsSavingCompanyProfile] = useState(false);
   const [isTogglingClientAccess, setIsTogglingClientAccess] = useState(false);
@@ -527,6 +557,29 @@ export function ManagerClientFicha({
     () => availablePrograms.filter((program) => !assignedProgramIds.has(program.id)),
     [availablePrograms, assignedProgramIds],
   );
+  const unassignedProgramGroups = useMemo(() => {
+    const leadershipCoachingPrograms: ContinuousProgramOption[] = [];
+    const riskPrograms: ContinuousProgramOption[] = [];
+    for (const program of unassignedProgramOptions) {
+      if (isLeadershipCoachingProgram(program)) {
+        leadershipCoachingPrograms.push(program);
+      } else {
+        riskPrograms.push(program);
+      }
+    }
+    return [
+      {
+        key: "leadership-coaching-rh",
+        label: "Treinamento/coaching de lideres, gestao, e RH",
+        programs: leadershipCoachingPrograms,
+      },
+      {
+        key: "risk",
+        label: "Risco psicossocial",
+        programs: riskPrograms,
+      },
+    ].filter((group) => group.programs.length > 0);
+  }, [unassignedProgramOptions]);
   const selectedProgramsToAssign = useMemo(
     () =>
       unassignedProgramOptions.filter((program) => assignProgramForm.programIds.includes(program.id)),
@@ -643,7 +696,7 @@ export function ManagerClientFicha({
     } finally {
       setIsLoading(false);
     }
-  }, [clientId, loadContinuousPrograms]);
+  }, [clientId, loadContinuousPrograms, setSelectedCampaignId]);
 
   useEffect(() => {
     void loadBase();
@@ -676,8 +729,9 @@ export function ManagerClientFicha({
   }, [client?.id]);
 
   useEffect(() => {
+    if (!hasExplicitTab) return;
     setActiveTab(initialTab);
-  }, [initialTab]);
+  }, [hasExplicitTab, initialTab, setActiveTab]);
 
   useEffect(() => {
     if (activeTab === "assigned-drps") return;
@@ -2699,43 +2753,52 @@ export function ManagerClientFicha({
                             Limpar
                           </button>
                         </div>
-                        <div className="mt-2 max-h-56 space-y-2 overflow-y-auto rounded border border-[#d8e4ee] p-2">
-                          {unassignedProgramOptions.map((program) => {
-                            const isChecked = assignProgramForm.programIds.includes(program.id);
-                            return (
-                              <label
-                                key={`assign-multi-${program.id}`}
-                                className="flex cursor-pointer items-start gap-2 rounded border border-[#edf4f8] px-2 py-2"
-                              >
-                                <input
-                                  type="checkbox"
-                                  checked={isChecked}
-                                  onChange={(event) =>
-                                    setAssignProgramForm((previous) => {
-                                      const nextIds = new Set(previous.programIds);
-                                      if (event.target.checked) {
-                                        nextIds.add(program.id);
-                                      } else {
-                                        nextIds.delete(program.id);
-                                      }
-                                      return {
-                                        ...previous,
-                                        programIds: Array.from(nextIds.values()),
-                                      };
-                                    })
-                                  }
-                                  className="mt-0.5 h-4 w-4 rounded border-[#9ec8db] text-[#0f5b73]"
-                                />
-                                <span>
-                                  <span className="block text-sm font-semibold text-[#123447]">{program.title}</span>
-                                  <span className="block text-xs text-[#5a7383]">
-                                    Topico {program.targetRiskTopic} | Gatilho{" "}
-                                    {program.triggerThreshold.toFixed(2)}
-                                  </span>
-                                </span>
-                              </label>
-                            );
-                          })}
+                        <div className="mt-2 max-h-56 space-y-3 overflow-y-auto rounded border border-[#d8e4ee] p-2">
+                          {unassignedProgramGroups.map((group) => (
+                            <div key={`assign-group-${group.key}`}>
+                              <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-[#4f6977]">
+                                {group.label}
+                              </p>
+                              <div className="space-y-2">
+                                {group.programs.map((program) => {
+                                  const isChecked = assignProgramForm.programIds.includes(program.id);
+                                  return (
+                                    <label
+                                      key={`assign-multi-${program.id}`}
+                                      className="flex cursor-pointer items-start gap-2 rounded border border-[#edf4f8] px-2 py-2"
+                                    >
+                                      <input
+                                        type="checkbox"
+                                        checked={isChecked}
+                                        onChange={(event) =>
+                                          setAssignProgramForm((previous) => {
+                                            const nextIds = new Set(previous.programIds);
+                                            if (event.target.checked) {
+                                              nextIds.add(program.id);
+                                            } else {
+                                              nextIds.delete(program.id);
+                                            }
+                                            return {
+                                              ...previous,
+                                              programIds: Array.from(nextIds.values()),
+                                            };
+                                          })
+                                        }
+                                        className="mt-0.5 h-4 w-4 rounded border-[#9ec8db] text-[#0f5b73]"
+                                      />
+                                      <span>
+                                        <span className="block text-sm font-semibold text-[#123447]">{program.title}</span>
+                                        <span className="block text-xs text-[#5a7383]">
+                                          Topico {program.targetRiskTopic} | Gatilho{" "}
+                                          {program.triggerThreshold.toFixed(2)}
+                                        </span>
+                                      </span>
+                                    </label>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          ))}
                         </div>
                       </fieldset>
                       <label className="text-xs text-[#4f6977]">

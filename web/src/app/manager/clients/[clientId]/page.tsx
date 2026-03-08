@@ -27,6 +27,13 @@ export default async function ManagerClientFichaPage({
   const { clientId } = await params;
   const { tab } = await searchParams;
   const initialTab = parseTab(tab);
+  const hasExplicitTab = typeof tab === "string";
 
-  return <ManagerClientFicha clientId={clientId} initialTab={initialTab} />;
+  return (
+    <ManagerClientFicha
+      clientId={clientId}
+      initialTab={initialTab}
+      hasExplicitTab={hasExplicitTab}
+    />
+  );
 }

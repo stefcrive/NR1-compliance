@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { type ManagerLocale, useManagerLocale } from "@/components/manager-locale";
+import { usePersistedState } from "@/lib/page-state-persistence";
 
 type HistoryPayload = {
   companies: Array<{ id: string; name: string; portalSlug: string | null }>;
@@ -86,6 +87,7 @@ type HistoryPayload = {
 };
 
 const COMPANY_FILTER_ALL = "__all__";
+const MANAGER_HISTORY_STATE_KEY = "manager-history";
 
 const COPY = {
   en: {
@@ -316,7 +318,10 @@ export function ManagerHistory({ forcedClientId }: { forcedClientId?: string }) 
   const [payload, setPayload] = useState<HistoryPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [companyFilter, setCompanyFilter] = useState(forcedClientId ?? COMPANY_FILTER_ALL);
+  const [companyFilter, setCompanyFilter] = usePersistedState(
+    `${MANAGER_HISTORY_STATE_KEY}:company-filter`,
+    COMPANY_FILTER_ALL,
+  );
   const activeCompanyFilter = forcedClientId ?? companyFilter;
 
   const loadHistory = useCallback(async () => {
@@ -340,10 +345,6 @@ export function ManagerHistory({ forcedClientId }: { forcedClientId?: string }) 
   useEffect(() => {
     void loadHistory();
   }, [loadHistory]);
-
-  useEffect(() => {
-    setCompanyFilter(forcedClientId ?? COMPANY_FILTER_ALL);
-  }, [forcedClientId]);
 
   const concludedCampaigns = useMemo(
     () =>
