@@ -14,7 +14,7 @@ export default function PortalLayout({ children }: { children: React.ReactNode }
         <div className="mx-auto flex w-full max-w-7xl items-center justify-between px-4 py-4">
           <div>
             <p className="text-xs uppercase tracking-[0.2em] text-[#0c556a]">Client Portal</p>
-            <h1 className="text-lg font-semibold text-[#0f2e3c]">NR1 Compliance</h1>
+            <h1 className="text-lg font-semibold text-[#0f2e3c]">Work Vital - saude corporativa</h1>
           </div>
           <Link
             href="/"

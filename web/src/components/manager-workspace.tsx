@@ -1473,7 +1473,7 @@ export function ManagerWorkspace({
                     <span className="rounded-full bg-black/25 px-2 py-1 text-[11px] font-semibold">
                       {localizeStatus(client.status, locale)}
                     </span>
-                    <p className="absolute bottom-2 right-2 text-xs font-medium uppercase tracking-wide">NR1</p>
+                    <p className="absolute bottom-2 right-2 text-xs font-medium uppercase tracking-wide">WV</p>
                   </div>
 
                   <div className="mt-3 space-y-1">

@@ -4,6 +4,11 @@ setlocal EnableExtensions
 set "ROOT_DIR=%~dp0"
 set "WEB_DIR=%ROOT_DIR%web"
 set "LOCK_FILE=%WEB_DIR%\.next\dev\lock"
+set "APP_PORT=%NR1_WEB_PORT%"
+
+if "%APP_PORT%"=="" (
+  set "APP_PORT=3100"
+)
 
 if not exist "%WEB_DIR%\package.json" (
   echo [ERROR] Could not find web\package.json in "%WEB_DIR%".
@@ -21,6 +26,14 @@ pushd "%WEB_DIR%"
 if errorlevel 1 (
   echo [ERROR] Failed to enter "%WEB_DIR%".
   goto :fail
+)
+
+:find_open_port
+netstat -ano -p tcp | findstr /R /C:":%APP_PORT% .*LISTENING" >nul
+if %ERRORLEVEL%==0 (
+  echo [WARN] Port %APP_PORT% is already in use. Trying next port...
+  set /a "APP_PORT+=1"
+  goto :find_open_port
 )
 
 if not exist ".env.local" (
@@ -49,8 +62,8 @@ if not exist "node_modules" (
   )
 )
 
-echo Starting NR1 Compliance web app...
-call npm run dev
+echo Starting Work Vital - saude corporativa web app on http://localhost:%APP_PORT% ...
+call npm run dev -- --port %APP_PORT%
 set "EXIT_CODE=%ERRORLEVEL%"
 
 popd

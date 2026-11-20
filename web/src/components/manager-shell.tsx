@@ -102,7 +102,7 @@ const PINNED_NAV = [
 const COPY = {
   en: {
     portalLabel: "Manager Portal",
-    workspaceTitle: "Compliance Workspace",
+    workspaceTitle: "Work Vital Workspace",
     mainNav: "Main",
     pinned: "Pinned",
     logout: "Logout",
@@ -126,7 +126,7 @@ const COPY = {
   },
   pt: {
     portalLabel: "Portal do Gestor",
-    workspaceTitle: "Workspace de Compliance",
+    workspaceTitle: "Workspace Work Vital",
     mainNav: "Principal",
     pinned: "Fixados",
     logout: "Sair",
